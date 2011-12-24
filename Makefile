@@ -1,10 +1,10 @@
-DESTDIR=/usr/
+DESTDIR=/tmp/iproute/
 ROOTDIR=$(DESTDIR)
 LIBDIR=/usr/lib/
 SBINDIR=/sbin
 CONFDIR=/etc/iproute2
-DOCDIR=/share/doc/iproute2
-MANDIR=/share/man
+DOCDIR=/usr/share/doc/iproute2
+MANDIR=/usr/share/man
 ARPDDIR=/var/lib/arpd
 
 # Path to db_185.h include
