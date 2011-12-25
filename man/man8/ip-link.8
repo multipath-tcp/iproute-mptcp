@@ -64,6 +64,8 @@ ip link \- network device configuration
 .br
 .BR multicast " { " on " | " off " } |"
 .br
+.BR multipath " { " on " | " off " } |"
+.br
 .B  txqueuelen
 .IR PACKETS " |"
 .br
@@ -199,6 +201,12 @@ flag on the device.
 change the
 .B MULTICAST
 flag on the device.
+
+.TP
+.BR "multipath on " or " multipath off"
+change the
+.B MULTIPATH
+flag on the device, to enable or disable MPTCP.
 
 .TP
 .BR "dynamic on " or " dynamic off"

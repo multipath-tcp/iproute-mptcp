@@ -59,6 +59,7 @@ void iplink_usage(void)
 	fprintf(stderr, "	                  [ dynamic { on | off } ]\n");
 	fprintf(stderr, "	                  [ multicast { on | off } ]\n");
 	fprintf(stderr, "	                  [ allmulticast { on | off } ]\n");
+	fprintf(stderr, "	                  [ multipath { on | off } ]\n");
 	fprintf(stderr, "	                  [ promisc { on | off } ]\n");
 	fprintf(stderr, "	                  [ trailers { on | off } ]\n");
 	fprintf(stderr, "	                  [ txqueuelen PACKETS ]\n");
@@ -344,6 +345,15 @@ int iplink_parse(int argc, char **argv, struct iplink_req *req,
 				req->i.ifi_flags &= ~IFF_ALLMULTI;
 			} else
 				return on_off("allmulticast");
+		} else if (strcmp(*argv, "multipath") == 0) {
+			NEXT_ARG();
+			req->i.ifi_change |= IFF_NOMULTIPATH;
+			if (strcmp(*argv, "on") == 0) {
+				req->i.ifi_flags &= ~IFF_NOMULTIPATH;
+			} else if (strcmp(*argv, "off") == 0) {
+				req->i.ifi_flags |= IFF_NOMULTIPATH;
+			} else
+				return on_off("multipath");
 		} else if (strcmp(*argv, "promisc") == 0) {
 			NEXT_ARG();
 			req->i.ifi_change |= IFF_PROMISC;
@@ -817,6 +827,15 @@ static int do_set(int argc, char **argv)
 				flags &= ~IFF_ALLMULTI;
 			} else
 				return on_off("allmulticast");
+		} else if (strcmp(*argv, "multipath") == 0) {
+			NEXT_ARG();
+			mask |= IFF_NOMULTIPATH;
+			if (strcmp(*argv, "on") == 0) {
+				flags &= ~IFF_NOMULTIPATH;
+			} else if (strcmp(*argv, "off") == 0) {
+				flags |= IFF_NOMULTIPATH;
+			} else
+				return on_off("multipath");
 		} else if (strcmp(*argv, "promisc") == 0) {
 			NEXT_ARG();
 			mask |= IFF_PROMISC;
