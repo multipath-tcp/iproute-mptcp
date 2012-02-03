@@ -64,7 +64,7 @@ ip-link \- network device configuration
 .br
 .BR multicast " { " on " | " off " } |"
 .br
-.BR multipath " { " on " | " off " } |"
+.BR multipath " { " on " | " off " | " backup " } |"
 .br
 .B  txqueuelen
 .IR PACKETS " |"
@@ -206,7 +206,7 @@ flag on the device.
 .BR "multipath on " or " multipath off"
 change the
 .B MULTIPATH
-flag on the device, to enable or disable MPTCP.
+flag on the device, to enable/disable MPTCP or use the device as backup.
 
 .TP
 .BR "dynamic on " or " dynamic off"
