@@ -97,6 +97,7 @@ void print_link_flags(FILE *fp, unsigned flags, unsigned mdown)
 	_PF(MULTICAST);
 	_PF(NOMULTIPATH);
 	_PF(MPBACKUP);
+	_PF(MPHANDOVER);
 	_PF(NOARP);
 	_PF(ALLMULTI);
 	_PF(PROMISC);
