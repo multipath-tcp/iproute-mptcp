@@ -1563,6 +1563,7 @@ static int tcp_show_netlink(struct filter *f, FILE *dump_fp, int socktype)
 		}
 		if (status == 0) {
 			fprintf(stderr, "EOF on netlink\n");
+			close(fd);
 			return 0;
 		}
 
@@ -1578,8 +1579,10 @@ static int tcp_show_netlink(struct filter *f, FILE *dump_fp, int socktype)
 			    h->nlmsg_seq != 123456)
 				goto skip_it;
 
-			if (h->nlmsg_type == NLMSG_DONE)
+			if (h->nlmsg_type == NLMSG_DONE) {
+				close(fd);
 				return 0;
+			}
 			if (h->nlmsg_type == NLMSG_ERROR) {
 				struct nlmsgerr *err = (struct nlmsgerr*)NLMSG_DATA(h);
 				if (h->nlmsg_len < NLMSG_LENGTH(sizeof(struct nlmsgerr))) {
@@ -1588,6 +1591,7 @@ static int tcp_show_netlink(struct filter *f, FILE *dump_fp, int socktype)
 					errno = -err->error;
 					perror("TCPDIAG answers");
 				}
+				close(fd);
 				return 0;
 			}
 			if (!dump_fp) {
@@ -1596,8 +1600,10 @@ static int tcp_show_netlink(struct filter *f, FILE *dump_fp, int socktype)
 					continue;
 				}
 				err = tcp_show_sock(h, NULL);
-				if (err < 0)
+				if (err < 0) {
+					close(fd);
 					return err;
+				}
 			}
 
 skip_it:
@@ -1612,6 +1618,7 @@ skip_it:
 			exit(1);
 		}
 	}
+	close(fd);
 	return 0;
 }
 
@@ -2054,67 +2061,38 @@ static int unix_show_sock(struct nlmsghdr *nlh, struct filter *f)
 static int unix_show_netlink(struct filter *f, FILE *dump_fp)
 {
 	int fd;
-	struct sockaddr_nl nladdr;
 	struct {
 		struct nlmsghdr nlh;
 		struct unix_diag_req r;
 	} req;
-	struct msghdr msg;
 	char	buf[8192];
-	struct iovec iov[3];
 
 	if ((fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_INET_DIAG)) < 0)
 		return -1;
 
-	memset(&nladdr, 0, sizeof(nladdr));
-	nladdr.nl_family = AF_NETLINK;
-
+	memset(&req, 0, sizeof(req));
 	req.nlh.nlmsg_len = sizeof(req);
 	req.nlh.nlmsg_type = SOCK_DIAG_BY_FAMILY;
 	req.nlh.nlmsg_flags = NLM_F_ROOT|NLM_F_MATCH|NLM_F_REQUEST;
-	req.nlh.nlmsg_pid = 0;
 	req.nlh.nlmsg_seq = 123456;
-	memset(&req.r, 0, sizeof(req.r));
+
 	req.r.sdiag_family = AF_UNIX;
-	req.r.sdiag_protocol = 0; /* ignored */
 	req.r.udiag_states = f->states;
 	req.r.udiag_show = UDIAG_SHOW_NAME | UDIAG_SHOW_PEER | UDIAG_SHOW_RQLEN;
 
-	iov[0] = (struct iovec){
-		.iov_base = &req,
-		.iov_len = sizeof(req)
-	};
-
-	msg = (struct msghdr) {
-		.msg_name = (void*)&nladdr,
-		.msg_namelen = sizeof(nladdr),
-		.msg_iov = iov,
-		.msg_iovlen = f->f ? 3 : 1,
-	};
-
-	if (sendmsg(fd, &msg, 0) < 0) {
+	if (send(fd, &req, sizeof(req), 0) < 0) {
 		close(fd);
 		return -1;
 	}
 
-	iov[0] = (struct iovec){
-		.iov_base = buf,
-		.iov_len = sizeof(buf)
-	};
-
 	while (1) {
-		int status;
+		ssize_t status;
 		struct nlmsghdr *h;
+		struct sockaddr_nl nladdr;
+		socklen_t slen = sizeof(nladdr);
 
-		msg = (struct msghdr) {
-			(void*)&nladdr, sizeof(nladdr),
-			iov,	1,
-			NULL,	0,
-			0
-		};
-
-		status = recvmsg(fd, &msg, 0);
-
+		status = recvfrom(fd, buf, sizeof(buf), 0,
+				  (struct sockaddr *) &nladdr, &slen);
 		if (status < 0) {
 			if (errno == EINTR)
 				continue;
@@ -2123,8 +2101,7 @@ static int unix_show_netlink(struct filter *f, FILE *dump_fp)
 		}
 		if (status == 0) {
 			fprintf(stderr, "EOF on netlink\n");
-			close(fd);
-			return 0;
+			goto close_it;
 		}
 
 		if (dump_fp)
@@ -2138,10 +2115,9 @@ static int unix_show_netlink(struct filter *f, FILE *dump_fp)
 			    h->nlmsg_seq != 123456)
 				goto skip_it;
 
-			if (h->nlmsg_type == NLMSG_DONE) {
-				close(fd);
-				return 0;
-			}
+			if (h->nlmsg_type == NLMSG_DONE)
+				goto close_it;
+
 			if (h->nlmsg_type == NLMSG_ERROR) {
 				struct nlmsgerr *err = (struct nlmsgerr*)NLMSG_DATA(h);
 				if (h->nlmsg_len < NLMSG_LENGTH(sizeof(struct nlmsgerr))) {
@@ -2165,15 +2141,14 @@ static int unix_show_netlink(struct filter *f, FILE *dump_fp)
 skip_it:
 			h = NLMSG_NEXT(h, status);
 		}
-		if (msg.msg_flags & MSG_TRUNC) {
-			fprintf(stderr, "Message truncated\n");
-			continue;
-		}
+
 		if (status) {
-			fprintf(stderr, "!!!Remnant of size %d\n", status);
+			fprintf(stderr, "!!!Remnant of size %zd\n", status);
 			exit(1);
 		}
 	}
+
+close_it:
 	close(fd);
 	return 0;
 }
