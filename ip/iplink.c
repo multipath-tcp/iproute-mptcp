@@ -34,7 +34,7 @@
 
 #define IPLINK_IOCTL_COMPAT	1
 #ifndef LIBDIR
-#define LIBDIR "/usr/lib/"
+#define LIBDIR "/usr/lib"
 #endif
 
 static void usage(void) __attribute__((noreturn));
@@ -131,6 +131,15 @@ struct link_util *get_link_kind(const char *id)
 	l->next = linkutil_list;
 	linkutil_list = l;
 	return l;
+}
+
+int get_link_mode(const char *mode)
+{
+	if (strcasecmp(mode, "default") == 0)
+		return IF_LINK_MODE_DEFAULT;
+	if (strcasecmp(mode, "dormant") == 0)
+		return IF_LINK_MODE_DORMANT;
+	return -1;
 }
 
 #if IPLINK_IOCTL_COMPAT
@@ -437,6 +446,21 @@ int iplink_parse(int argc, char **argv, struct iplink_req *req,
 				duparg("group", *argv);
 			if (rtnl_group_a2n(group, *argv))
 				invarg("Invalid \"group\" value\n", *argv);
+		} else if (strcmp(*argv, "mode") == 0) {
+			int mode;
+			NEXT_ARG();
+			mode = get_link_mode(*argv);
+			if (mode < 0)
+				invarg("Invalid link mode\n", *argv);
+			addattr8(&req->n, sizeof(*req), IFLA_LINKMODE, mode);
+		} else if (strcmp(*argv, "state") == 0) {
+			int state;
+			NEXT_ARG();
+			state = get_operstate(*argv);
+			if (state < 0)
+				invarg("Invalid operstate\n", *argv);
+
+			addattr8(&req->n, sizeof(*req), IFLA_OPERSTATE, state);
 		} else {
 			if (strcmp(*argv, "dev") == 0) {
 				NEXT_ARG();
@@ -506,36 +530,6 @@ static int iplink_modify(int cmd, unsigned int flags, int argc, char **argv)
 
 	ll_init_map(&rth);
 
-	if (type) {
-		struct rtattr *linkinfo = NLMSG_TAIL(&req.n);
-		addattr_l(&req.n, sizeof(req), IFLA_LINKINFO, NULL, 0);
-		addattr_l(&req.n, sizeof(req), IFLA_INFO_KIND, type,
-			 strlen(type));
-
-		lu = get_link_kind(type);
-		if (lu && argc) {
-			struct rtattr * data = NLMSG_TAIL(&req.n);
-			addattr_l(&req.n, sizeof(req), IFLA_INFO_DATA, NULL, 0);
-
-			if (lu->parse_opt &&
-			    lu->parse_opt(lu, argc, argv, &req.n))
-				return -1;
-
-			data->rta_len = (void *)NLMSG_TAIL(&req.n) - (void *)data;
-		} else if (argc) {
-			if (matches(*argv, "help") == 0)
-				usage();
-			fprintf(stderr, "Garbage instead of arguments \"%s ...\". "
-					"Try \"ip link help\".\n", *argv);
-			return -1;
-		}
-		linkinfo->rta_len = (void *)NLMSG_TAIL(&req.n) - (void *)linkinfo;
-	} else if (flags & NLM_F_CREATE) {
-		fprintf(stderr, "Not enough information: \"type\" argument "
-				"is required\n");
-		return -1;
-	}
-
 	if (!(flags & NLM_F_CREATE)) {
 		if (!dev) {
 			fprintf(stderr, "Not enough information: \"dev\" "
@@ -573,6 +567,36 @@ static int iplink_modify(int cmd, unsigned int flags, int argc, char **argv)
 		if (len > IFNAMSIZ)
 			invarg("\"name\" too long\n", name);
 		addattr_l(&req.n, sizeof(req), IFLA_IFNAME, name, len);
+	}
+
+	if (type) {
+		struct rtattr *linkinfo = NLMSG_TAIL(&req.n);
+		addattr_l(&req.n, sizeof(req), IFLA_LINKINFO, NULL, 0);
+		addattr_l(&req.n, sizeof(req), IFLA_INFO_KIND, type,
+			 strlen(type));
+
+		lu = get_link_kind(type);
+		if (lu && argc) {
+			struct rtattr * data = NLMSG_TAIL(&req.n);
+			addattr_l(&req.n, sizeof(req), IFLA_INFO_DATA, NULL, 0);
+
+			if (lu->parse_opt &&
+			    lu->parse_opt(lu, argc, argv, &req.n))
+				return -1;
+
+			data->rta_len = (void *)NLMSG_TAIL(&req.n) - (void *)data;
+		} else if (argc) {
+			if (matches(*argv, "help") == 0)
+				usage();
+			fprintf(stderr, "Garbage instead of arguments \"%s ...\". "
+					"Try \"ip link help\".\n", *argv);
+			return -1;
+		}
+		linkinfo->rta_len = (void *)NLMSG_TAIL(&req.n) - (void *)linkinfo;
+	} else if (flags & NLM_F_CREATE) {
+		fprintf(stderr, "Not enough information: \"type\" argument "
+				"is required\n");
+		return -1;
 	}
 
 	if (rtnl_talk(&rth, &req.n, 0, 0, NULL) < 0)

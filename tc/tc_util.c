@@ -25,7 +25,7 @@
 #include "tc_util.h"
 
 #ifndef LIBDIR
-#define LIBDIR "/usr/lib/"
+#define LIBDIR "/usr/lib"
 #endif
 
 const char *get_tc_lib(void)
@@ -153,7 +153,7 @@ int get_rate(unsigned *rate, const char *str)
 		return -1;
 
 	if (*p == '\0') {
-		*rate = bps / 8.;	/* assume bytes/sec */
+		*rate = bps / 8.;	/* assume bits/sec */
 		return 0;
 	}
 
@@ -203,7 +203,7 @@ void print_rate(char *buf, int len, __u32 rate)
 
 	if (use_iec) {
 		if (tmp >= 1000.0*1024.0*1024.0)
-			snprintf(buf, len, "%.0fMibit", tmp/1024.0*1024.0);
+			snprintf(buf, len, "%.0fMibit", tmp/(1024.0*1024.0));
 		else if (tmp >= 1000.0*1024)
 			snprintf(buf, len, "%.0fKibit", tmp/1024);
 		else

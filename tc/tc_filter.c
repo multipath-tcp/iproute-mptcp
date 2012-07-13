@@ -105,7 +105,7 @@ int tc_filter_modify(int cmd, unsigned flags, int argc, char **argv)
 			NEXT_ARG();
 			if (prio)
 				duparg("priority", *argv);
-			if (get_u32(&prio, *argv, 0))
+			if (get_u32(&prio, *argv, 0) || prio > 0xFFFF)
 				invarg(*argv, "invalid priority value");
 		} else if (matches(*argv, "protocol") == 0) {
 			__u16 id;
@@ -240,7 +240,7 @@ int print_filter(const struct sockaddr_nl *who,
 				fprintf(fp, "pref %u ", prio);
 		}
 	}
-	fprintf(fp, "%s ", (char*)RTA_DATA(tb[TCA_KIND]));
+	fprintf(fp, "%s ", rta_getattr_str(tb[TCA_KIND]));
 	q = get_filter_kind(RTA_DATA(tb[TCA_KIND]));
 	if (tb[TCA_OPTIONS]) {
 		if (q)

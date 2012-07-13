@@ -47,6 +47,8 @@ TCMODULES += em_cmp.o
 TCMODULES += em_u32.o
 TCMODULES += em_meta.o
 TCMODULES += q_mqprio.o
+TCMODULES += q_codel.o
+TCMODULES += q_fq_codel.o
 
 TCSO :=
 ifeq ($(TC_CONFIG_ATM),y)
@@ -91,7 +93,7 @@ YACC := bison
 LEX := flex
 CFLAGS += -DYY_NO_INPUT
 
-MODDESTDIR := $(DESTDIR)$(patsubst /usr%,%,$(LIBDIR))/tc
+MODDESTDIR := $(DESTDIR)$(LIBDIR)/tc
 
 %.so: %.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -shared -fpic $< -o $@
@@ -99,7 +101,7 @@ MODDESTDIR := $(DESTDIR)$(patsubst /usr%,%,$(LIBDIR))/tc
 
 all: libtc.a tc $(TCSO)
 
-tc: $(TCOBJ) $(LIBNETLINK) $(LIBUTIL) $(TCLIB)
+tc: $(TCOBJ) $(TCLIB)
 
 libtc.a: $(TCLIB)
 	$(AR) rcs $@ $(TCLIB)

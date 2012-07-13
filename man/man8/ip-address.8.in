@@ -116,7 +116,7 @@ with the device name followed by colon.
 .BI scope " SCOPE_VALUE"
 the scope of the area where this address is valid.
 The available scopes are listed in file
-.BR "/etc/iproute2/rt_scopes" .
+.BR "@SYSCONFDIR@/rt_scopes" .
 Predefined scope values are:
 
 .in +8

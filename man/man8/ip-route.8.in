@@ -7,8 +7,8 @@ ip-route \- routing table management
 .in +8
 .ti -8
 .B ip
-.RI "[ " OPTIONS " ]" 
-.B route 
+.RI "[ " OPTIONS " ]"
+.B route
 .RI " { " COMMAND " | "
 .BR help " }"
 .sp
@@ -226,9 +226,9 @@ normal routing tables.
 
 .P
 .B Route tables:
-Linux-2.x can pack routes into several routing tables identified 
+Linux-2.x can pack routes into several routing tables identified
 by a number in the range from 1 to 2^31 or by name from the file
-.B /etc/iproute2/rt_tables
+.B @SYSCONFDIR@/rt_tables
 By default all normal routes are inserted into the
 .B main
 table (ID 254) and the kernel only uses this table when calculating routes.
@@ -285,7 +285,7 @@ may still match a route with a zero TOS.
 .I TOS
 is either an 8 bit hexadecimal number or an identifier
 from
-.BR "/etc/iproute2/rt_dsfield" .
+.BR "@SYSCONFDIR@/rt_dsfield" .
 
 .TP
 .BI metric " NUMBER"
@@ -300,7 +300,7 @@ is an arbitrary 32bit number.
 the table to add this route to.
 .I TABLEID
 may be a number or a string from the file
-.BR "/etc/iproute2/rt_tables" .
+.BR "@SYSCONFDIR@/rt_tables" .
 If this parameter is omitted,
 .B ip
 assumes the
@@ -335,7 +335,7 @@ covered by the route prefix.
 the realm to which this route is assigned.
 .I REALMID
 may be a number or a string from the file
-.BR "/etc/iproute2/rt_realms" .
+.BR "@SYSCONFDIR@/rt_realms" .
 
 .TP
 .BI mtu " MTU"
@@ -442,7 +442,7 @@ route reflecting its relative bandwidth or quality.
 the scope of the destinations covered by the route prefix.
 .I SCOPE_VAL
 may be a number or a string from the file
-.BR "/etc/iproute2/rt_scopes" .
+.BR "@SYSCONFDIR@/rt_scopes" .
 If this parameter is omitted,
 .B ip
 assumes scope
@@ -462,7 +462,7 @@ routes.
 the routing protocol identifier of this route.
 .I RTPROTO
 may be a number or a string from the file
-.BR "/etc/iproute2/rt_protos" .
+.BR "@SYSCONFDIR@/rt_protos" .
 If the routing protocol ID is not given,
 .B ip assumes protocol
 .B boot

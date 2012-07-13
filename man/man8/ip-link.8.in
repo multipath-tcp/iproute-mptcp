@@ -23,11 +23,13 @@ ip-link \- network device configuration
 \fB\-o\fR[\fIneline\fR] }
 
 .ti -8
-.BI "ip link add link " DEVICE
+.BI "ip link add"
+.RB "[ " link
+.IR DEVICE " ]"
 .RB "[ " name " ]"
 .I NAME
 .br
-.RB "[ " txqueuelen 
+.RB "[ " txqueuelen
 .IR PACKETS " ]"
 .br
 .RB "[ " address
@@ -267,7 +269,7 @@ give the device a symbolic name for easy reference.
 .BI group " GROUP"
 specify the group the device belongs to.
 The available groups are listed in file
-.BR "/etc/iproute2/group" .
+.BR "@SYSCONFDIR@/group" .
 
 .TP
 .BI vf " NUM"
