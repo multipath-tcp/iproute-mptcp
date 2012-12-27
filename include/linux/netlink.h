@@ -150,4 +150,4 @@ struct nlattr {
 #define NLA_HDRLEN		((int) NLA_ALIGN(sizeof(struct nlattr)))
 
 
-#endif	/* __LINUX_NETLINK_H */
+#endif /* __LINUX_NETLINK_H */

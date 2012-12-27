@@ -5,6 +5,7 @@
 
 #include <linux/sysctl.h>
 
+
 /* Responses from hook functions. */
 #define NF_DROP 0
 #define NF_ACCEPT 1
@@ -66,4 +67,4 @@ union nf_inet_addr {
 	struct in6_addr	in6;
 };
 
-#endif /*__LINUX_NETFILTER_H*/
+#endif /* __LINUX_NETFILTER_H */

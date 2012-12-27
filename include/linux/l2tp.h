@@ -175,4 +175,4 @@ enum l2tp_seqmode {
 #define L2TP_GENL_NAME		"l2tp"
 #define L2TP_GENL_VERSION	0x1
 
-#endif
+#endif /* _LINUX_L2TP_H_ */

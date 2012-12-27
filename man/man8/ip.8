@@ -15,7 +15,7 @@ ip \- show / manipulate routing, devices, policy routing and tunnels
 .IR OBJECT " := { "
 .BR link " | " addr " | " addrlabel " | " route " | " rule " | " neigh " | "\
  ntable " | " tunnel " | " tuntap " | " maddr " | "  mroute " | " mrule " | "\
- monitor " | " xfrm " | " netns " | "  l2tp " }"
+ monitor " | " xfrm " | " netns " | "  l2tp " | "  tcp_metrics " }"
 .sp
 
 .ti -8
@@ -50,10 +50,10 @@ Zero (0) means loop until all addresses are removed.
 .TP
 .BR "\-f" , " \-family"
 followed by protocol family identifier:
-.BR "inet" , " inet6"
+.BR "inet" , " inet6" , "bridge" , "ipx" , "dnet"
 or
-.B link
-,enforce the protocol family to use.  If the option is not present,
+.BR link ,
+enforce the protocol family to use.  If the option is not present,
 the protocol family is guessed from other arguments.  If the rest
 of the command line does not give enough information to guess the
 family,
@@ -77,6 +77,11 @@ shortcut for
 .BR "\-family inet6" .
 
 .TP
+.B \-B
+shortcut for
+.BR "\-family bridge" .
+
+.TP
 .B \-0
 shortcut for
 .BR "\-family link" .
@@ -85,11 +90,11 @@ shortcut for
 .BR "\-o" , " \-oneline"
 output each record on a single line, replacing line feeds
 with the
-.B '\e\'
+.B '\e'
 character. This is convenient when you want to count records
 with
 .BR wc (1)
- or to
+or to
 .BR grep (1)
 the output.
 
@@ -156,6 +161,10 @@ host addresses.
 - rule in routing policy database.
 
 .TP
+.B tcp_metrics/tcpmetrics
+- manage TCP Metrics
+
+.TP
 .B tunnel
 - tunnel over IP.
 
@@ -215,6 +224,7 @@ was written by Alexey N. Kuznetsov and added in Linux 2.2.
 .BR ip-ntable (8),
 .BR ip-route (8),
 .BR ip-rule (8),
+.BR ip-tcp_metrics (8),
 .BR ip-tunnel (8),
 .BR ip-xfrm (8)
 .br

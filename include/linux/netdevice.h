@@ -50,4 +50,4 @@ enum {
 };
 
 
-#endif	/* _LINUX_NETDEVICE_H */
+#endif /* _LINUX_NETDEVICE_H */

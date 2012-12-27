@@ -60,7 +60,7 @@ static void usage(void)
 		IPV6_DEFAULT_TNL_ENCAP_LIMIT);
 	fprintf(stderr, "       TTL       := 0..255 (default=%d)\n",
 		DEFAULT_TNL_HOP_LIMIT);
-	fprintf(stderr, "       TOS       := { 0x0..0xff | inherit }\n");
+	fprintf(stderr, "       TCLASS    := { 0x0..0xff | inherit }\n");
 	fprintf(stderr, "       FLOWLABEL := { 0x0..0xfffff | inherit }\n");
 	exit(-1);
 }
@@ -157,6 +157,7 @@ static int parse_args(int argc, char **argv, int cmd, struct ip6_tnl_parm *p)
 				if (get_u8(&uval, *argv, 0) < -1)
 					invarg("invalid ELIM", *argv);
 				p->encap_limit = uval;
+				p->flags &= ~IP6_TNL_F_IGN_ENCAP_LIMIT;
 			}
 		} else if (strcmp(*argv, "hoplimit") == 0 ||
 			   strcmp(*argv, "ttl") == 0 ||
@@ -172,6 +173,7 @@ static int parse_args(int argc, char **argv, int cmd, struct ip6_tnl_parm *p)
 			   matches(*argv, "dsfield") == 0) {
 			__u8 uval;
 			NEXT_ARG();
+			p->flowinfo &= ~IP6_FLOWINFO_TCLASS;
 			if (strcmp(*argv, "inherit") == 0)
 				p->flags |= IP6_TNL_F_USE_ORIG_TCLASS;
 			else {
@@ -184,6 +186,7 @@ static int parse_args(int argc, char **argv, int cmd, struct ip6_tnl_parm *p)
 			   strcmp(*argv, "fl") == 0) {
 			__u32 uval;
 			NEXT_ARG();
+			p->flowinfo &= ~IP6_FLOWINFO_FLOWLABEL;
 			if (strcmp(*argv, "inherit") == 0)
 				p->flags |= IP6_TNL_F_USE_ORIG_FLOWLABEL;
 			else {

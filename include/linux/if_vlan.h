@@ -60,4 +60,4 @@ struct vlan_ioctl_args {
 	short vlan_qos;   
 };
 
-#endif /* !(_LINUX_IF_VLAN_H_) */
+#endif /* _LINUX_IF_VLAN_H_ */

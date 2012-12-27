@@ -45,9 +45,9 @@ static void usage(void)
 "       ip [ -force ] -batch filename\n"
 "where  OBJECT := { link | addr | addrlabel | route | rule | neigh | ntable |\n"
 "                   tunnel | tuntap | maddr | mroute | mrule | monitor | xfrm |\n"
-"                   netns | l2tp }\n"
+"                   netns | l2tp | tcp_metrics }\n"
 "       OPTIONS := { -V[ersion] | -s[tatistics] | -d[etails] | -r[esolve] |\n"
-"                    -f[amily] { inet | inet6 | ipx | dnet | link } |\n"
+"                    -f[amily] { inet | inet6 | ipx | dnet | bridge | link } |\n"
 "                    -l[oops] { maximum-addr-flush-attempts } |\n"
 "                    -o[neline] | -t[imestamp] | -b[atch] [filename] |\n"
 "                    -rc[vbuf] [size]}\n");
@@ -78,11 +78,14 @@ static const struct cmd {
 	{ "tunl",	do_iptunnel },
 	{ "tuntap",	do_iptuntap },
 	{ "tap",	do_iptuntap },
+	{ "tcpmetrics",	do_tcp_metrics },
+	{ "tcp_metrics",do_tcp_metrics },
 	{ "monitor",	do_ipmonitor },
 	{ "xfrm",	do_xfrm },
 	{ "mroute",	do_multiroute },
 	{ "mrule",	do_multirule },
 	{ "netns",	do_netns },
+	{ "netconf",	do_ipnetconf },
 	{ "help",	do_help },
 	{ 0 }
 };
@@ -185,10 +188,12 @@ int main(int argc, char **argv)
 				preferred_family = AF_PACKET;
 			else if (strcmp(argv[1], "ipx") == 0)
 				preferred_family = AF_IPX;
+			else if (strcmp(argv[1], "bridge") == 0)
+				preferred_family = AF_BRIDGE;
 			else if (strcmp(argv[1], "help") == 0)
 				usage();
 			else
-				invarg(argv[1], "invalid protocol family");
+				invarg("invalid protocol family", argv[1]);
 		} else if (strcmp(opt, "-4") == 0) {
 			preferred_family = AF_INET;
 		} else if (strcmp(opt, "-6") == 0) {
@@ -199,6 +204,8 @@ int main(int argc, char **argv)
 			preferred_family = AF_IPX;
 		} else if (strcmp(opt, "-D") == 0) {
 			preferred_family = AF_DECnet;
+		} else if (strcmp(opt, "-B") == 0) {
+			preferred_family = AF_BRIDGE;
 		} else if (matches(opt, "-stats") == 0 ||
 			   matches(opt, "-statistics") == 0) {
 			++show_stats;

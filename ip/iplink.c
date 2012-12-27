@@ -48,6 +48,8 @@ void iplink_usage(void)
 		fprintf(stderr, "                   [ address LLADDR ]\n");
 		fprintf(stderr, "                   [ broadcast LLADDR ]\n");
 		fprintf(stderr, "                   [ mtu MTU ]\n");
+		fprintf(stderr, "                   [ numtxqueues QUEUE_COUNT ]\n");
+		fprintf(stderr, "                   [ numrxqueues QUEUE_COUNT ]\n");
 		fprintf(stderr, "                   type TYPE [ ARGS ]\n");
 		fprintf(stderr, "       ip link delete DEV type TYPE [ ARGS ]\n");
 		fprintf(stderr, "\n");
@@ -82,7 +84,8 @@ void iplink_usage(void)
 
 	if (iplink_have_newlink()) {
 		fprintf(stderr, "\n");
-		fprintf(stderr, "TYPE := { vlan | veth | vcan | dummy | ifb | macvlan | can | bridge }\n");
+		fprintf(stderr, "TYPE := { vlan | veth | vcan | dummy | ifb | macvlan | can |\n");
+		fprintf(stderr, "          bridge | ipoib | ip6tnl | ipip | sit | vxlan }\n");
 	}
 	exit(-1);
 }
@@ -280,6 +283,8 @@ int iplink_parse(int argc, char **argv, struct iplink_req *req,
 	int mtu = -1;
 	int netns = -1;
 	int vf = -1;
+	int numtxqueues = -1;
+	int numrxqueues = -1;
 
 	*group = -1;
 	ret = argc;
@@ -461,6 +466,22 @@ int iplink_parse(int argc, char **argv, struct iplink_req *req,
 				invarg("Invalid operstate\n", *argv);
 
 			addattr8(&req->n, sizeof(*req), IFLA_OPERSTATE, state);
+		} else if (matches(*argv, "numtxqueues") == 0) {
+			NEXT_ARG();
+			if (numtxqueues != -1)
+				duparg("numtxqueues", *argv);
+			if (get_integer(&numtxqueues, *argv, 0))
+				invarg("Invalid \"numtxqueues\" value\n", *argv);
+			addattr_l(&req->n, sizeof(*req), IFLA_NUM_TX_QUEUES,
+				  &numtxqueues, 4);
+		} else if (matches(*argv, "numrxqueues") == 0) {
+			NEXT_ARG();
+			if (numrxqueues != -1)
+				duparg("numrxqueues", *argv);
+			if (get_integer(&numrxqueues, *argv, 0))
+				invarg("Invalid \"numrxqueues\" value\n", *argv);
+			addattr_l(&req->n, sizeof(*req), IFLA_NUM_RX_QUEUES,
+				  &numrxqueues, 4);
 		} else {
 			if (strcmp(*argv, "dev") == 0) {
 				NEXT_ARG();
