@@ -1,4 +1,3 @@
-DESTDIR=/tmp/iproute/
 ROOTDIR=$(DESTDIR)
 PREFIX=/usr
 LIBDIR=$(PREFIX)/lib
