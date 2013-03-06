@@ -431,7 +431,7 @@ int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		fprintf(fp, "thresh3 %u ", thresh3);
 	}
 	if (tb[NDTA_GC_INTERVAL]) {
-		__u64 gc_int = rta_getattr_u64(tb[NDTA_GC_INTERVAL]);
+		unsigned long long gc_int = rta_getattr_u64(tb[NDTA_GC_INTERVAL]);
 		fprintf(fp, "gc_int %llu ", gc_int);
 	}
 
@@ -484,15 +484,15 @@ int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			fprintf(fp, "refcnt %u ", refcnt);
 		}
 		if (tpb[NDTPA_REACHABLE_TIME]) {
-			__u64 reachable = rta_getattr_u64(tpb[NDTPA_REACHABLE_TIME]);
+			unsigned long long reachable = rta_getattr_u64(tpb[NDTPA_REACHABLE_TIME]);
 			fprintf(fp, "reachable %llu ", reachable);
 		}
 		if (tpb[NDTPA_BASE_REACHABLE_TIME]) {
-			__u64 breachable = rta_getattr_u64(tpb[NDTPA_BASE_REACHABLE_TIME]);
+			unsigned long long breachable = rta_getattr_u64(tpb[NDTPA_BASE_REACHABLE_TIME]);
 			fprintf(fp, "base_reachable %llu ", breachable);
 		}
 		if (tpb[NDTPA_RETRANS_TIME]) {
-			__u64 retrans = rta_getattr_u64(tpb[NDTPA_RETRANS_TIME]);
+			unsigned long long retrans = rta_getattr_u64(tpb[NDTPA_RETRANS_TIME]);
 			fprintf(fp, "retrans %llu ", retrans);
 		}
 
@@ -501,11 +501,11 @@ int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		fprintf(fp, "    ");
 
 		if (tpb[NDTPA_GC_STALETIME]) {
-			__u64 gc_stale = rta_getattr_u64(tpb[NDTPA_GC_STALETIME]);
+			unsigned long long gc_stale = rta_getattr_u64(tpb[NDTPA_GC_STALETIME]);
 			fprintf(fp, "gc_stale %llu ", gc_stale);
 		}
 		if (tpb[NDTPA_DELAY_PROBE_TIME]) {
-			__u64 delay_probe = rta_getattr_u64(tpb[NDTPA_DELAY_PROBE_TIME]);
+			unsigned long long delay_probe = rta_getattr_u64(tpb[NDTPA_DELAY_PROBE_TIME]);
 			fprintf(fp, "delay_probe %llu ", delay_probe);
 		}
 		if (tpb[NDTPA_QUEUE_LEN]) {
@@ -535,11 +535,11 @@ int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		fprintf(fp, "    ");
 
 		if (tpb[NDTPA_ANYCAST_DELAY]) {
-			__u64 anycast_delay = rta_getattr_u64(tpb[NDTPA_ANYCAST_DELAY]);
+			unsigned long long anycast_delay = rta_getattr_u64(tpb[NDTPA_ANYCAST_DELAY]);
 			fprintf(fp, "anycast_delay %llu ", anycast_delay);
 		}
 		if (tpb[NDTPA_PROXY_DELAY]) {
-			__u64 proxy_delay = rta_getattr_u64(tpb[NDTPA_PROXY_DELAY]);
+			unsigned long long proxy_delay = rta_getattr_u64(tpb[NDTPA_PROXY_DELAY]);
 			fprintf(fp, "proxy_delay %llu ", proxy_delay);
 		}
 		if (tpb[NDTPA_PROXY_QLEN]) {
@@ -547,7 +547,7 @@ int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			fprintf(fp, "proxy_queue %u ", pqueue);
 		}
 		if (tpb[NDTPA_LOCKTIME]) {
-			__u64 locktime = rta_getattr_u64(tpb[NDTPA_LOCKTIME]);
+			unsigned long long locktime = rta_getattr_u64(tpb[NDTPA_LOCKTIME]);
 			fprintf(fp, "locktime %llu ", locktime);
 		}
 
@@ -560,28 +560,38 @@ int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		fprintf(fp, "    ");
 		fprintf(fp, "stats ");
 
-		fprintf(fp, "allocs %llu ", ndts->ndts_allocs);
-		fprintf(fp, "destroys %llu ", ndts->ndts_destroys);
-		fprintf(fp, "hash_grows %llu ", ndts->ndts_hash_grows);
+		fprintf(fp, "allocs %llu ",
+			(unsigned long long) ndts->ndts_allocs);
+		fprintf(fp, "destroys %llu ",
+			(unsigned long long) ndts->ndts_destroys);
+		fprintf(fp, "hash_grows %llu ",
+			(unsigned long long) ndts->ndts_hash_grows);
 
 		fprintf(fp, "%s", _SL_);
 		fprintf(fp, "        ");
 
-		fprintf(fp, "res_failed %llu ", ndts->ndts_res_failed);
-		fprintf(fp, "lookups %llu ", ndts->ndts_lookups);
-		fprintf(fp, "hits %llu ", ndts->ndts_hits);
+		fprintf(fp, "res_failed %llu ",
+			(unsigned long long) ndts->ndts_res_failed);
+		fprintf(fp, "lookups %llu ",
+			(unsigned long long) ndts->ndts_lookups);
+		fprintf(fp, "hits %llu ",
+			(unsigned long long) ndts->ndts_hits);
 
 		fprintf(fp, "%s", _SL_);
 		fprintf(fp, "        ");
 
-		fprintf(fp, "rcv_probes_mcast %llu ", ndts->ndts_rcv_probes_mcast);
-		fprintf(fp, "rcv_probes_ucast %llu ", ndts->ndts_rcv_probes_ucast);
+		fprintf(fp, "rcv_probes_mcast %llu ",
+			(unsigned long long) ndts->ndts_rcv_probes_mcast);
+		fprintf(fp, "rcv_probes_ucast %llu ",
+			(unsigned long long) ndts->ndts_rcv_probes_ucast);
 
 		fprintf(fp, "%s", _SL_);
 		fprintf(fp, "        ");
 
-		fprintf(fp, "periodic_gc_runs %llu ", ndts->ndts_periodic_gc_runs);
-		fprintf(fp, "forced_gc_runs %llu ", ndts->ndts_forced_gc_runs);
+		fprintf(fp, "periodic_gc_runs %llu ",
+			(unsigned long long) ndts->ndts_periodic_gc_runs);
+		fprintf(fp, "forced_gc_runs %llu ",
+			(unsigned long long) ndts->ndts_forced_gc_runs);
 
 		fprintf(fp, "%s", _SL_);
 	}
