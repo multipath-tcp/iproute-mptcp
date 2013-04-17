@@ -26,6 +26,8 @@ extern int rtnl_open(struct rtnl_handle *rth, unsigned subscriptions);
 extern int rtnl_open_byproto(struct rtnl_handle *rth, unsigned subscriptions, int protocol);
 extern void rtnl_close(struct rtnl_handle *rth);
 extern int rtnl_wilddump_request(struct rtnl_handle *rth, int fam, int type);
+extern int rtnl_wilddump_req_filter(struct rtnl_handle *rth, int fam, int type,
+				    __u32 filt_mask);
 extern int rtnl_dump_request(struct rtnl_handle *rth, int type, void *req, int len);
 
 typedef int (*rtnl_filter_t)(const struct sockaddr_nl *,
@@ -63,6 +65,8 @@ extern int rta_addattr32(struct rtattr *rta, int maxlen, int type, __u32 data);
 extern int rta_addattr_l(struct rtattr *rta, int maxlen, int type, const void *data, int alen);
 
 extern int parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rta, int len);
+extern int parse_rtattr_flags(struct rtattr *tb[], int max, struct rtattr *rta,
+			      int len, unsigned short flags);
 extern int parse_rtattr_byindex(struct rtattr *tb[], int max, struct rtattr *rta, int len);
 extern int __parse_rtattr_nested_compat(struct rtattr *tb[], int max, struct rtattr *rta, int len);
 
