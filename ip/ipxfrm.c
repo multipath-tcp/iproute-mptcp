@@ -536,12 +536,14 @@ static void __xfrm_algo_print(struct xfrm_algo *algo, int type, int len,
 		goto fin;
 	}
 
-	fprintf(fp, "0x");
-	for (i = 0; i < keylen; i ++)
-		fprintf(fp, "%.2x", (unsigned char)algo->alg_key[i]);
+	if (keylen > 0) {
+		fprintf(fp, "0x");
+		for (i = 0; i < keylen; i ++)
+			fprintf(fp, "%.2x", (unsigned char)algo->alg_key[i]);
 
-	if (show_stats > 0)
-		fprintf(fp, " (%d bits)", algo->alg_key_len);
+		if (show_stats > 0)
+			fprintf(fp, " (%d bits)", algo->alg_key_len);
+	}
 
  fin:
 	if (newline)
@@ -658,7 +660,7 @@ int xfrm_parse_mark(struct xfrm_mark *mark, int *argcp, char ***argvp)
 
 	NEXT_ARG();
 	if (get_u32(&mark->v, *argv, 0)) {
-		invarg("Illegal \"mark\" value\n", *argv);
+		invarg("MARK value is invalid\n", *argv);
 	}
 	if (argc > 1)
 		NEXT_ARG();
@@ -670,7 +672,7 @@ int xfrm_parse_mark(struct xfrm_mark *mark, int *argcp, char ***argvp)
 	if (strcmp(*argv, "mask") == 0) {
 		NEXT_ARG();
 		if (get_u32(&mark->m, *argv, 0)) {
-			invarg("Illegal \"mark\" mask\n", *argv);
+			invarg("MASK value is invalid\n", *argv);
 		}
 	} else {
 		mark->m = 0xffffffff;
@@ -1008,7 +1010,7 @@ int xfrm_id_parse(xfrm_address_t *saddr, struct xfrm_id *id, __u16 *family,
 
 			get_prefix(&src, *argv, preferred_family);
 			if (src.family == AF_UNSPEC)
-				invarg("\"src\" address family is AF_UNSPEC", *argv);
+				invarg("value after \"src\" has an unrecognized address family", *argv);
 			if (family)
 				*family = src.family;
 
@@ -1021,7 +1023,7 @@ int xfrm_id_parse(xfrm_address_t *saddr, struct xfrm_id *id, __u16 *family,
 
 			get_prefix(&dst, *argv, preferred_family);
 			if (dst.family == AF_UNSPEC)
-				invarg("\"dst\" address family is AF_UNSPEC", *argv);
+				invarg("value after \"dst\" has an unrecognized address family", *argv);
 			if (family)
 				*family = dst.family;
 
@@ -1036,7 +1038,7 @@ int xfrm_id_parse(xfrm_address_t *saddr, struct xfrm_id *id, __u16 *family,
 
 			ret = xfrm_xfrmproto_getbyname(*argv);
 			if (ret < 0)
-				invarg("\"XFRM-PROTO\" is invalid", *argv);
+				invarg("XFRM-PROTO value is invalid", *argv);
 
 			id->proto = (__u8)ret;
 
@@ -1047,7 +1049,7 @@ int xfrm_id_parse(xfrm_address_t *saddr, struct xfrm_id *id, __u16 *family,
 
 			NEXT_ARG();
 			if (get_u32(&spi, *argv, 0))
-				invarg("\"SPI\" is invalid", *argv);
+				invarg("SPI value is invalid", *argv);
 
 			spi = htonl(spi);
 			id->spi = spi;
@@ -1065,7 +1067,19 @@ int xfrm_id_parse(xfrm_address_t *saddr, struct xfrm_id *id, __u16 *family,
 	}
 
 	if (src.family && dst.family && (src.family != dst.family))
-		invarg("the same address family is required between \"src\" and \"dst\"", *argv);
+		invarg("the same address family is required between values after \"src\" and \"dst\"", *argv);
+
+	if (id->spi && id->proto) {
+		if (xfrm_xfrmproto_is_ro(id->proto)) {
+			fprintf(stderr, "\"spi\" is invalid with XFRM-PROTO value \"%s\"\n",
+			        strxf_xfrmproto(id->proto));
+			exit(1);
+		} else if (id->proto == IPPROTO_COMP && ntohl(id->spi) >= 0x10000) {
+			fprintf(stderr, "SPI value is too large with XFRM-PROTO value \"%s\"\n",
+			        strxf_xfrmproto(id->proto));
+			exit(1);
+		}
+	}
 
 	if (loose == 0 && id->proto == 0)
 		missarg("XFRM-PROTO");
@@ -1094,7 +1108,7 @@ int xfrm_mode_parse(__u8 *mode, int *argcp, char ***argvp)
 	else if (matches(*argv, "beet") == 0)
 		*mode = XFRM_MODE_BEET;
 	else
-		invarg("\"MODE\" is invalid", *argv);
+		invarg("MODE value is invalid", *argv);
 
 	*argcp = argc;
 	*argvp = argv;
@@ -1112,7 +1126,7 @@ int xfrm_encap_type_parse(__u16 *type, int *argcp, char ***argvp)
 	else if (strcmp(*argv, "espinudp") == 0)
 		*type = 2;
 	else
-		invarg("\"ENCAP-TYPE\" is invalid", *argv);
+		invarg("ENCAP-TYPE value is invalid", *argv);
 
 	*argcp = argc;
 	*argvp = argv;
@@ -1127,7 +1141,7 @@ int xfrm_reqid_parse(__u32 *reqid, int *argcp, char ***argvp)
 	char **argv = *argvp;
 
 	if (get_u32(reqid, *argv, 0))
-		invarg("\"REQID\" is invalid", *argv);
+		invarg("REQID value is invalid", *argv);
 
 	*argcp = argc;
 	*argvp = argv;
@@ -1161,7 +1175,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 					upspec = pp->p_proto;
 				else {
 					if (get_u8(&upspec, *argv, 0))
-						invarg("\"PROTO\" is invalid", *argv);
+						invarg("PROTO value is invalid", *argv);
 				}
 			}
 			sel->proto = upspec;
@@ -1174,7 +1188,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 			NEXT_ARG();
 
 			if (get_u16(&sel->sport, *argv, 0))
-				invarg("\"PORT\" is invalid", *argv);
+				invarg("value after \"sport\" is invalid", *argv);
 			sel->sport = htons(sel->sport);
 			if (sel->sport)
 				sel->sport_mask = ~((__u16)0);
@@ -1187,7 +1201,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 			NEXT_ARG();
 
 			if (get_u16(&sel->dport, *argv, 0))
-				invarg("\"PORT\" is invalid", *argv);
+				invarg("value after \"dport\" is invalid", *argv);
 			sel->dport = htons(sel->dport);
 			if (sel->dport)
 				sel->dport_mask = ~((__u16)0);
@@ -1201,7 +1215,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 
 			if (get_u16(&sel->sport, *argv, 0) ||
 			    (sel->sport & ~((__u16)0xff)))
-				invarg("\"type\" value is invalid", *argv);
+				invarg("value after \"type\" is invalid", *argv);
 			sel->sport = htons(sel->sport);
 			sel->sport_mask = ~((__u16)0);
 
@@ -1215,7 +1229,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 
 			if (get_u16(&sel->dport, *argv, 0) ||
 			    (sel->dport & ~((__u16)0xff)))
-				invarg("\"code\" value is invalid", *argv);
+				invarg("value after \"code\" is invalid", *argv);
 			sel->dport = htons(sel->dport);
 			sel->dport_mask = ~((__u16)0);
 
@@ -1232,7 +1246,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 				uval = htonl(get_addr32(*argv));
 			else {
 				if (get_unsigned(&uval, *argv, 0)<0) {
-					fprintf(stderr, "invalid value for \"key\"; it should be an unsigned integer\n");
+					fprintf(stderr, "value after \"key\" is invalid\n");
 					exit(-1);
 				}
 			}
@@ -1263,7 +1277,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 		case IPPROTO_DCCP:
 			break;
 		default:
-			fprintf(stderr, "\"sport\" and \"dport\" are invalid with proto=%s\n", strxf_proto(sel->proto));
+			fprintf(stderr, "\"sport\" and \"dport\" are invalid with PROTO value \"%s\"\n", strxf_proto(sel->proto));
 			exit(1);
 		}
 	}
@@ -1274,7 +1288,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 		case IPPROTO_MH:
 			break;
 		default:
-			fprintf(stderr, "\"type\" and \"code\" are invalid with proto=%s\n", strxf_proto(sel->proto));
+			fprintf(stderr, "\"type\" and \"code\" are invalid with PROTO value \"%s\"\n", strxf_proto(sel->proto));
 			exit(1);
 		}
 	}
@@ -1283,7 +1297,7 @@ static int xfrm_selector_upspec_parse(struct xfrm_selector *sel,
 		case IPPROTO_GRE:
 			break;
 		default:
-			fprintf(stderr, "\"key\" is invalid with proto=%s\n", strxf_proto(sel->proto));
+			fprintf(stderr, "\"key\" is invalid with PROTO value \"%s\"\n", strxf_proto(sel->proto));
 			exit(1);
 		}
 	}
@@ -1311,7 +1325,7 @@ int xfrm_selector_parse(struct xfrm_selector *sel, int *argcp, char ***argvp)
 
 			get_prefix(&src, *argv, preferred_family);
 			if (src.family == AF_UNSPEC)
-				invarg("\"src\" address family is AF_UNSPEC", *argv);
+				invarg("value after \"src\" has an unrecognized address family", *argv);
 			sel->family = src.family;
 
 			memcpy(&sel->saddr, &src.data, sizeof(sel->saddr));
@@ -1324,7 +1338,7 @@ int xfrm_selector_parse(struct xfrm_selector *sel, int *argcp, char ***argvp)
 
 			get_prefix(&dst, *argv, preferred_family);
 			if (dst.family == AF_UNSPEC)
-				invarg("\"dst\" address family is AF_UNSPEC", *argv);
+				invarg("value after \"dst\" has an unrecognized address family", *argv);
 			sel->family = dst.family;
 
 			memcpy(&sel->daddr, &dst.data, sizeof(sel->daddr));
@@ -1342,7 +1356,7 @@ int xfrm_selector_parse(struct xfrm_selector *sel, int *argcp, char ***argvp)
 			else {
 				ifindex = ll_name_to_index(*argv);
 				if (ifindex <= 0)
-					invarg("\"DEV\" is invalid", *argv);
+					invarg("DEV value is invalid", *argv);
 			}
 			sel->ifindex = ifindex;
 
@@ -1365,7 +1379,7 @@ int xfrm_selector_parse(struct xfrm_selector *sel, int *argcp, char ***argvp)
 	}
 
 	if (src.family && dst.family && (src.family != dst.family))
-		invarg("the same address family is required between \"src\" and \"dst\"", *argv);
+		invarg("the same address family is required between values after \"src\" and \"dst\"", *argv);
 
 	if (argc == *argcp)
 		missarg("SELECTOR");
@@ -1387,44 +1401,44 @@ int xfrm_lifetime_cfg_parse(struct xfrm_lifetime_cfg *lft,
 		NEXT_ARG();
 		ret = get_u64(&lft->soft_add_expires_seconds, *argv, 0);
 		if (ret)
-			invarg("\"time-soft\" value is invalid", *argv);
+			invarg("value after \"time-soft\" is invalid", *argv);
 	} else if (strcmp(*argv, "time-hard") == 0) {
 		NEXT_ARG();
 		ret = get_u64(&lft->hard_add_expires_seconds, *argv, 0);
 		if (ret)
-			invarg("\"time-hard\" value is invalid", *argv);
+			invarg("value after \"time-hard\" is invalid", *argv);
 	} else if (strcmp(*argv, "time-use-soft") == 0) {
 		NEXT_ARG();
 		ret = get_u64(&lft->soft_use_expires_seconds, *argv, 0);
 		if (ret)
-			invarg("\"time-use-soft\" value is invalid", *argv);
+			invarg("value after \"time-use-soft\" is invalid", *argv);
 	} else if (strcmp(*argv, "time-use-hard") == 0) {
 		NEXT_ARG();
 		ret = get_u64(&lft->hard_use_expires_seconds, *argv, 0);
 		if (ret)
-			invarg("\"time-use-hard\" value is invalid", *argv);
+			invarg("value after \"time-use-hard\" is invalid", *argv);
 	} else if (strcmp(*argv, "byte-soft") == 0) {
 		NEXT_ARG();
 		ret = get_u64(&lft->soft_byte_limit, *argv, 0);
 		if (ret)
-			invarg("\"byte-soft\" value is invalid", *argv);
+			invarg("value after \"byte-soft\" is invalid", *argv);
 	} else if (strcmp(*argv, "byte-hard") == 0) {
 		NEXT_ARG();
 		ret = get_u64(&lft->hard_byte_limit, *argv, 0);
 		if (ret)
-			invarg("\"byte-hard\" value is invalid", *argv);
+			invarg("value after \"byte-hard\" is invalid", *argv);
 	} else if (strcmp(*argv, "packet-soft") == 0) {
 		NEXT_ARG();
 		ret = get_u64(&lft->soft_packet_limit, *argv, 0);
 		if (ret)
-			invarg("\"packet-soft\" value is invalid", *argv);
+			invarg("value after \"packet-soft\" is invalid", *argv);
 	} else if (strcmp(*argv, "packet-hard") == 0) {
 		NEXT_ARG();
 		ret = get_u64(&lft->hard_packet_limit, *argv, 0);
 		if (ret)
-			invarg("\"packet-hard\" value is invalid", *argv);
+			invarg("value after \"packet-hard\" is invalid", *argv);
 	} else
-		invarg("\"LIMIT\" is invalid", *argv);
+		invarg("LIMIT value is invalid", *argv);
 
 	*argcp = argc;
 	*argvp = argv;

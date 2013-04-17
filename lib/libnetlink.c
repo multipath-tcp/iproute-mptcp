@@ -91,6 +91,12 @@ int rtnl_open(struct rtnl_handle *rth, unsigned subscriptions)
 
 int rtnl_wilddump_request(struct rtnl_handle *rth, int family, int type)
 {
+	return rtnl_wilddump_req_filter(rth, family, type, RTEXT_FILTER_VF);
+}
+
+int rtnl_wilddump_req_filter(struct rtnl_handle *rth, int family, int type,
+			    __u32 filt_mask)
+{
 	struct {
 		struct nlmsghdr nlh;
 		struct rtgenmsg g;
@@ -109,7 +115,7 @@ int rtnl_wilddump_request(struct rtnl_handle *rth, int family, int type)
 
 	req.ext_req.rta_type = IFLA_EXT_MASK;
 	req.ext_req.rta_len = RTA_LENGTH(sizeof(__u32));
-	req.ext_filter_mask = RTEXT_FILTER_VF;
+	req.ext_filter_mask = filt_mask;
 
 	return send(rth->fd, (void*)&req, sizeof(req), 0);
 }
@@ -188,6 +194,7 @@ int rtnl_dump_filter_l(struct rtnl_handle *rth,
 		.msg_iovlen = 1,
 	};
 	char buf[16384];
+	int dump_intr = 0;
 
 	iov.iov_base = buf;
 	while (1) {
@@ -224,6 +231,9 @@ int rtnl_dump_filter_l(struct rtnl_handle *rth,
 				    h->nlmsg_seq != rth->dump)
 					goto skip_it;
 
+				if (h->nlmsg_flags & NLM_F_DUMP_INTR)
+					dump_intr = 1;
+
 				if (h->nlmsg_type == NLMSG_DONE) {
 					found_done = 1;
 					break; /* process next filter */
@@ -248,8 +258,12 @@ skip_it:
 			}
 		}
 
-		if (found_done)
+		if (found_done) {
+			if (dump_intr)
+				fprintf(stderr,
+					"Dump was interrupted and may be inconsistent.\n");
 			return 0;
+		}
 
 		if (msg.msg_flags & MSG_TRUNC) {
 			fprintf(stderr, "Message truncated\n");
@@ -652,10 +666,19 @@ int rta_addattr_l(struct rtattr *rta, int maxlen, int type,
 
 int parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rta, int len)
 {
+	return parse_rtattr_flags(tb, max, rta, len, 0);
+}
+
+int parse_rtattr_flags(struct rtattr *tb[], int max, struct rtattr *rta,
+		       int len, unsigned short flags)
+{
+	unsigned short type;
+
 	memset(tb, 0, sizeof(struct rtattr *) * (max + 1));
 	while (RTA_OK(rta, len)) {
-		if ((rta->rta_type <= max) && (!tb[rta->rta_type]))
-			tb[rta->rta_type] = rta;
+		type = rta->rta_type & ~flags;
+		if ((type <= max) && (!tb[type]))
+			tb[type] = rta;
 		rta = RTA_NEXT(rta,len);
 	}
 	if (len)
