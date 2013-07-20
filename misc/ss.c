@@ -302,7 +302,7 @@ static void user_ent_hash_build(void)
 
 				snprintf(tmp, sizeof(tmp), "%s/%d/stat", root, pid);
 				if ((fp = fopen(tmp, "r")) != NULL) {
-					fscanf(fp, "%*d (%[^)])", process);
+					if (fscanf(fp, "%*d (%[^)])", process) == EOF);
 					fclose(fp);
 				}
 			}
@@ -384,7 +384,10 @@ static int get_slabstat(struct slabstat *s)
 
 	cnt = sizeof(*s)/sizeof(int);
 
-	fgets(buf, sizeof(buf), fp);
+	if (!fgets(buf, sizeof(buf), fp)) {
+		fclose(fp);
+		return -1;
+	}
 	while(fgets(buf, sizeof(buf), fp) != NULL) {
 		int i;
 		for (i=0; i<sizeof(slabstat_ids)/sizeof(slabstat_ids[0]); i++) {
@@ -508,7 +511,10 @@ static void init_service_resolver(void)
 	char buf[128];
 	FILE *fp = popen("/usr/sbin/rpcinfo -p 2>/dev/null", "r");
 	if (fp) {
-		fgets(buf, sizeof(buf), fp);
+		if (!fgets(buf, sizeof(buf), fp)) {
+			pclose(fp);
+			return;
+		}
 		while (fgets(buf, sizeof(buf), fp) != NULL) {
 			unsigned int progn, port;
 			char proto[128], prog[128];
@@ -547,8 +553,7 @@ static int is_ephemeral(int port)
 	if (!ip_local_port_min) {
 		FILE *f = ephemeral_ports_open();
 		if (f) {
-			fscanf(f, "%d %d",
-			       &ip_local_port_min, &ip_local_port_max);
+			if (fscanf(f, "%d %d", &ip_local_port_min, &ip_local_port_max) == EOF);
 			fclose(f);
 		} else {
 			ip_local_port_min = 1024;
@@ -725,7 +730,7 @@ static int run_ssfilter(struct ssfilter *f, struct tcpstat *s)
                 if (!low) {
 			FILE *fp = ephemeral_ports_open();
 			if (fp) {
-				fscanf(fp, "%d%d", &low, &high);
+				if (fscanf(fp, "%d%d", &low, &high) == EOF);
 				fclose(fp);
 			}
 		}
@@ -2361,7 +2366,10 @@ static int unix_show(struct filter *f)
 
 	if ((fp = net_unix_open()) == NULL)
 		return -1;
-	fgets(buf, sizeof(buf)-1, fp);
+	if (!fgets(buf, sizeof(buf)-1, fp)) {
+		fclose(fp);
+		return -1;
+	}
 
 	if (memcmp(buf, "Peer", 4) == 0)
 		newformat = 1;
@@ -2627,7 +2635,10 @@ static int packet_show(struct filter *f)
 
 	if ((fp = net_packet_open()) == NULL)
 		return -1;
-	fgets(buf, sizeof(buf)-1, fp);
+	if (!fgets(buf, sizeof(buf)-1, fp)) {
+		fclose(fp);
+		return -1;
+	}
 
 	while (fgets(buf, sizeof(buf)-1, fp)) {
 		sscanf(buf, "%llx %*d %d %x %d %d %u %u %u",
@@ -2833,7 +2844,8 @@ static int netlink_show(struct filter *f)
 
 	if ((fp = net_netlink_open()) == NULL)
 		return -1;
-	fgets(buf, sizeof(buf)-1, fp);
+	if (!fgets(buf, sizeof(buf)-1, fp))
+		return -1;
 
 	while (fgets(buf, sizeof(buf)-1, fp)) {
 		sscanf(buf, "%llx %d %d %x %d %d %llx %d",
