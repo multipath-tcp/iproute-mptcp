@@ -30,9 +30,9 @@ int resolve_hosts = 0;
 int oneline = 0;
 int timestamp = 0;
 char * _SL_ = NULL;
-char *batch_file = NULL;
 int force = 0;
 int max_flush_loops = 10;
+int batch_mode = 0;
 
 struct rtnl_handle rth = { .fd = -1 };
 
@@ -45,7 +45,7 @@ static void usage(void)
 "       ip [ -force ] -batch filename\n"
 "where  OBJECT := { link | addr | addrlabel | route | rule | neigh | ntable |\n"
 "                   tunnel | tuntap | maddr | mroute | mrule | monitor | xfrm |\n"
-"                   netns | l2tp | tcp_metrics }\n"
+"                   netns | l2tp | tcp_metrics | token }\n"
 "       OPTIONS := { -V[ersion] | -s[tatistics] | -d[etails] | -r[esolve] |\n"
 "                    -f[amily] { inet | inet6 | ipx | dnet | bridge | link } |\n"
 "                    -4 | -6 | -I | -D | -B | -0 |\n"
@@ -80,6 +80,7 @@ static const struct cmd {
 	{ "tunl",	do_iptunnel },
 	{ "tuntap",	do_iptuntap },
 	{ "tap",	do_iptuntap },
+	{ "token",	do_iptoken },
 	{ "tcpmetrics",	do_tcp_metrics },
 	{ "tcp_metrics",do_tcp_metrics },
 	{ "monitor",	do_ipmonitor },
@@ -111,6 +112,8 @@ static int batch(const char *name)
 	char *line = NULL;
 	size_t len = 0;
 	int ret = EXIT_SUCCESS;
+
+	batch_mode = 1;
 
 	if (name && strcmp(name, "-") != 0) {
 		if (freopen(name, "r", stdin) == NULL) {
@@ -152,6 +155,7 @@ static int batch(const char *name)
 int main(int argc, char **argv)
 {
 	char *basename;
+	char *batch_file = NULL;
 
 	basename = strrchr(argv[0], '/');
 	if (basename == NULL)

@@ -42,7 +42,6 @@
 #define MS_SHARED	(1 << 20)
 #endif
 
-
 #ifndef HAVE_SETNS
 static int setns(int fd, int nstype)
 {
@@ -64,7 +63,7 @@ static int usage(void)
 	fprintf(stderr, "       ip netns pids NAME\n");
 	fprintf(stderr, "       ip netns exec NAME cmd ...\n");
 	fprintf(stderr, "       ip netns monitor\n");
-	return EXIT_FAILURE;
+	exit(-1);
 }
 
 int get_netns_fd(const char *name)
@@ -89,7 +88,7 @@ static int netns_list(int argc, char **argv)
 
 	dir = opendir(NETNS_RUN_DIR);
 	if (!dir)
-		return EXIT_SUCCESS;
+		return 0;
 
 	while ((entry = readdir(dir)) != NULL) {
 		if (strcmp(entry->d_name, ".") == 0)
@@ -99,7 +98,7 @@ static int netns_list(int argc, char **argv)
 		printf("%s\n", entry->d_name);
 	}
 	closedir(dir);
-	return EXIT_SUCCESS;
+	return 0;
 }
 
 static void bind_etc(const char *name)
@@ -141,54 +140,83 @@ static int netns_exec(int argc, char **argv)
 
 	if (argc < 1) {
 		fprintf(stderr, "No netns name specified\n");
-		return EXIT_FAILURE;
+		return -1;
 	}
 	if (argc < 2) {
 		fprintf(stderr, "No command specified\n");
-		return EXIT_FAILURE;
+		return -1;
 	}
+
 	name = argv[0];
 	cmd = argv[1];
 	snprintf(net_path, sizeof(net_path), "%s/%s", NETNS_RUN_DIR, name);
-	netns = open(net_path, O_RDONLY);
+	netns = open(net_path, O_RDONLY | O_CLOEXEC);
 	if (netns < 0) {
 		fprintf(stderr, "Cannot open network namespace \"%s\": %s\n",
 			name, strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
+
 	if (setns(netns, CLONE_NEWNET) < 0) {
 		fprintf(stderr, "seting the network namespace \"%s\" failed: %s\n",
 			name, strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 
 	if (unshare(CLONE_NEWNS) < 0) {
 		fprintf(stderr, "unshare failed: %s\n", strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	/* Don't let any mounts propogate back to the parent */
 	if (mount("", "/", "none", MS_SLAVE | MS_REC, NULL)) {
 		fprintf(stderr, "\"mount --make-rslave /\" failed: %s\n",
 			strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	/* Mount a version of /sys that describes the network namespace */
 	if (umount2("/sys", MNT_DETACH) < 0) {
 		fprintf(stderr, "umount of /sys failed: %s\n", strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	if (mount(name, "/sys", "sysfs", 0, NULL) < 0) {
 		fprintf(stderr, "mount of /sys failed: %s\n",strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 
 	/* Setup bind mounts for config files in /etc */
 	bind_etc(name);
 
+	fflush(stdout);
+
+	if (batch_mode) {
+		int status;
+		pid_t pid;
+
+		pid = fork();
+		if (pid < 0) {
+			perror("fork");
+			exit(1);
+		}
+
+		if (pid != 0) {
+			/* Parent  */
+			if (waitpid(pid, &status, 0) < 0) {
+				perror("waitpid");
+				exit(1);
+			}
+
+			/* If child failed, propogate status */
+			if (WIFEXITED(status))
+				exit(WEXITSTATUS(status));
+
+			return 0;
+		}
+	}
+
 	if (execvp(cmd, argv + 1)  < 0)
 		fprintf(stderr, "exec of \"%s\" failed: %s\n",
 			cmd, strerror(errno));
-	return EXIT_FAILURE;
+	_exit(1);
 }
 
 static int is_pid(const char *str)
@@ -212,11 +240,11 @@ static int netns_pids(int argc, char **argv)
 
 	if (argc < 1) {
 		fprintf(stderr, "No netns name specified\n");
-		return EXIT_FAILURE;
+		return -1;
 	}
 	if (argc > 1) {
 		fprintf(stderr, "extra arguments specified\n");
-		return EXIT_FAILURE;
+		return -1;
 	}
 
 	name = argv[0];
@@ -225,18 +253,18 @@ static int netns_pids(int argc, char **argv)
 	if (netns < 0) {
 		fprintf(stderr, "Cannot open network namespace: %s\n",
 			strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	if (fstat(netns, &netst) < 0) {
 		fprintf(stderr, "Stat of netns failed: %s\n",
 			strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	dir = opendir("/proc/");
 	if (!dir) {
 		fprintf(stderr, "Open of /proc failed: %s\n",
 			strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	while((entry = readdir(dir))) {
 		char pid_net_path[MAXPATHLEN];
@@ -253,7 +281,7 @@ static int netns_pids(int argc, char **argv)
 		}
 	}
 	closedir(dir);
-	return EXIT_SUCCESS;
+	return 0;
 	
 }
 
@@ -268,18 +296,18 @@ static int netns_identify(int argc, char **argv)
 
 	if (argc < 1) {
 		fprintf(stderr, "No pid specified\n");
-		return EXIT_FAILURE;
+		return -1;
 	}
 	if (argc > 1) {
 		fprintf(stderr, "extra arguments specified\n");
-		return EXIT_FAILURE;
+		return -1;
 	}
 	pidstr = argv[0];
 
 	if (!is_pid(pidstr)) {
 		fprintf(stderr, "Specified string '%s' is not a pid\n",
 			pidstr);
-		return EXIT_FAILURE;
+		return -1;
 	}
 
 	snprintf(net_path, sizeof(net_path), "/proc/%s/ns/net", pidstr);
@@ -287,22 +315,22 @@ static int netns_identify(int argc, char **argv)
 	if (netns < 0) {
 		fprintf(stderr, "Cannot open network namespace: %s\n",
 			strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	if (fstat(netns, &netst) < 0) {
 		fprintf(stderr, "Stat of netns failed: %s\n",
 			strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	dir = opendir(NETNS_RUN_DIR);
 	if (!dir) {
 		/* Succeed treat a missing directory as an empty directory */
 		if (errno == ENOENT)
-			return EXIT_SUCCESS;
+			return 0;
 
 		fprintf(stderr, "Failed to open directory %s:%s\n",
 			NETNS_RUN_DIR, strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 
 	while((entry = readdir(dir))) {
@@ -326,7 +354,7 @@ static int netns_identify(int argc, char **argv)
 		}
 	}
 	closedir(dir);
-	return EXIT_SUCCESS;
+	return 0;
 	
 }
 
@@ -337,7 +365,7 @@ static int netns_delete(int argc, char **argv)
 
 	if (argc < 1) {
 		fprintf(stderr, "No netns name specified\n");
-		return EXIT_FAILURE;
+		return -1;
 	}
 
 	name = argv[0];
@@ -346,9 +374,9 @@ static int netns_delete(int argc, char **argv)
 	if (unlink(netns_path) < 0) {
 		fprintf(stderr, "Cannot remove namespace file \"%s\": %s\n",
 			netns_path, strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
-	return EXIT_SUCCESS;
+	return 0;
 }
 
 static int netns_add(int argc, char **argv)
@@ -368,7 +396,7 @@ static int netns_add(int argc, char **argv)
 
 	if (argc < 1) {
 		fprintf(stderr, "No netns name specified\n");
-		return EXIT_FAILURE;
+		return -1;
 	}
 	name = argv[0];
 
@@ -388,14 +416,14 @@ static int netns_add(int argc, char **argv)
 		if (errno != EINVAL || made_netns_run_dir_mount) {
 			fprintf(stderr, "mount --make-shared %s failed: %s\n",
 				NETNS_RUN_DIR, strerror(errno));
-			return EXIT_FAILURE;
+			return -1;
 		}
 
 		/* Upgrade NETNS_RUN_DIR to a mount point */
 		if (mount(NETNS_RUN_DIR, NETNS_RUN_DIR, "none", MS_BIND, NULL)) {
 			fprintf(stderr, "mount --bind %s %s failed: %s\n",
 				NETNS_RUN_DIR, NETNS_RUN_DIR, strerror(errno));
-			return EXIT_FAILURE;
+			return -1;
 		}
 		made_netns_run_dir_mount = 1;
 	}
@@ -405,7 +433,7 @@ static int netns_add(int argc, char **argv)
 	if (fd < 0) {
 		fprintf(stderr, "Cannot not create namespace file \"%s\": %s\n",
 			netns_path, strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	close(fd);
 	if (unshare(CLONE_NEWNET) < 0) {
@@ -420,10 +448,10 @@ static int netns_add(int argc, char **argv)
 			netns_path, strerror(errno));
 		goto out_delete;
 	}
-	return EXIT_SUCCESS;
+	return 0;
 out_delete:
 	netns_delete(argc, argv);
-	return EXIT_FAILURE;
+	return -1;
 }
 
 
@@ -436,19 +464,19 @@ static int netns_monitor(int argc, char **argv)
 	if (fd < 0) {
 		fprintf(stderr, "inotify_init failed: %s\n",
 			strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	if (inotify_add_watch(fd, NETNS_RUN_DIR, IN_CREATE | IN_DELETE) < 0) {
 		fprintf(stderr, "inotify_add_watch failed: %s\n",
 			strerror(errno));
-		return EXIT_FAILURE;
+		return -1;
 	}
 	for(;;) {
 		ssize_t len = read(fd, buf, sizeof(buf));
 		if (len < 0) {
 			fprintf(stderr, "read failed: %s\n",
 				strerror(errno));
-			return EXIT_FAILURE;
+			return -1;
 		}
 		for (event = (struct inotify_event *)buf;
 		     (char *)event < &buf[len];
@@ -459,7 +487,7 @@ static int netns_monitor(int argc, char **argv)
 				printf("delete %s\n", event->name);
 		}
 	}
-	return EXIT_SUCCESS;
+	return 0;
 }
 
 int do_netns(int argc, char **argv)
@@ -493,5 +521,5 @@ int do_netns(int argc, char **argv)
 		return netns_monitor(argc-1, argv+1);
 
 	fprintf(stderr, "Command \"%s\" is unknown, try \"ip netns help\".\n", *argv);
-	return EXIT_FAILURE;
+	exit(-1);
 }
