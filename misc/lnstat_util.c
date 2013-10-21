@@ -49,8 +49,7 @@ static int scan_lines(struct lnstat_file *lf, int i)
 
 		num_lines++;
 
-		if (!fgets(buf, sizeof(buf)-1, lf->fp))
-			return num_lines;
+		fgets(buf, sizeof(buf)-1, lf->fp);
 		gettimeofday(&lf->last_read, NULL);
 
 		for (j = 0; j < lf->num_fields; j++) {
@@ -95,8 +94,7 @@ int lnstat_update(struct lnstat_file *lnstat_files)
 			rewind(lf->fp);
 			if (!lf->compat) {
 				/* skip first line */
-				if (!fgets(buf, sizeof(buf)-1, lf->fp))
-					return 0;
+				fgets(buf, sizeof(buf)-1, lf->fp);
 			}
 			scan_lines(lf, 1);
 
@@ -110,8 +108,7 @@ int lnstat_update(struct lnstat_file *lnstat_files)
 			}
 
 			rewind(lf->fp);
-			if (!fgets(buf, sizeof(buf)-1, lf->fp))
-				return 0;
+			fgets(buf, sizeof(buf)-1, lf->fp);
 			scan_lines(lf, 0);
 		}
 	}
@@ -145,8 +142,7 @@ static int lnstat_scan_fields(struct lnstat_file *lf)
 	char buf[FGETS_BUF_SIZE];
 
 	rewind(lf->fp);
-	if (!fgets(buf, sizeof(buf)-1, lf->fp))
-		return -1;
+	fgets(buf, sizeof(buf)-1, lf->fp);
 
 	return __lnstat_scan_fields(lf, buf);
 }
