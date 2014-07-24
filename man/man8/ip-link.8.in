@@ -87,7 +87,7 @@ ip-link \- network device configuration
 .br
 .BR multicast " { " on " | " off " } |"
 .br
-.BR multipath " { " on " | " off " | " backup " | " handover " } |"
+.BR multipath " { " on " | " off " | " backup " } |"
 .br
 .B  txqueuelen
 .IR PACKETS " |"
@@ -463,13 +463,12 @@ change the
 flag on the device.
 
 .TP
-.BR "multipath on ", " multipath off", " multipath backup" or " multipath handover"
+.BR "multipath on ", " multipath off" or " multipath backup"
 change the
 .B MULTIPATH
 flag on the device, to enable/disable MPTCP for this interface. The backup-flag 
 will allow a subflow to be established across this interface, but only be used
-as backup. handover-flag indicates that his interface is not used at all (even 
-no subflow being established), as long as there are other interfaces available.
+as backup.
 
 .TP
 .BR "dynamic on " or " dynamic off"
