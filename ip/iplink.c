@@ -404,6 +404,7 @@ int iplink_parse(int argc, char **argv, struct iplink_req *req,
 				req->i.ifi_flags |= IFF_NOMULTIPATH;
 			} else if (strcmp(*argv, "backup") == 0) {
 				req->i.ifi_flags |= IFF_MPBACKUP;
+			} else
 				return on_off("multipath", *argv);
 		} else if (strcmp(*argv, "promisc") == 0) {
 			NEXT_ARG();
@@ -919,6 +920,7 @@ static int do_set(int argc, char **argv)
 				flags |= IFF_NOMULTIPATH;
 			} else if (strcmp(*argv, "backup") == 0) {
 				flags |= IFF_MPBACKUP;
+			} else
 				return on_off("multipath", *argv);
 		} else if (strcmp(*argv, "promisc") == 0) {
 			NEXT_ARG();
