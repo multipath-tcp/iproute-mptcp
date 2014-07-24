@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses>.
  */
 /*
  * based on iproute.c
@@ -962,7 +961,7 @@ static int xfrm_spd_getinfo(int argc, char **argv)
 	struct {
 		struct nlmsghdr			n;
 		__u32				flags;
-		char 				ans[128];
+		char				ans[128];
 	} req;
 
 	memset(&req, 0, sizeof(req));

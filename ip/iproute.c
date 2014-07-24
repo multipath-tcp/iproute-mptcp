@@ -332,7 +332,7 @@ int print_route(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 
 	if (n->nlmsg_type == RTM_DELROUTE)
 		fprintf(fp, "Deleted ");
-	if (r->rtm_type != RTN_UNICAST && !filter.type)
+	if ((r->rtm_type != RTN_UNICAST || show_details > 0) && !filter.type)
 		fprintf(fp, "%s ", rtnl_rtntype_n2a(r->rtm_type, b1, sizeof(b1)));
 
 	if (tb[RTA_DST]) {
@@ -389,11 +389,11 @@ int print_route(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		fprintf(fp, "dev %s ", ll_index_to_name(*(int*)RTA_DATA(tb[RTA_OIF])));
 
 	if (!(r->rtm_flags&RTM_F_CLONED)) {
-		if (table != RT_TABLE_MAIN && !filter.tb)
+		if ((table != RT_TABLE_MAIN || show_details > 0) && !filter.tb)
 			fprintf(fp, " table %s ", rtnl_rttable_n2a(table, b1, sizeof(b1)));
-		if (r->rtm_protocol != RTPROT_BOOT && filter.protocolmask != -1)
+		if ((r->rtm_protocol != RTPROT_BOOT || show_details > 0) && filter.protocolmask != -1)
 			fprintf(fp, " proto %s ", rtnl_rtprot_n2a(r->rtm_protocol, b1, sizeof(b1)));
-		if (r->rtm_scope != RT_SCOPE_UNIVERSE && filter.scopemask != -1)
+		if ((r->rtm_scope != RT_SCOPE_UNIVERSE || show_details > 0) && filter.scopemask != -1)
 			fprintf(fp, " scope %s ", rtnl_rtscope_n2a(r->rtm_scope, b1, sizeof(b1)));
 	}
 	if (tb[RTA_PREFSRC] && filter.rprefsrc.bitlen != host_len) {
@@ -708,9 +708,9 @@ static int parse_nexthops(struct nlmsghdr *n, struct rtmsg *r,
 static int iproute_modify(int cmd, unsigned flags, int argc, char **argv)
 {
 	struct {
-		struct nlmsghdr 	n;
-		struct rtmsg 		r;
-		char   			buf[1024];
+		struct nlmsghdr	n;
+		struct rtmsg		r;
+		char  			buf[1024];
 	} req;
 	char  mxbuf[256];
 	struct rtattr * mxrta = (void*)mxbuf;
@@ -837,7 +837,7 @@ static int iproute_modify(int cmd, unsigned flags, int argc, char **argv)
 			}
 			if (get_time_rtt(&rtt, *argv, &raw))
 				invarg("\"rtt\" value is invalid\n", *argv);
-			rta_addattr32(mxrta, sizeof(mxbuf), RTAX_RTT, 
+			rta_addattr32(mxrta, sizeof(mxbuf), RTAX_RTT,
 				(raw) ? rtt : rtt * 8);
 		} else if (strcmp(*argv, "rto_min") == 0) {
 			unsigned rto_min;
@@ -1376,9 +1376,9 @@ static int iproute_list_flush_or_save(int argc, char **argv, int action)
 static int iproute_get(int argc, char **argv)
 {
 	struct {
-		struct nlmsghdr 	n;
-		struct rtmsg 		r;
-		char   			buf[1024];
+		struct nlmsghdr	n;
+		struct rtmsg		r;
+		char  			buf[1024];
 	} req;
 	char  *idev = NULL;
 	char  *odev = NULL;

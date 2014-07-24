@@ -12,8 +12,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses>.
  */
 /*
  * split from ip_tunnel.c
@@ -122,7 +121,7 @@ int tnl_del_ioctl(const char *basedev, const char *name, void *p)
 	return err;
 }
 
-static int tnl_gen_ioctl(int cmd, const char *name, 
+static int tnl_gen_ioctl(int cmd, const char *name,
 			 void *p, int skiperr)
 {
 	struct ifreq ifr;

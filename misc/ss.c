@@ -41,6 +41,34 @@
 #include <linux/packet_diag.h>
 #include <linux/netlink_diag.h>
 
+#if HAVE_SELINUX
+#include <selinux/selinux.h>
+#else
+/* Stubs for SELinux functions */
+static int is_selinux_enabled(void)
+{
+	return -1;
+}
+
+static int getpidcon(pid_t pid, char **context)
+{
+	*context = NULL;
+	return -1;
+}
+
+static int getfilecon(char *path, char **context)
+{
+	*context = NULL;
+	return -1;
+}
+
+static int security_get_initial_context(char *name,  char **context)
+{
+	*context = NULL;
+	return -1;
+}
+#endif
+
 int resolve_hosts = 0;
 int resolve_services = 1;
 int preferred_family = AF_UNSPEC;
@@ -50,6 +78,10 @@ int show_users = 0;
 int show_mem = 0;
 int show_tcpinfo = 0;
 int show_bpf = 0;
+int show_proc_ctx = 0;
+int show_sock_ctx = 0;
+/* If show_users & show_proc_ctx only do user_ent_hash_build() once */
+int user_ent_hash_build_init = 0;
 
 int netid_width;
 int state_width;
@@ -71,6 +103,7 @@ enum
 	RAW_DB,
 	UNIX_DG_DB,
 	UNIX_ST_DB,
+	UNIX_SQ_DB,
 	PACKET_DG_DB,
 	PACKET_R_DB,
 	NETLINK_DB,
@@ -78,7 +111,7 @@ enum
 };
 
 #define PACKET_DBM ((1<<PACKET_DG_DB)|(1<<PACKET_R_DB))
-#define UNIX_DBM ((1<<UNIX_DG_DB)|(1<<UNIX_ST_DB))
+#define UNIX_DBM ((1<<UNIX_DG_DB)|(1<<UNIX_ST_DB)|(1<<UNIX_SQ_DB))
 #define ALL_DB ((1<<MAX_DB)-1)
 
 enum {
@@ -206,7 +239,9 @@ struct user_ent {
 	unsigned int	ino;
 	int		pid;
 	int		fd;
-	char		process[0];
+	char		*process;
+	char		*process_ctx;
+	char		*socket_ctx;
 };
 
 #define USER_ENT_HASH_SIZE	256
@@ -219,24 +254,48 @@ static int user_ent_hashfn(unsigned int ino)
 	return val & (USER_ENT_HASH_SIZE - 1);
 }
 
-static void user_ent_add(unsigned int ino, const char *process, int pid, int fd)
+static void user_ent_add(unsigned int ino, char *process,
+					int pid, int fd,
+					char *proc_ctx,
+					char *sock_ctx)
 {
 	struct user_ent *p, **pp;
-	int str_len;
 
-	str_len = strlen(process) + 1;
-	p = malloc(sizeof(struct user_ent) + str_len);
-	if (!p)
+	p = malloc(sizeof(struct user_ent));
+	if (!p) {
+		fprintf(stderr, "ss: failed to malloc buffer\n");
 		abort();
+	}
 	p->next = NULL;
 	p->ino = ino;
 	p->pid = pid;
 	p->fd = fd;
-	strcpy(p->process, process);
+	p->process = strdup(process);
+	p->process_ctx = strdup(proc_ctx);
+	p->socket_ctx = strdup(sock_ctx);
 
 	pp = &user_ent_hash[user_ent_hashfn(ino)];
 	p->next = *pp;
 	*pp = p;
+}
+
+static void user_ent_destroy(void)
+{
+	struct user_ent *p, *p_next;
+	int cnt = 0;
+
+	while (cnt != USER_ENT_HASH_SIZE) {
+		p = user_ent_hash[cnt];
+		while (p) {
+			free(p->process);
+			free(p->process_ctx);
+			free(p->socket_ctx);
+			p_next = p->next;
+			free(p);
+			p = p_next;
+		}
+		cnt++;
+	}
 }
 
 static void user_ent_hash_build(void)
@@ -246,6 +305,15 @@ static void user_ent_hash_build(void)
 	char name[1024];
 	int nameoff;
 	DIR *dir;
+	char *pid_context;
+	char *sock_context;
+	const char *no_ctx = "unavailable";
+
+	/* If show_users & show_proc_ctx set only do this once */
+	if (user_ent_hash_build_init != 0)
+		return;
+
+	user_ent_hash_build_init = 1;
 
 	strcpy(name, root);
 	if (strlen(name) == 0 || name[strlen(name)-1] != '/')
@@ -260,6 +328,7 @@ static void user_ent_hash_build(void)
 	while ((d = readdir(dir)) != NULL) {
 		struct dirent *d1;
 		char process[16];
+		char *p;
 		int pid, pos;
 		DIR *dir1;
 		char crap;
@@ -267,12 +336,16 @@ static void user_ent_hash_build(void)
 		if (sscanf(d->d_name, "%d%c", &pid, &crap) != 1)
 			continue;
 
+		if (getpidcon(pid, &pid_context) != 0)
+			pid_context = strdup(no_ctx);
+
 		sprintf(name + nameoff, "%d/fd/", pid);
 		pos = strlen(name);
 		if ((dir1 = opendir(name)) == NULL)
 			continue;
 
 		process[0] = '\0';
+		p = process;
 
 		while ((d1 = readdir(dir1)) != NULL) {
 			const char *pattern = "socket:[";
@@ -280,6 +353,7 @@ static void user_ent_hash_build(void)
 			char lnk[64];
 			int fd;
 			ssize_t link_len;
+			char tmp[1024];
 
 			if (sscanf(d1->d_name, "%d%c", &fd, &crap) != 1)
 				continue;
@@ -296,55 +370,107 @@ static void user_ent_hash_build(void)
 
 			sscanf(lnk, "socket:[%u]", &ino);
 
-			if (process[0] == '\0') {
-				char tmp[1024];
+			snprintf(tmp, sizeof(tmp), "%s/%d/fd/%s",
+					root, pid, d1->d_name);
+
+			if (getfilecon(tmp, &sock_context) <= 0)
+				sock_context = strdup(no_ctx);
+
+			if (*p == '\0') {
 				FILE *fp;
 
-				snprintf(tmp, sizeof(tmp), "%s/%d/stat", root, pid);
+				snprintf(tmp, sizeof(tmp), "%s/%d/stat",
+					root, pid);
 				if ((fp = fopen(tmp, "r")) != NULL) {
-					fscanf(fp, "%*d (%[^)])", process);
+					fscanf(fp, "%*d (%[^)])", p);
 					fclose(fp);
 				}
 			}
-
-			user_ent_add(ino, process, pid, fd);
+			user_ent_add(ino, p, pid, fd,
+					pid_context, sock_context);
+			free(sock_context);
 		}
+		free(pid_context);
 		closedir(dir1);
 	}
 	closedir(dir);
 }
 
-static int find_users(unsigned ino, char *buf, int buflen)
+enum entry_types {
+	USERS,
+	PROC_CTX,
+	PROC_SOCK_CTX
+};
+
+#define ENTRY_BUF_SIZE 512
+static int find_entry(unsigned ino, char **buf, int type)
 {
 	struct user_ent *p;
 	int cnt = 0;
 	char *ptr;
+	char **new_buf = buf;
+	int len, new_buf_len;
+	int buf_used = 0;
+	int buf_len = 0;
 
 	if (!ino)
 		return 0;
 
 	p = user_ent_hash[user_ent_hashfn(ino)];
-	ptr = buf;
+	ptr = *buf = NULL;
 	while (p) {
 		if (p->ino != ino)
 			goto next;
 
-		if (ptr - buf >= buflen - 1)
-			break;
+		while (1) {
+			ptr = *buf + buf_used;
+			switch (type) {
+			case USERS:
+				len = snprintf(ptr, buf_len - buf_used,
+					"(\"%s\",pid=%d,fd=%d),",
+					p->process, p->pid, p->fd);
+				break;
+			case PROC_CTX:
+				len = snprintf(ptr, buf_len - buf_used,
+					"(\"%s\",pid=%d,proc_ctx=%s,fd=%d),",
+					p->process, p->pid,
+					p->process_ctx, p->fd);
+				break;
+			case PROC_SOCK_CTX:
+				len = snprintf(ptr, buf_len - buf_used,
+					"(\"%s\",pid=%d,proc_ctx=%s,fd=%d,sock_ctx=%s),",
+					p->process, p->pid,
+					p->process_ctx, p->fd,
+					p->socket_ctx);
+				break;
+			default:
+				fprintf(stderr, "ss: invalid type: %d\n", type);
+				abort();
+			}
 
-		snprintf(ptr, buflen - (ptr - buf),
-			 "(\"%s\",%d,%d),",
-			 p->process, p->pid, p->fd);
-		ptr += strlen(ptr);
+			if (len < 0 || len >= buf_len - buf_used) {
+				new_buf_len = buf_len + ENTRY_BUF_SIZE;
+				*new_buf = realloc(*buf, new_buf_len);
+				if (!new_buf) {
+					fprintf(stderr, "ss: failed to malloc buffer\n");
+					abort();
+				}
+				**buf = **new_buf;
+				buf_len = new_buf_len;
+				continue;
+			} else {
+				buf_used += len;
+				break;
+			}
+		}
 		cnt++;
-
-	next:
+next:
 		p = p->next;
 	}
-
-	if (ptr != buf)
+	if (buf_used) {
+		ptr = *buf + buf_used;
 		ptr[-1] = '\0';
-
+	}
 	return cnt;
 }
 
@@ -639,7 +765,7 @@ static const char *resolve_service(int port)
 	return buf;
 }
 
-static void formatted_print(const inet_prefix *a, int port)
+static void formatted_print(const inet_prefix *a, int port, unsigned int ifindex)
 {
 	char buf[1024];
 	const char *ap = buf;
@@ -662,7 +788,14 @@ static void formatted_print(const inet_prefix *a, int port)
 		else
 			est_len = addr_width + ((est_len-addr_width+3)/4)*4;
 	}
-	printf("%*s:%-*s ", est_len, ap, serv_width, resolve_service(port));
+	if (ifindex) {
+		const char *ifname = ll_index_to_name(ifindex);
+		const int len = strlen(ifname) + 1;  /* +1 for percent char */
+
+		printf("%*s%%%s:%-*s ", est_len - len, ap, ifname, serv_width,
+		       resolve_service(port));
+	} else
+		printf("%*s:%-*s ", est_len, ap, serv_width, resolve_service(port));
 }
 
 struct aafilter
@@ -894,7 +1027,8 @@ static int ssfilter_bytecompile(struct ssfilter *f, char **bytecode)
 
 		case SSF_AND:
 	{
-		char *a1, *a2, *a, l1, l2;
+		char *a1, *a2, *a;
+		int l1, l2;
 		l1 = ssfilter_bytecompile(f->pred, &a1);
 		l2 = ssfilter_bytecompile(f->post, &a2);
 		if (!(a = malloc(l1+l2))) abort();
@@ -907,7 +1041,8 @@ static int ssfilter_bytecompile(struct ssfilter *f, char **bytecode)
 	}
 		case SSF_OR:
 	{
-		char *a1, *a2, *a, l1, l2;
+		char *a1, *a2, *a;
+		int l1, l2;
 		l1 = ssfilter_bytecompile(f->pred, &a1);
 		l2 = ssfilter_bytecompile(f->post, &a2);
 		if (!(a = malloc(l1+l2+4))) abort();
@@ -920,7 +1055,8 @@ static int ssfilter_bytecompile(struct ssfilter *f, char **bytecode)
 	}
 		case SSF_NOT:
 	{
-		char *a1, *a, l1;
+		char *a1, *a;
+		int l1;
 		l1 = ssfilter_bytecompile(f->pred, &a1);
 		if (!(a = malloc(l1+4))) abort();
 		memcpy(a, a1, l1);
@@ -993,7 +1129,9 @@ static int xll_initted = 0;
 static void xll_init(void)
 {
 	struct rtnl_handle rth;
-	rtnl_open(&rth, 0);
+	if (rtnl_open(&rth, 0) < 0)
+		exit(1);
+
 	ll_init_map(&rth);
 	rtnl_close(&rth);
 	xll_initted = 1;
@@ -1248,8 +1386,8 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 
 	printf("%-6d %-6d ", s.rq, s.wq);
 
-	formatted_print(&s.local, s.lport);
-	formatted_print(&s.remote, s.rport);
+	formatted_print(&s.local, s.lport, 0);
+	formatted_print(&s.remote, s.rport, 0);
 
 	if (show_options) {
 		if (s.timer) {
@@ -1276,11 +1414,21 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 		if (s.qack&1)
 			printf(" bidir");
 	}
-	if (show_users) {
-		char ubuf[4096];
-		if (find_users(s.ino, ubuf, sizeof(ubuf)) > 0)
-			printf(" users:(%s)", ubuf);
+	char *buf = NULL;
+	if (show_proc_ctx || show_sock_ctx) {
+		if (find_entry(s.ino, &buf,
+				(show_proc_ctx & show_sock_ctx) ?
+				PROC_SOCK_CTX : PROC_CTX) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
+	} else if (show_users) {
+		if (find_entry(s.ino, &buf, USERS) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
 	}
+
 	if (show_details) {
 		if (s.uid)
 			printf(" uid:%u", (unsigned)s.uid);
@@ -1456,7 +1604,21 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 	}
 }
 
-static int inet_show_sock(struct nlmsghdr *nlh, struct filter *f)
+static char *proto_name(int protocol)
+{
+	switch (protocol) {
+	case IPPROTO_UDP:
+		return "udp";
+	case IPPROTO_TCP:
+		return "tcp";
+	case IPPROTO_DCCP:
+		return "dccp";
+	}
+
+	return "???";
+}
+
+static int inet_show_sock(struct nlmsghdr *nlh, struct filter *f, int protocol)
 {
 	struct rtattr * tb[INET_DIAG_MAX+1];
 	struct inet_diag_msg *r = NLMSG_DATA(nlh);
@@ -1481,14 +1643,14 @@ static int inet_show_sock(struct nlmsghdr *nlh, struct filter *f)
 		return 0;
 
 	if (netid_width)
-		printf("%-*s ", netid_width, "tcp");
+		printf("%-*s ", netid_width, proto_name(protocol));
 	if (state_width)
 		printf("%-*s ", state_width, sstate_name[s.state]);
 
 	printf("%-6d %-6d ", r->idiag_rqueue, r->idiag_wqueue);
 
-	formatted_print(&s.local, s.lport);
-	formatted_print(&s.remote, s.rport);
+	formatted_print(&s.local, s.lport, r->id.idiag_if);
+	formatted_print(&s.remote, s.rport, 0);
 
 	if (show_options) {
 		if (r->idiag_timer) {
@@ -1500,11 +1662,22 @@ static int inet_show_sock(struct nlmsghdr *nlh, struct filter *f)
 			       r->idiag_retrans);
 		}
 	}
-	if (show_users) {
-		char ubuf[4096];
-		if (find_users(r->idiag_inode, ubuf, sizeof(ubuf)) > 0)
-			printf(" users:(%s)", ubuf);
+	char *buf = NULL;
+
+	if (show_proc_ctx || show_sock_ctx) {
+		if (find_entry(r->idiag_inode, &buf,
+				(show_proc_ctx & show_sock_ctx) ?
+				PROC_SOCK_CTX : PROC_CTX) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
+	} else if (show_users) {
+		if (find_entry(r->idiag_inode, &buf, USERS) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
 	}
+
 	if (show_details) {
 		if (r->idiag_uid)
 			printf(" uid:%u", (unsigned)r->idiag_uid);
@@ -1754,7 +1927,7 @@ again:
 					h = NLMSG_NEXT(h, status);
 					continue;
 				}
-				err = inet_show_sock(h, NULL);
+				err = inet_show_sock(h, NULL, protocol);
 				if (err < 0) {
 					close(fd);
 					return err;
@@ -1833,7 +2006,7 @@ static int tcp_show_netlink_file(struct filter *f)
 			return -1;
 		}
 
-		err = inet_show_sock(h, f);
+		err = inet_show_sock(h, f, IPPROTO_TCP);
 		if (err < 0)
 			return err;
 	}
@@ -1986,13 +2159,23 @@ static int dgram_show_line(char *line, const struct filter *f, int family)
 
 	printf("%-6d %-6d ", s.rq, s.wq);
 
-	formatted_print(&s.local, s.lport);
-	formatted_print(&s.remote, s.rport);
+	formatted_print(&s.local, s.lport, 0);
+	formatted_print(&s.remote, s.rport, 0);
 
-	if (show_users) {
-		char ubuf[4096];
-		if (find_users(s.ino, ubuf, sizeof(ubuf)) > 0)
-			printf(" users:(%s)", ubuf);
+	char *buf = NULL;
+
+	if (show_proc_ctx || show_sock_ctx) {
+		if (find_entry(s.ino, &buf,
+				(show_proc_ctx & show_sock_ctx) ?
+				PROC_SOCK_CTX : PROC_CTX) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
+	} else if (show_users) {
+		if (find_entry(s.ino, &buf, USERS) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
 	}
 
 	if (show_details) {
@@ -2109,6 +2292,25 @@ static void unix_list_free(struct unixstat *list)
 	}
 }
 
+static const char *unix_netid_name(int type)
+{
+	const char *netid;
+
+	switch (type) {
+	case SOCK_STREAM:
+		netid = "u_str";
+		break;
+	case SOCK_SEQPACKET:
+		netid = "u_seq";
+		break;
+	case SOCK_DGRAM:
+	default:
+		netid = "u_dgr";
+		break;
+	}
+	return netid;
+}
+
 static void unix_list_print(struct unixstat *list, struct filter *f)
 {
 	struct unixstat *s;
@@ -2120,6 +2322,8 @@ static void unix_list_print(struct unixstat *list, struct filter *f)
 		if (s->type == SOCK_STREAM && !(f->dbs&(1<<UNIX_ST_DB)))
 			continue;
 		if (s->type == SOCK_DGRAM && !(f->dbs&(1<<UNIX_DG_DB)))
+			continue;
+		if (s->type == SOCK_SEQPACKET && !(f->dbs&(1<<UNIX_SQ_DB)))
 			continue;
 
 		peer = "*";
@@ -2151,17 +2355,27 @@ static void unix_list_print(struct unixstat *list, struct filter *f)
 
 		if (netid_width)
 			printf("%-*s ", netid_width,
-			       s->type == SOCK_STREAM ? "u_str" : "u_dgr");
+			       unix_netid_name(s->type));
 		if (state_width)
 			printf("%-*s ", state_width, sstate_name[s->state]);
 		printf("%-6d %-6d ", s->rq, s->wq);
 		printf("%*s %-*d %*s %-*d",
 		       addr_width, s->name ? : "*", serv_width, s->ino,
 		       addr_width, peer, serv_width, s->peer);
-		if (show_users) {
-			char ubuf[4096];
-			if (find_users(s->ino, ubuf, sizeof(ubuf)) > 0)
-				printf(" users:(%s)", ubuf);
+		char *buf = NULL;
+
+		if (show_proc_ctx || show_sock_ctx) {
+			if (find_entry(s->ino, &buf,
+					(show_proc_ctx & show_sock_ctx) ?
+					PROC_SOCK_CTX : PROC_CTX) > 0) {
+				printf(" users:(%s)", buf);
+				free(buf);
+			}
+		} else if (show_users) {
+			if (find_entry(s->ino, &buf, USERS) > 0) {
+				printf(" users:(%s)", buf);
+				free(buf);
+			}
 		}
 		printf("\n");
 	}
@@ -2178,9 +2392,16 @@ static int unix_show_sock(struct nlmsghdr *nlh, struct filter *f)
 	parse_rtattr(tb, UNIX_DIAG_MAX, (struct rtattr*)(r+1),
 		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
 
+	if (r->udiag_type == SOCK_STREAM && !(f->dbs&(1<<UNIX_ST_DB)))
+		return 0;
+	if (r->udiag_type == SOCK_DGRAM && !(f->dbs&(1<<UNIX_DG_DB)))
+		return 0;
+	if (r->udiag_type == SOCK_SEQPACKET && !(f->dbs&(1<<UNIX_SQ_DB)))
+		return 0;
+
 	if (netid_width)
 		printf("%-*s ", netid_width,
-				r->udiag_type == SOCK_STREAM ? "u_str" : "u_dgr");
+		       unix_netid_name(r->udiag_type));
 	if (state_width)
 		printf("%-*s ", state_width, sstate_name[r->udiag_state]);
 
@@ -2216,10 +2437,20 @@ static int unix_show_sock(struct nlmsghdr *nlh, struct filter *f)
 			addr_width, "*", /* FIXME */
 			serv_width, peer_ino);
 
-	if (show_users) {
-		char ubuf[4096];
-		if (find_users(r->udiag_ino, ubuf, sizeof(ubuf)) > 0)
-			printf(" users:(%s)", ubuf);
+	char *buf = NULL;
+
+	if (show_proc_ctx || show_sock_ctx) {
+		if (find_entry(r->udiag_ino, &buf,
+				(show_proc_ctx & show_sock_ctx) ?
+				PROC_SOCK_CTX : PROC_CTX) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
+	} else if (show_users) {
+		if (find_entry(r->udiag_ino, &buf, USERS) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
 	}
 
 	if (show_mem) {
@@ -2477,11 +2708,22 @@ static int packet_show_sock(struct nlmsghdr *nlh, struct filter *f)
 	printf("%*s*%-*s",
 	       addr_width, "", serv_width, "");
 
-	if (show_users) {
-		char ubuf[4096];
-		if (find_users(r->pdiag_ino, ubuf, sizeof(ubuf)) > 0)
-			printf(" users:(%s)", ubuf);
+	char *buf = NULL;
+
+	if (show_proc_ctx || show_sock_ctx) {
+		if (find_entry(r->pdiag_ino, &buf,
+				(show_proc_ctx & show_sock_ctx) ?
+				PROC_SOCK_CTX : PROC_CTX) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
+	} else if (show_users) {
+		if (find_entry(r->pdiag_ino, &buf, USERS) > 0) {
+			printf(" users:(%s)", buf);
+			free(buf);
+		}
 	}
+
 	if (show_details) {
 		__u32 uid = 0;
 
@@ -2672,11 +2914,22 @@ static int packet_show(struct filter *f)
 		printf("%*s*%-*s",
 		       addr_width, "", serv_width, "");
 
-		if (show_users) {
-			char ubuf[4096];
-			if (find_users(ino, ubuf, sizeof(ubuf)) > 0)
-				printf(" users:(%s)", ubuf);
+		char *buf = NULL;
+
+		if (show_proc_ctx || show_sock_ctx) {
+			if (find_entry(ino, &buf,
+					(show_proc_ctx & show_sock_ctx) ?
+					PROC_SOCK_CTX : PROC_CTX) > 0) {
+				printf(" users:(%s)", buf);
+				free(buf);
+			}
+		} else if (show_users) {
+			if (find_entry(ino, &buf, USERS) > 0) {
+				printf(" users:(%s)", buf);
+				free(buf);
+			}
 		}
+
 		if (show_details) {
 			printf(" ino=%u uid=%u sk=%llx", ino, uid, sk);
 		}
@@ -2750,6 +3003,27 @@ static void netlink_show_one(struct filter *f,
 	} else {
 		printf("%*s*%-*s",
 		       addr_width, "", serv_width, "");
+	}
+
+	char *pid_context = NULL;
+	if (show_proc_ctx) {
+		/* The pid value will either be:
+		 *   0 if destination kernel - show kernel initial context.
+		 *   A valid process pid - use getpidcon.
+		 *   A unique value allocated by the kernel or netlink user
+		 *   to the process - show context as "not available".
+		 */
+		if (!pid)
+			security_get_initial_context("kernel", &pid_context);
+		else if (pid > 0)
+			getpidcon(pid, &pid_context);
+
+		if (pid_context != NULL) {
+			printf("proc_ctx=%-*s ", serv_width, pid_context);
+			free(pid_context);
+		} else {
+			printf("proc_ctx=%-*s ", serv_width, "unavailable");
+		}
 	}
 
 	if (show_details) {
@@ -3026,6 +3300,8 @@ static void _usage(FILE *dest)
 "   -i, --info		show internal TCP information\n"
 "   -s, --summary	show socket usage summary\n"
 "   -b, --bpf           show bpf filter socket information\n"
+"   -Z, --context	display process SELinux security contexts\n"
+"   -z, --contexts	display process and socket SELinux security contexts\n"
 "\n"
 "   -4, --ipv4          display only IP version 4 sockets\n"
 "   -6, --ipv6          display only IP version 6 sockets\n"
@@ -3038,7 +3314,7 @@ static void _usage(FILE *dest)
 "   -f, --family=FAMILY display sockets of type FAMILY\n"
 "\n"
 "   -A, --query=QUERY, --socket=QUERY\n"
-"       QUERY := {all|inet|tcp|udp|raw|unix|packet|netlink}[,QUERY]\n"
+"       QUERY := {all|inet|tcp|udp|raw|unix|unix_dgram|unix_stream|unix_seqpacket|packet|netlink}[,QUERY]\n"
 "\n"
 "   -D, --diag=FILE     Dump raw information about TCP sockets to FILE\n"
 "   -F, --filter=FILE   read filter information from FILE\n"
@@ -3115,6 +3391,8 @@ static const struct option long_opts[] = {
 	{ "filter", 1, 0, 'F' },
 	{ "version", 0, 0, 'V' },
 	{ "help", 0, 0, 'h' },
+	{ "context", 0, 0, 'Z' },
+	{ "contexts", 0, 0, 'z' },
 	{ 0 }
 
 };
@@ -3133,7 +3411,7 @@ int main(int argc, char *argv[])
 
 	current_filter.states = default_filter.states;
 
-	while ((ch = getopt_long(argc, argv, "dhaletuwxnro460spbf:miA:D:F:vV",
+	while ((ch = getopt_long(argc, argv, "dhaletuwxnro460spbf:miA:D:F:vVzZ",
 				 long_opts, NULL)) != EOF) {
 		switch(ch) {
 		case 'n':
@@ -3248,6 +3526,9 @@ int main(int argc, char *argv[])
 				} else if (strcasecmp(p, "unix_dgram") == 0 ||
 					   strcmp(p, "u_dgr") == 0) {
 					current_filter.dbs |= (1<<UNIX_DG_DB);
+				} else if (strcasecmp(p, "unix_seqpacket") == 0 ||
+					   strcmp(p, "u_seq") == 0) {
+					current_filter.dbs |= (1<<UNIX_SQ_DB);
 				} else if (strcmp(p, "packet") == 0) {
 					current_filter.dbs |= PACKET_DBM;
 				} else if (strcmp(p, "packet_raw") == 0 ||
@@ -3290,6 +3571,16 @@ int main(int argc, char *argv[])
 		case 'V':
 			printf("ss utility, iproute2-ss%s\n", SNAPSHOT);
 			exit(0);
+		case 'z':
+			show_sock_ctx++;
+		case 'Z':
+			if (is_selinux_enabled() <= 0) {
+				fprintf(stderr, "ss: SELinux is not enabled.\n");
+				exit(1);
+			}
+			show_proc_ctx++;
+			user_ent_hash_build();
+			break;
 		case 'h':
 		case '?':
 			help();
@@ -3477,5 +3768,9 @@ int main(int argc, char *argv[])
 		tcp_show(&current_filter, IPPROTO_TCP);
 	if (current_filter.dbs & (1<<DCCP_DB))
 		tcp_show(&current_filter, IPPROTO_DCCP);
+
+	if (show_users || show_proc_ctx || show_sock_ctx)
+		user_ent_destroy();
+
 	return 0;
 }

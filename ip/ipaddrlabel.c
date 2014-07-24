@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses>.
  *
  *
  * Based on iprule.c.
@@ -86,10 +85,10 @@ int print_addrlabel(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg
 	if (ifal->ifal_index)
 		fprintf(fp, "dev %s ", ll_index_to_name(ifal->ifal_index));
 
-	if (tb[IFAL_LABEL] && RTA_PAYLOAD(tb[IFAL_LABEL]) == sizeof(int32_t)) {
-		int32_t label;
+	if (tb[IFAL_LABEL] && RTA_PAYLOAD(tb[IFAL_LABEL]) == sizeof(uint32_t)) {
+		uint32_t label;
 		memcpy(&label, RTA_DATA(tb[IFAL_LABEL]), sizeof(label));
-		fprintf(fp, "label %d ", label);
+		fprintf(fp, "label %u ", label);
 	}
 
 	fprintf(fp, "\n");
@@ -126,15 +125,15 @@ static int ipaddrlabel_list(int argc, char **argv)
 static int ipaddrlabel_modify(int cmd, int argc, char **argv)
 {
 	struct {
-		struct nlmsghdr 	n;
+		struct nlmsghdr	n;
 		struct ifaddrlblmsg	ifal;
-		char   			buf[1024];
+		char  			buf[1024];
 	} req;
 
 	inet_prefix prefix;
 	uint32_t label = 0xffffffffUL;
 	char *p = NULL;
-	char *l = NULL;        
+	char *l = NULL;
 
 	memset(&req, 0, sizeof(req));
 	memset(&prefix, 0, sizeof(prefix));

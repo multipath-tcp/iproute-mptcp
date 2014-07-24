@@ -74,7 +74,8 @@ static struct
 	int flushp;
 	int flushe;
 	int cmd;
-	inet_prefix addr;
+	inet_prefix daddr;
+	inet_prefix saddr;
 } f;
 
 static int flush_update(void)
@@ -95,8 +96,8 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 	struct rtattr *attrs[TCP_METRICS_ATTR_MAX + 1], *a;
 	int len = n->nlmsg_len;
 	char abuf[256];
-	inet_prefix addr;
-	int family, i, atype;
+	inet_prefix daddr, saddr;
+	int family, i, atype, stype, dlen = 0, slen = 0;
 
 	if (n->nlmsg_type != genl_family)
 		return -1;
@@ -114,35 +115,66 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 
 	a = attrs[TCP_METRICS_ATTR_ADDR_IPV4];
 	if (a) {
-		if (f.addr.family && f.addr.family != AF_INET)
+		if (f.daddr.family && f.daddr.family != AF_INET)
 			return 0;
-		memcpy(&addr.data, RTA_DATA(a), 4);
-		addr.bytelen = 4;
+		memcpy(&daddr.data, RTA_DATA(a), 4);
+		daddr.bytelen = 4;
 		family = AF_INET;
 		atype = TCP_METRICS_ATTR_ADDR_IPV4;
+		dlen = RTA_PAYLOAD(a);
 	} else {
 		a = attrs[TCP_METRICS_ATTR_ADDR_IPV6];
 		if (a) {
-			if (f.addr.family && f.addr.family != AF_INET6)
+			if (f.daddr.family && f.daddr.family != AF_INET6)
 				return 0;
-			memcpy(&addr.data, RTA_DATA(a), 16);
-			addr.bytelen = 16;
+			memcpy(&daddr.data, RTA_DATA(a), 16);
+			daddr.bytelen = 16;
 			family = AF_INET6;
 			atype = TCP_METRICS_ATTR_ADDR_IPV6;
+			dlen = RTA_PAYLOAD(a);
 		} else
 			return 0;
 	}
 
-	if (f.addr.family && f.addr.bitlen >= 0 &&
-	    inet_addr_match(&addr, &f.addr, f.addr.bitlen))
+	a = attrs[TCP_METRICS_ATTR_SADDR_IPV4];
+	if (a) {
+		if (f.saddr.family && f.saddr.family != AF_INET)
+			return 0;
+		memcpy(&saddr.data, RTA_DATA(a), 4);
+		saddr.bytelen = 4;
+		stype = TCP_METRICS_ATTR_SADDR_IPV4;
+		slen = RTA_PAYLOAD(a);
+	} else {
+		a = attrs[TCP_METRICS_ATTR_SADDR_IPV6];
+		if (a) {
+			if (f.saddr.family && f.saddr.family != AF_INET6)
+				return 0;
+			memcpy(&saddr.data, RTA_DATA(a), 16);
+			saddr.bytelen = 16;
+			stype = TCP_METRICS_ATTR_SADDR_IPV6;
+			slen = RTA_PAYLOAD(a);
+		}
+	}
+
+	if (f.daddr.family && f.daddr.bitlen >= 0 &&
+	    inet_addr_match(&daddr, &f.daddr, f.daddr.bitlen))
+	       return 0;
+	/* Only check for the source-address if the kernel supports it,
+	 * meaning slen != 0.
+	 */
+	if (slen && f.saddr.family && f.saddr.bitlen >= 0 &&
+	    inet_addr_match(&saddr, &f.saddr, f.saddr.bitlen))
 		return 0;
 
 	if (f.flushb) {
 		struct nlmsghdr *fn;
 		TCPM_REQUEST(req2, 128, TCP_METRICS_CMD_DEL, NLM_F_REQUEST);
 
-		addattr_l(&req2.n, sizeof(req2), atype, &addr.data,
-			  addr.bytelen);
+		addattr_l(&req2.n, sizeof(req2), atype, &daddr.data,
+			  daddr.bytelen);
+		if (slen)
+			addattr_l(&req2.n, sizeof(req2), stype, &saddr.data,
+				  saddr.bytelen);
 
 		if (NLMSG_ALIGN(f.flushp) + req2.n.nlmsg_len > f.flushe) {
 			if (flush_update())
@@ -161,8 +193,7 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 		fprintf(fp, "Deleted ");
 
 	fprintf(fp, "%s",
-		format_host(family, RTA_PAYLOAD(a), &addr.data,
-			    abuf, sizeof(abuf)));
+		format_host(family, dlen, &daddr.data, abuf, sizeof(abuf)));
 
 	a = attrs[TCP_METRICS_ATTR_AGE];
 	if (a) {
@@ -247,6 +278,12 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 		fprintf(fp, " fo_cookie %s", cookie);
 	}
 
+	if (slen) {
+		fprintf(fp, " source %s",
+			format_host(family, slen, &saddr.data, abuf,
+				    sizeof(abuf)));
+	}
+
 	fprintf(fp, "\n");
 
 	fflush(fp);
@@ -256,12 +293,14 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 static int tcpm_do_cmd(int cmd, int argc, char **argv)
 {
 	TCPM_REQUEST(req, 1024, TCP_METRICS_CMD_GET, NLM_F_REQUEST);
-	int atype = -1;
+	int atype = -1, stype = -1;
 	int ack;
 
 	memset(&f, 0, sizeof(f));
-	f.addr.bitlen = -1;
-	f.addr.family = preferred_family;
+	f.daddr.bitlen = -1;
+	f.daddr.family = preferred_family;
+	f.saddr.bitlen = -1;
+	f.saddr.family = preferred_family;
 
 	switch (preferred_family) {
 	case AF_UNSPEC:
@@ -274,31 +313,53 @@ static int tcpm_do_cmd(int cmd, int argc, char **argv)
 	}
 
 	for (; argc > 0; argc--, argv++) {
-		char *who = "address";
-
-		if (strcmp(*argv, "addr") == 0 ||
-		    strcmp(*argv, "address") == 0) {
-			who = *argv;
+		if (strcmp(*argv, "src") == 0 ||
+		    strcmp(*argv, "source") == 0) {
+			char *who = *argv;
 			NEXT_ARG();
-		}
-		if (matches(*argv, "help") == 0)
-			usage();
-		if (f.addr.bitlen >= 0)
-			duparg2(who, *argv);
+			if (matches(*argv, "help") == 0)
+				usage();
+			if (f.saddr.bitlen >= 0)
+				duparg2(who, *argv);
 
-		get_prefix(&f.addr, *argv, preferred_family);
-		if (f.addr.bytelen && f.addr.bytelen * 8 == f.addr.bitlen) {
-			if (f.addr.family == AF_INET)
-				atype = TCP_METRICS_ATTR_ADDR_IPV4;
-			else if (f.addr.family == AF_INET6)
-				atype = TCP_METRICS_ATTR_ADDR_IPV6;
-		}
-		if ((CMD_DEL & cmd) && atype < 0) {
-			fprintf(stderr, "Error: a specific IP address is expected rather than \"%s\"\n",
-				*argv);
-			return -1;
-		}
+			get_prefix(&f.saddr, *argv, preferred_family);
+			if (f.saddr.bytelen && f.saddr.bytelen * 8 == f.saddr.bitlen) {
+				if (f.saddr.family == AF_INET)
+					stype = TCP_METRICS_ATTR_SADDR_IPV4;
+				else if (f.saddr.family == AF_INET6)
+					stype = TCP_METRICS_ATTR_SADDR_IPV6;
+			}
 
+			if (stype < 0) {
+				fprintf(stderr, "Error: a specific IP address is expected rather than \"%s\"\n",
+					*argv);
+				return -1;
+			}
+		} else {
+			char *who = "address";
+			if (strcmp(*argv, "addr") == 0 ||
+			    strcmp(*argv, "address") == 0) {
+				who = *argv;
+				NEXT_ARG();
+			}
+			if (matches(*argv, "help") == 0)
+				usage();
+			if (f.daddr.bitlen >= 0)
+				duparg2(who, *argv);
+
+			get_prefix(&f.daddr, *argv, preferred_family);
+			if (f.daddr.bytelen && f.daddr.bytelen * 8 == f.daddr.bitlen) {
+				if (f.daddr.family == AF_INET)
+					atype = TCP_METRICS_ATTR_ADDR_IPV4;
+				else if (f.daddr.family == AF_INET6)
+					atype = TCP_METRICS_ATTR_ADDR_IPV6;
+			}
+			if ((CMD_DEL & cmd) && atype < 0) {
+				fprintf(stderr, "Error: a specific IP address is expected rather than \"%s\"\n",
+					*argv);
+				return -1;
+			}
+		}
 		argc--; argv++;
 	}
 
@@ -310,8 +371,8 @@ static int tcpm_do_cmd(int cmd, int argc, char **argv)
 		cmd = CMD_DEL;
 
 	/* flush for all addresses ? Single del without address */
-	if (cmd == CMD_FLUSH && f.addr.bitlen <= 0 &&
-	    preferred_family == AF_UNSPEC) {
+	if (cmd == CMD_FLUSH && f.daddr.bitlen <= 0 &&
+	    f.saddr.bitlen <= 0 && preferred_family == AF_UNSPEC) {
 		cmd = CMD_DEL;
 		req.g.cmd = TCP_METRICS_CMD_DEL;
 		ack = 1;
@@ -338,8 +399,11 @@ static int tcpm_do_cmd(int cmd, int argc, char **argv)
 		if (ack)
 			req.n.nlmsg_flags |= NLM_F_ACK;
 		if (atype >= 0)
-			addattr_l(&req.n, sizeof(req), atype, &f.addr.data,
-				  f.addr.bytelen);
+			addattr_l(&req.n, sizeof(req), atype, &f.daddr.data,
+				  f.daddr.bytelen);
+		if (stype >= 0)
+			addattr_l(&req.n, sizeof(req), stype, &f.saddr.data,
+				  f.saddr.bytelen);
 	} else {
 		req.n.nlmsg_flags |= NLM_F_DUMP;
 	}

@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses>.
  */
 /*
  * based on ip.c, iproute.c
@@ -358,7 +357,7 @@ void xfrm_stats_print(struct xfrm_stats *s, FILE *fp, const char *prefix)
 
 	if (prefix)
 		fputs(prefix, fp);
-	fprintf(fp, "  replay-window %u replay %u failed %u%s", 
+	fprintf(fp, "  replay-window %u replay %u failed %u%s",
 		s->replay_window, s->replay, s->integrity_failed, _SL_);
 }
 
@@ -409,7 +408,7 @@ void xfrm_lifetime_print(struct xfrm_lifetime_cfg *cfg,
 
 		if (prefix)
 			fputs(prefix, fp);
-		fprintf(fp, "  expire add: soft %llu(sec), hard %llu(sec)%s", 
+		fprintf(fp, "  expire add: soft %llu(sec), hard %llu(sec)%s",
 			(unsigned long long) cfg->soft_add_expires_seconds,
 			(unsigned long long) cfg->hard_add_expires_seconds,
 			_SL_);

@@ -22,6 +22,7 @@ TCMODULES += f_u32.o
 TCMODULES += f_route.o
 TCMODULES += f_fw.o
 TCMODULES += f_basic.o
+TCMODULES += f_bpf.o
 TCMODULES += f_flow.o
 TCMODULES += f_cgroup.o
 TCMODULES += q_dsmark.o
@@ -52,6 +53,7 @@ TCMODULES += q_mqprio.o
 TCMODULES += q_codel.o
 TCMODULES += q_fq_codel.o
 TCMODULES += q_fq.o
+TCMODULES += q_pie.o
 
 ifeq ($(TC_CONFIG_IPSET), y)
   ifeq ($(TC_CONFIG_XT), y)

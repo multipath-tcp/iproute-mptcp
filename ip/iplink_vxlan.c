@@ -25,8 +25,8 @@ static void explain(void)
 {
 	fprintf(stderr, "Usage: ... vxlan id VNI [ { group | remote } ADDR ] [ local ADDR ]\n");
 	fprintf(stderr, "                 [ ttl TTL ] [ tos TOS ] [ dev PHYS_DEV ]\n");
-	fprintf(stderr, "                 [ port MIN MAX ] [ [no]learning ]\n");
-	fprintf(stderr, "                 [ [no]proxy ] [ [no]rsc ]\n");
+	fprintf(stderr, "                 [ dstport PORT ] [ srcport MIN MAX ]\n");
+	fprintf(stderr, "                 [ [no]learning ] [ [no]proxy ] [ [no]rsc ]\n");
 	fprintf(stderr, "                 [ [no]l2miss ] [ [no]l3miss ]\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Where: VNI := 0-16777215\n");
@@ -43,6 +43,9 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u32 saddr = 0;
 	__u32 gaddr = 0;
 	__u32 daddr = 0;
+	struct in6_addr saddr6 = IN6ADDR_ANY_INIT;
+	struct in6_addr gaddr6 = IN6ADDR_ANY_INIT;
+	struct in6_addr daddr6 = IN6ADDR_ANY_INIT;
 	unsigned link = 0;
 	__u8 tos = 0;
 	__u8 ttl = 0;
@@ -54,6 +57,8 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u8 noage = 0;
 	__u32 age = 0;
 	__u32 maxaddr = 0;
+	__u16 dstport = 0;
+	int dst_port_set = 0;
 	struct ifla_vxlan_port_range range = { 0, 0 };
 
 	while (argc > 0) {
@@ -66,21 +71,30 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			vni_set = 1;
 		} else if (!matches(*argv, "group")) {
 			NEXT_ARG();
-			gaddr = get_addr32(*argv);
-
-			if (!IN_MULTICAST(ntohl(gaddr)))
+			if (!inet_get_addr(*argv, &gaddr, &gaddr6)) {
+				fprintf(stderr, "Invalid address \"%s\"\n", *argv);
+				return -1;
+			}
+			if (!IN6_IS_ADDR_MULTICAST(&gaddr6) && !IN_MULTICAST(ntohl(gaddr)))
 				invarg("invalid group address", *argv);
 		} else if (!matches(*argv, "remote")) {
 			NEXT_ARG();
-			daddr = get_addr32(*argv);
-
-			if (IN_MULTICAST(ntohl(daddr)))
+			if (!inet_get_addr(*argv, &daddr, &daddr6)) {
+				fprintf(stderr, "Invalid address \"%s\"\n", *argv);
+				return -1;
+			}
+			if (IN6_IS_ADDR_MULTICAST(&daddr6) || IN_MULTICAST(ntohl(daddr)))
 				invarg("invalid remote address", *argv);
 		} else if (!matches(*argv, "local")) {
 			NEXT_ARG();
-			if (strcmp(*argv, "any"))
-				saddr = get_addr32(*argv);
-			if (IN_MULTICAST(ntohl(saddr)))
+			if (strcmp(*argv, "any")) {
+				if (!inet_get_addr(*argv, &saddr, &saddr6)) {
+					fprintf(stderr, "Invalid address \"%s\"\n", *argv);
+					return -1;
+				}
+			}
+
+			if (IN_MULTICAST(ntohl(saddr)) || IN6_IS_ADDR_MULTICAST(&saddr6))
 				invarg("invalid local address", *argv);
 		} else if (!matches(*argv, "dev")) {
 			NEXT_ARG();
@@ -122,7 +136,8 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 				maxaddr = 0;
 			else if (get_u32(&maxaddr, *argv, 0))
 				invarg("max addresses", *argv);
-		} else if (!matches(*argv, "port")) {
+		} else if (!matches(*argv, "port") ||
+			   !matches(*argv, "srcport")) {
 			__u16 minport, maxport;
 			NEXT_ARG();
 			if (get_u16(&minport, *argv, 0))
@@ -132,6 +147,11 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 				invarg("max port", *argv);
 			range.low = htons(minport);
 			range.high = htons(maxport);
+		} else if (!matches(*argv, "dstport")){
+			NEXT_ARG();
+			if (get_u16(&dstport, *argv, 0))
+				invarg("dst port", *argv);
+			dst_port_set = 1;
 		} else if (!matches(*argv, "nolearning")) {
 			learning = 0;
 		} else if (!matches(*argv, "learning")) {
@@ -167,17 +187,37 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 		fprintf(stderr, "vxlan: missing virtual network identifier\n");
 		return -1;
 	}
-	if (gaddr && daddr) {
+
+	if ((gaddr && daddr) ||
+		(memcmp(&gaddr6, &in6addr_any, sizeof(gaddr6)) &&
+		 memcmp(&daddr6, &in6addr_any, sizeof(daddr6)))) {
 		fprintf(stderr, "vxlan: both group and remote cannot be specified\n");
 		return -1;
 	}
+
+	if (!dst_port_set) {
+		fprintf(stderr, "vxlan: destination port not specified\n"
+			"Will use Linux kernel default (non-standard value)\n");
+		fprintf(stderr,
+			"Use 'dstport 4789' to get the IANA assigned value\n"
+			"Use 'dstport 0' to get default and quiet this message\n");
+	}
+
 	addattr32(n, 1024, IFLA_VXLAN_ID, vni);
 	if (gaddr)
 		addattr_l(n, 1024, IFLA_VXLAN_GROUP, &gaddr, 4);
 	else if (daddr)
 		addattr_l(n, 1024, IFLA_VXLAN_GROUP, &daddr, 4);
+	if (memcmp(&gaddr6, &in6addr_any, sizeof(gaddr6)) != 0)
+		addattr_l(n, 1024, IFLA_VXLAN_GROUP6, &gaddr6, sizeof(struct in6_addr));
+	else if (memcmp(&daddr6, &in6addr_any, sizeof(daddr6)) != 0)
+		addattr_l(n, 1024, IFLA_VXLAN_GROUP6, &daddr6, sizeof(struct in6_addr));
+
 	if (saddr)
 		addattr_l(n, 1024, IFLA_VXLAN_LOCAL, &saddr, 4);
+	else if (memcmp(&saddr6, &in6addr_any, sizeof(saddr6)) != 0)
+		addattr_l(n, 1024, IFLA_VXLAN_LOCAL6, &saddr6, sizeof(struct in6_addr));
+
 	if (link)
 		addattr32(n, 1024, IFLA_VXLAN_LINK, link);
 	addattr8(n, 1024, IFLA_VXLAN_TTL, ttl);
@@ -187,6 +227,7 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 	addattr8(n, 1024, IFLA_VXLAN_RSC, rsc);
 	addattr8(n, 1024, IFLA_VXLAN_L2MISS, l2miss);
 	addattr8(n, 1024, IFLA_VXLAN_L3MISS, l3miss);
+
 	if (noage)
 		addattr32(n, 1024, IFLA_VXLAN_AGEING, 0);
 	else if (age)
@@ -196,6 +237,8 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 	if (range.low || range.high)
 		addattr_l(n, 1024, IFLA_VXLAN_PORT_RANGE,
 			  &range, sizeof(range));
+	if (dstport)
+		addattr16(n, 1024, IFLA_VXLAN_PORT, htons(dstport));
 
 	return 0;
 }
@@ -229,6 +272,17 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 				fprintf(f, "remote %s ",
 					format_host(AF_INET, 4, &addr, s1, sizeof(s1)));
 		}
+	} else if (tb[IFLA_VXLAN_GROUP6]) {
+		struct in6_addr addr;
+		memcpy(&addr, RTA_DATA(tb[IFLA_VXLAN_GROUP6]), sizeof(struct in6_addr));
+		if (memcmp(&addr, &in6addr_any, sizeof(addr)) != 0) {
+			if (IN6_IS_ADDR_MULTICAST(&addr))
+				fprintf(f, "group %s ",
+					format_host(AF_INET6, sizeof(struct in6_addr), &addr, s1, sizeof(s1)));
+			else
+				fprintf(f, "remote %s ",
+					format_host(AF_INET6, sizeof(struct in6_addr), &addr, s1, sizeof(s1)));
+		}
 	}
 
 	if (tb[IFLA_VXLAN_LOCAL]) {
@@ -236,6 +290,12 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		if (addr)
 			fprintf(f, "local %s ",
 				format_host(AF_INET, 4, &addr, s1, sizeof(s1)));
+	} else if (tb[IFLA_VXLAN_LOCAL6]) {
+		struct in6_addr addr;
+		memcpy(&addr, RTA_DATA(tb[IFLA_VXLAN_LOCAL6]), sizeof(struct in6_addr));
+		if (memcmp(&addr, &in6addr_any, sizeof(addr)) != 0)
+			fprintf(f, "local %s ",
+				format_host(AF_INET6, sizeof(struct in6_addr), &addr, s1, sizeof(s1)));
 	}
 
 	if (tb[IFLA_VXLAN_LINK] &&
@@ -251,8 +311,12 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 	if (tb[IFLA_VXLAN_PORT_RANGE]) {
 		const struct ifla_vxlan_port_range *r
 			= RTA_DATA(tb[IFLA_VXLAN_PORT_RANGE]);
-		fprintf(f, "port %u %u ", ntohs(r->low), ntohs(r->high));
+		fprintf(f, "srcport %u %u ", ntohs(r->low), ntohs(r->high));
 	}
+
+	if (tb[IFLA_VXLAN_PORT])
+		fprintf(f, "dstport %u ",
+			ntohs(rta_getattr_u16(tb[IFLA_VXLAN_PORT])));
 
 	if (tb[IFLA_VXLAN_LEARNING] &&
 	    !rta_getattr_u8(tb[IFLA_VXLAN_LEARNING]))

@@ -27,6 +27,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <linux/sockios.h>
+#include <stdbool.h>
 
 #include "rt_names.h"
 #include "utils.h"
@@ -47,7 +48,7 @@ void iplink_usage(void)
 		fprintf(stderr, "                   [ txqueuelen PACKETS ]\n");
 		fprintf(stderr, "                   [ address LLADDR ]\n");
 		fprintf(stderr, "                   [ broadcast LLADDR ]\n");
-		fprintf(stderr, "                   [ mtu MTU ]\n");
+		fprintf(stderr, "                   [ mtu MTU ] [index IDX ]\n");
 		fprintf(stderr, "                   [ numtxqueues QUEUE_COUNT ]\n");
 		fprintf(stderr, "                   [ numrxqueues QUEUE_COUNT ]\n");
 		fprintf(stderr, "                   type TYPE [ ARGS ]\n");
@@ -86,8 +87,8 @@ void iplink_usage(void)
 	if (iplink_have_newlink()) {
 		fprintf(stderr, "\n");
 		fprintf(stderr, "TYPE := { vlan | veth | vcan | dummy | ifb | macvlan | macvtap |\n");
-		fprintf(stderr, "          can | bridge | ipoib | ip6tnl | ipip | sit | vxlan |\n");
-		fprintf(stderr, "          gre | gretap | ip6gre | ip6gretap | vti }\n");
+		fprintf(stderr, "          can | bridge | bond | ipoib | ip6tnl | ipip | sit |\n");
+		fprintf(stderr, "          vxlan | gre | gretap | ip6gre | ip6gretap | vti }\n");
 	}
 	exit(-1);
 }
@@ -106,14 +107,15 @@ static int on_off(const char *msg, const char *realval)
 static void *BODY;		/* cached dlopen(NULL) handle */
 static struct link_util *linkutil_list;
 
-struct link_util *get_link_kind(const char *id)
+static struct link_util *__get_link_kind(const char *id, bool slave)
 {
 	void *dlh;
 	char buf[256];
 	struct link_util *l;
 
 	for (l = linkutil_list; l; l = l->next)
-		if (strcmp(l->id, id) == 0)
+		if (strcmp(l->id, id) == 0 &&
+		    l->slave == slave)
 			return l;
 
 	snprintf(buf, sizeof(buf), LIBDIR "/ip/link_%s.so", id);
@@ -128,7 +130,10 @@ struct link_util *get_link_kind(const char *id)
 		}
 	}
 
-	snprintf(buf, sizeof(buf), "%s_link_util", id);
+	if (slave)
+		snprintf(buf, sizeof(buf), "%s_slave_link_util", id);
+	else
+		snprintf(buf, sizeof(buf), "%s_link_util", id);
 	l = dlsym(dlh, buf);
 	if (l == NULL)
 		return NULL;
@@ -136,6 +141,16 @@ struct link_util *get_link_kind(const char *id)
 	l->next = linkutil_list;
 	linkutil_list = l;
 	return l;
+}
+
+struct link_util *get_link_kind(const char *id)
+{
+	return __get_link_kind(id, false);
+}
+
+struct link_util *get_link_slave_kind(const char *id)
+{
+	return __get_link_kind(id, true);
 }
 
 static int get_link_mode(const char *mode)
@@ -179,7 +194,10 @@ static int iplink_have_newlink(void)
 		req.n.nlmsg_type = RTM_NEWLINK;
 		req.i.ifi_family = AF_UNSPEC;
 
-		rtnl_send(&rth, &req.n, req.n.nlmsg_len);
+		if (rtnl_send(&rth, &req.n, req.n.nlmsg_len) < 0) {
+			perror("request send failed");
+			exit(1);
+		}
 		rtnl_listen(&rth, accept_msg, NULL);
 	}
 	return have_rtnl_newlink;
@@ -289,7 +307,7 @@ static int iplink_parse_vf(int vf, int *argcp, char ***argvp,
 }
 
 int iplink_parse(int argc, char **argv, struct iplink_req *req,
-		char **name, char **type, char **link, char **dev, int *group)
+		char **name, char **type, char **link, char **dev, int *group, int *index)
 {
 	int ret, len;
 	char abuf[32];
@@ -313,6 +331,9 @@ int iplink_parse(int argc, char **argv, struct iplink_req *req,
 		} else if (strcmp(*argv, "name") == 0) {
 			NEXT_ARG();
 			*name = *argv;
+		} else if (strcmp(*argv, "index") == 0) {
+			NEXT_ARG();
+			*index = atoi(*argv);
 		} else if (matches(*argv, "link") == 0) {
 			NEXT_ARG();
 			*link = *argv;
@@ -515,6 +536,7 @@ static int iplink_modify(int cmd, unsigned int flags, int argc, char **argv)
 	char *name = NULL;
 	char *link = NULL;
 	char *type = NULL;
+	int index = 0;
 	int group;
 	struct link_util *lu = NULL;
 	struct iplink_req req;
@@ -527,7 +549,7 @@ static int iplink_modify(int cmd, unsigned int flags, int argc, char **argv)
 	req.n.nlmsg_type = cmd;
 	req.i.ifi_family = preferred_family;
 
-	ret = iplink_parse(argc, argv, &req, &name, &type, &link, &dev, &group);
+	ret = iplink_parse(argc, argv, &req, &name, &type, &link, &dev, &group, &index);
 	if (ret < 0)
 		return ret;
 
@@ -587,6 +609,8 @@ static int iplink_modify(int cmd, unsigned int flags, int argc, char **argv)
 			}
 			addattr_l(&req.n, sizeof(req), IFLA_LINK, &ifindex, 4);
 		}
+
+		req.i.ifi_index = index;
 	}
 
 	if (name) {

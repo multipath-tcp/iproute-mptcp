@@ -39,6 +39,8 @@ ip-link \- network device configuration
 .br
 .RB "[ " mtu
 .IR MTU " ]"
+.RB "[ " index
+.IR IDX " ]"
 .br
 .RB "[ " numtxqueues
 .IR QUEUE_COUNT " ]"
@@ -51,8 +53,10 @@ ip-link \- network device configuration
 .ti -8
 .IR TYPE " := [ "
 .BR bridge " | "
+.BR bond " ]"
 .BR can " | "
 .BR dummy " | "
+.BR hsr " | "
 .BR ifb " | "
 .BR ipoib " |"
 .BR macvlan  " | "
@@ -157,6 +161,9 @@ Link types:
 .B bridge
 - Ethernet Bridge device
 .sp
+.B bond
+- Bonding device
+.sp
 .B can
 - Controller Area Network interface
 .sp
@@ -213,6 +220,10 @@ specifies the number of transmit queues for new device.
 .TP
 .BI numrxqueues " QUEUE_COUNT "
 specifies the number of receive queues for new device.
+
+.TP
+.BI index " IDX "
+specifies the desired index of the new virtual device. The link creation fails, if the index is busy.
 
 .TP
 VXLAN Type Support

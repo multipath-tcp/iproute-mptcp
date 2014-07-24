@@ -69,7 +69,7 @@ static void usage(void)
 	}
 	fprintf(stderr, "Usage: ip addr {add|change|replace} IFADDR dev STRING [ LIFETIME ]\n");
 	fprintf(stderr, "                                                      [ CONFFLAG-LIST ]\n");
-	fprintf(stderr, "       ip addr del IFADDR dev STRING\n");
+	fprintf(stderr, "       ip addr del IFADDR dev STRING [mngtmpaddr]\n");
 	fprintf(stderr, "       ip addr {show|save|flush} [ dev STRING ] [ scope SCOPE-ID ]\n");
 	fprintf(stderr, "                            [ to PREFIX ] [ FLAG-LIST ] [ label PATTERN ] [up]\n");
 	fprintf(stderr, "       ip addr {showdump|restore}\n");
@@ -82,7 +82,7 @@ static void usage(void)
 	fprintf(stderr, "           tentative | deprecated | dadfailed | temporary |\n");
 	fprintf(stderr, "           CONFFLAG-LIST ]\n");
 	fprintf(stderr, "CONFFLAG-LIST := [ CONFFLAG-LIST ] CONFFLAG\n");
-	fprintf(stderr, "CONFFLAG  := [ home | nodad ]\n");
+	fprintf(stderr, "CONFFLAG  := [ home | nodad | mngtmpaddr | noprefixroute ]\n");
 	fprintf(stderr, "LIFETIME := [ valid_lft LFT ] [ preferred_lft LFT ]\n");
 	fprintf(stderr, "LFT := forever | SECONDS\n");
 
@@ -127,7 +127,7 @@ static void print_link_flags(FILE *fp, unsigned flags, unsigned mdown)
 }
 
 static const char *oper_states[] = {
-	"UNKNOWN", "NOTPRESENT", "DOWN", "LOWERLAYERDOWN", 
+	"UNKNOWN", "NOTPRESENT", "DOWN", "LOWERLAYERDOWN",
 	"TESTING", "DORMANT",	 "UP"
 };
 
@@ -194,34 +194,52 @@ static void print_linktype(FILE *fp, struct rtattr *tb)
 {
 	struct rtattr *linkinfo[IFLA_INFO_MAX+1];
 	struct link_util *lu;
+	struct link_util *slave_lu;
 	char *kind;
+	char *slave_kind;
 
 	parse_rtattr_nested(linkinfo, IFLA_INFO_MAX, tb);
 
-	if (!linkinfo[IFLA_INFO_KIND])
-		return;
-	kind = RTA_DATA(linkinfo[IFLA_INFO_KIND]);
+	if (linkinfo[IFLA_INFO_KIND]) {
+		kind = RTA_DATA(linkinfo[IFLA_INFO_KIND]);
 
-	fprintf(fp, "%s", _SL_);
-	fprintf(fp, "    %s ", kind);
+		fprintf(fp, "%s", _SL_);
+		fprintf(fp, "    %s ", kind);
 
-	lu = get_link_kind(kind);
-	if (!lu || !lu->print_opt)
-		return;
+		lu = get_link_kind(kind);
+		if (lu && lu->print_opt) {
+			struct rtattr *attr[lu->maxattr+1], **data = NULL;
 
-	if (1) {
-		struct rtattr *attr[lu->maxattr+1], **data = NULL;
+			if (linkinfo[IFLA_INFO_DATA]) {
+				parse_rtattr_nested(attr, lu->maxattr,
+						    linkinfo[IFLA_INFO_DATA]);
+				data = attr;
+			}
+			lu->print_opt(lu, fp, data);
 
-		if (linkinfo[IFLA_INFO_DATA]) {
-			parse_rtattr_nested(attr, lu->maxattr,
-					    linkinfo[IFLA_INFO_DATA]);
-			data = attr;
+			if (linkinfo[IFLA_INFO_XSTATS] && show_stats &&
+			    lu->print_xstats)
+				lu->print_xstats(lu, fp, linkinfo[IFLA_INFO_XSTATS]);
 		}
-		lu->print_opt(lu, fp, data);
+	}
 
-		if (linkinfo[IFLA_INFO_XSTATS] && show_stats &&
-		    lu->print_xstats)
-			lu->print_xstats(lu, fp, linkinfo[IFLA_INFO_XSTATS]);
+	if (linkinfo[IFLA_INFO_SLAVE_KIND]) {
+		slave_kind = RTA_DATA(linkinfo[IFLA_INFO_SLAVE_KIND]);
+
+		fprintf(fp, "%s", _SL_);
+		fprintf(fp, "    %s_slave ", slave_kind);
+
+		slave_lu = get_link_slave_kind(slave_kind);
+		if (slave_lu && slave_lu->print_opt) {
+			struct rtattr *attr[slave_lu->maxattr+1], **data = NULL;
+
+			if (linkinfo[IFLA_INFO_SLAVE_DATA]) {
+				parse_rtattr_nested(attr, slave_lu->maxattr,
+						    linkinfo[IFLA_INFO_SLAVE_DATA]);
+				data = attr;
+			}
+			slave_lu->print_opt(slave_lu, fp, data);
+		}
 	}
 }
 
@@ -543,6 +561,13 @@ static int set_lifetime(unsigned int *lifetime, char *argv)
 	return 0;
 }
 
+static unsigned int get_ifa_flags(struct ifaddrmsg *ifa,
+				  struct rtattr *ifa_flags_attr)
+{
+	return ifa_flags_attr ? rta_getattr_u32(ifa_flags_attr) :
+				ifa->ifa_flags;
+}
+
 int print_addrinfo(const struct sockaddr_nl *who, struct nlmsghdr *n,
 		   void *arg)
 {
@@ -569,6 +594,8 @@ int print_addrinfo(const struct sockaddr_nl *who, struct nlmsghdr *n,
 
 	parse_rtattr(rta_tb, IFA_MAX, IFA_RTA(ifa), n->nlmsg_len - NLMSG_LENGTH(sizeof(*ifa)));
 
+	ifa_flags = get_ifa_flags(ifa, rta_tb[IFA_FLAGS]);
+
 	if (!rta_tb[IFA_LOCAL])
 		rta_tb[IFA_LOCAL] = rta_tb[IFA_ADDRESS];
 	if (!rta_tb[IFA_ADDRESS])
@@ -578,7 +605,7 @@ int print_addrinfo(const struct sockaddr_nl *who, struct nlmsghdr *n,
 		return 0;
 	if ((filter.scope^ifa->ifa_scope)&filter.scopemask)
 		return 0;
-	if ((filter.flags^ifa->ifa_flags)&filter.flagmask)
+	if ((filter.flags ^ ifa_flags) & filter.flagmask)
 		return 0;
 	if (filter.label) {
 		SPRINT_BUF(b1);
@@ -638,7 +665,7 @@ int print_addrinfo(const struct sockaddr_nl *who, struct nlmsghdr *n,
 		fprintf(fp, "    family %d ", ifa->ifa_family);
 
 	if (rta_tb[IFA_LOCAL]) {
-		fprintf(fp, "%s", rt_addr_n2a(ifa->ifa_family,
+		fprintf(fp, "%s", format_host(ifa->ifa_family,
 					      RTA_PAYLOAD(rta_tb[IFA_LOCAL]),
 					      RTA_DATA(rta_tb[IFA_LOCAL]),
 					      abuf, sizeof(abuf)));
@@ -649,7 +676,7 @@ int print_addrinfo(const struct sockaddr_nl *who, struct nlmsghdr *n,
 			fprintf(fp, "/%d ", ifa->ifa_prefixlen);
 		} else {
 			fprintf(fp, " peer %s/%d ",
-				rt_addr_n2a(ifa->ifa_family,
+				format_host(ifa->ifa_family,
 					    RTA_PAYLOAD(rta_tb[IFA_ADDRESS]),
 					    RTA_DATA(rta_tb[IFA_ADDRESS]),
 					    abuf, sizeof(abuf)),
@@ -659,49 +686,56 @@ int print_addrinfo(const struct sockaddr_nl *who, struct nlmsghdr *n,
 
 	if (rta_tb[IFA_BROADCAST]) {
 		fprintf(fp, "brd %s ",
-			rt_addr_n2a(ifa->ifa_family,
+			format_host(ifa->ifa_family,
 				    RTA_PAYLOAD(rta_tb[IFA_BROADCAST]),
 				    RTA_DATA(rta_tb[IFA_BROADCAST]),
 				    abuf, sizeof(abuf)));
 	}
 	if (rta_tb[IFA_ANYCAST]) {
 		fprintf(fp, "any %s ",
-			rt_addr_n2a(ifa->ifa_family,
+			format_host(ifa->ifa_family,
 				    RTA_PAYLOAD(rta_tb[IFA_ANYCAST]),
 				    RTA_DATA(rta_tb[IFA_ANYCAST]),
 				    abuf, sizeof(abuf)));
 	}
 	fprintf(fp, "scope %s ", rtnl_rtscope_n2a(ifa->ifa_scope, b1, sizeof(b1)));
-	ifa_flags = ifa->ifa_flags;
-	if (ifa->ifa_flags&IFA_F_SECONDARY) {
+	if (ifa_flags & IFA_F_SECONDARY) {
 		ifa_flags &= ~IFA_F_SECONDARY;
 		if (ifa->ifa_family == AF_INET6)
 			fprintf(fp, "temporary ");
 		else
 			fprintf(fp, "secondary ");
 	}
-	if (ifa->ifa_flags&IFA_F_TENTATIVE) {
+	if (ifa_flags & IFA_F_TENTATIVE) {
 		ifa_flags &= ~IFA_F_TENTATIVE;
 		fprintf(fp, "tentative ");
 	}
-	if (ifa->ifa_flags&IFA_F_DEPRECATED) {
+	if (ifa_flags & IFA_F_DEPRECATED) {
 		ifa_flags &= ~IFA_F_DEPRECATED;
 		deprecated = 1;
 		fprintf(fp, "deprecated ");
 	}
-	if (ifa->ifa_flags&IFA_F_HOMEADDRESS) {
+	if (ifa_flags & IFA_F_HOMEADDRESS) {
 		ifa_flags &= ~IFA_F_HOMEADDRESS;
 		fprintf(fp, "home ");
 	}
-	if (ifa->ifa_flags&IFA_F_NODAD) {
+	if (ifa_flags & IFA_F_NODAD) {
 		ifa_flags &= ~IFA_F_NODAD;
 		fprintf(fp, "nodad ");
 	}
-	if (!(ifa->ifa_flags&IFA_F_PERMANENT)) {
+	if (ifa_flags & IFA_F_MANAGETEMPADDR) {
+		ifa_flags &= ~IFA_F_MANAGETEMPADDR;
+		fprintf(fp, "mngtmpaddr ");
+	}
+	if (ifa_flags & IFA_F_NOPREFIXROUTE) {
+		ifa_flags &= ~IFA_F_NOPREFIXROUTE;
+		fprintf(fp, "noprefixroute ");
+	}
+	if (!(ifa_flags & IFA_F_PERMANENT)) {
 		fprintf(fp, "dynamic ");
 	} else
 		ifa_flags &= ~IFA_F_PERMANENT;
-	if (ifa->ifa_flags&IFA_F_DADFAILED) {
+	if (ifa_flags & IFA_F_DADFAILED) {
 		ifa_flags &= ~IFA_F_DADFAILED;
 		fprintf(fp, "dadfailed ");
 	}
@@ -928,6 +962,8 @@ static void ipaddr_filter(struct nlmsg_chain *linfo, struct nlmsg_chain *ainfo)
 		for (a = ainfo->head; a; a = a->next) {
 			struct nlmsghdr *n = &a->h;
 			struct ifaddrmsg *ifa = NLMSG_DATA(n);
+			struct rtattr *tb[IFA_MAX + 1];
+			unsigned int ifa_flags;
 
 			if (ifa->ifa_index != ifi->ifi_index)
 				continue;
@@ -936,11 +972,13 @@ static void ipaddr_filter(struct nlmsg_chain *linfo, struct nlmsg_chain *ainfo)
 				continue;
 			if ((filter.scope^ifa->ifa_scope)&filter.scopemask)
 				continue;
-			if ((filter.flags^ifa->ifa_flags)&filter.flagmask)
+
+			parse_rtattr(tb, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(n));
+			ifa_flags = get_ifa_flags(ifa, tb[IFA_FLAGS]);
+
+			if ((filter.flags ^ ifa_flags) & filter.flagmask)
 				continue;
 			if (filter.pfx.family || filter.label) {
-				struct rtattr *tb[IFA_MAX+1];
-				parse_rtattr(tb, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(n));
 				if (!tb[IFA_LOCAL])
 					tb[IFA_LOCAL] = tb[IFA_ADDRESS];
 
@@ -1116,6 +1154,12 @@ static int ipaddr_list_flush_or_save(int argc, char **argv, int action)
 		} else if (strcmp(*argv, "nodad") == 0) {
 			filter.flags |= IFA_F_NODAD;
 			filter.flagmask |= IFA_F_NODAD;
+		} else if (strcmp(*argv, "mngtmpaddr") == 0) {
+			filter.flags |= IFA_F_MANAGETEMPADDR;
+			filter.flagmask |= IFA_F_MANAGETEMPADDR;
+		} else if (strcmp(*argv, "noprefixroute") == 0) {
+			filter.flags |= IFA_F_NOPREFIXROUTE;
+			filter.flagmask |= IFA_F_NOPREFIXROUTE;
 		} else if (strcmp(*argv, "dadfailed") == 0) {
 			filter.flags |= IFA_F_DADFAILED;
 			filter.flagmask |= IFA_F_DADFAILED;
@@ -1235,9 +1279,9 @@ static int default_scope(inet_prefix *lcl)
 static int ipaddr_modify(int cmd, int flags, int argc, char **argv)
 {
 	struct {
-		struct nlmsghdr 	n;
-		struct ifaddrmsg 	ifa;
-		char   			buf[256];
+		struct nlmsghdr	n;
+		struct ifaddrmsg	ifa;
+		char  			buf[256];
 	} req;
 	char  *d = NULL;
 	char  *l = NULL;
@@ -1254,6 +1298,7 @@ static int ipaddr_modify(int cmd, int flags, int argc, char **argv)
 	__u32 preferred_lft = INFINITY_LIFE_TIME;
 	__u32 valid_lft = INFINITY_LIFE_TIME;
 	struct ifa_cacheinfo cinfo;
+	unsigned int ifa_flags = 0;
 
 	memset(&req, 0, sizeof(req));
 
@@ -1331,9 +1376,13 @@ static int ipaddr_modify(int cmd, int flags, int argc, char **argv)
 			if (set_lifetime(&preferred_lft, *argv))
 				invarg("preferred_lft value", *argv);
 		} else if (strcmp(*argv, "home") == 0) {
-			req.ifa.ifa_flags |= IFA_F_HOMEADDRESS;
+			ifa_flags |= IFA_F_HOMEADDRESS;
 		} else if (strcmp(*argv, "nodad") == 0) {
-			req.ifa.ifa_flags |= IFA_F_NODAD;
+			ifa_flags |= IFA_F_NODAD;
+		} else if (strcmp(*argv, "mngtmpaddr") == 0) {
+			ifa_flags |= IFA_F_MANAGETEMPADDR;
+		} else if (strcmp(*argv, "noprefixroute") == 0) {
+			ifa_flags |= IFA_F_NOPREFIXROUTE;
 		} else {
 			if (strcmp(*argv, "local") == 0) {
 				NEXT_ARG();
@@ -1351,6 +1400,11 @@ static int ipaddr_modify(int cmd, int flags, int argc, char **argv)
 		}
 		argc--; argv++;
 	}
+	if (ifa_flags <= 0xff)
+		req.ifa.ifa_flags = ifa_flags;
+	else
+		addattr32(&req.n, sizeof(req), IFA_FLAGS, ifa_flags);
+
 	if (d == NULL) {
 		fprintf(stderr, "Not enough information: \"dev\" argument is required.\n");
 		return -1;

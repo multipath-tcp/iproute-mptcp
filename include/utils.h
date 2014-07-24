@@ -151,9 +151,10 @@ int print_timestamp(FILE *fp);
 extern int cmdlineno;
 extern ssize_t getcmdline(char **line, size_t *len, FILE *in);
 extern int makeargs(char *line, char *argv[], int maxargs);
+extern int inet_get_addr(const char *src, __u32 *dst, struct in6_addr *dst6);
 
 struct iplink_req;
 int iplink_parse(int argc, char **argv, struct iplink_req *req,
 		char **name, char **type, char **link, char **dev,
-		int *group);
+		int *group, int *index);
 #endif /* __UTILS_H__ */

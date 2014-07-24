@@ -194,10 +194,10 @@ static int rtnl_rtscope_init;
 static void rtnl_rtscope_initialize(void)
 {
 	rtnl_rtscope_init = 1;
-	rtnl_rtscope_tab[255] = "nowhere";
-	rtnl_rtscope_tab[254] = "host";
-	rtnl_rtscope_tab[253] = "link";
-	rtnl_rtscope_tab[200] = "site";
+	rtnl_rtscope_tab[RT_SCOPE_NOWHERE] = "nowhere";
+	rtnl_rtscope_tab[RT_SCOPE_HOST]    = "host";
+	rtnl_rtscope_tab[RT_SCOPE_LINK]    = "link";
+	rtnl_rtscope_tab[RT_SCOPE_SITE]    = "site";
 	rtnl_tab_initialize(CONFDIR "/rt_scopes",
 			    rtnl_rtscope_tab, 256);
 }
@@ -314,21 +314,27 @@ int rtnl_rtrealm_a2n(__u32 *id, const char *arg)
 }
 
 
-static struct rtnl_hash_entry dflt_table_entry  = { .id = 253, .name = "default" };
-static struct rtnl_hash_entry main_table_entry  = { .id = 254, .name = "main" };
-static struct rtnl_hash_entry local_table_entry = { .id = 255, .name = "local" };
+static struct rtnl_hash_entry dflt_table_entry  = { .name = "default" };
+static struct rtnl_hash_entry main_table_entry  = { .name = "main" };
+static struct rtnl_hash_entry local_table_entry = { .name = "local" };
 
 static struct rtnl_hash_entry * rtnl_rttable_hash[256] = {
-	[253] = &dflt_table_entry,
-	[254] = &main_table_entry,
-	[255] = &local_table_entry,
+	[RT_TABLE_DEFAULT] = &dflt_table_entry,
+	[RT_TABLE_MAIN]    = &main_table_entry,
+	[RT_TABLE_LOCAL]   = &local_table_entry,
 };
 
 static int rtnl_rttable_init;
 
 static void rtnl_rttable_initialize(void)
 {
+	int i;
+
 	rtnl_rttable_init = 1;
+	for (i = 0; i < 256; i++) {
+		if (rtnl_rttable_hash[i])
+			rtnl_rttable_hash[i]->id = i;
+	}
 	rtnl_hash_initialize(CONFDIR "/rt_tables",
 			     rtnl_rttable_hash, 256);
 }

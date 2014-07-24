@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses>.
  */
 /*
  * based on iproute.c
@@ -269,9 +268,9 @@ static int xfrm_state_modify(int cmd, unsigned flags, int argc, char **argv)
 {
 	struct rtnl_handle rth;
 	struct {
-		struct nlmsghdr 	n;
+		struct nlmsghdr	n;
 		struct xfrm_usersa_info xsinfo;
-		char   			buf[RTA_BUF_SIZE];
+		char  			buf[RTA_BUF_SIZE];
 	} req;
 	struct xfrm_replay_state replay;
 	char *idp = NULL;
@@ -656,9 +655,9 @@ static int xfrm_state_allocspi(int argc, char **argv)
 {
 	struct rtnl_handle rth;
 	struct {
-		struct nlmsghdr 	n;
+		struct nlmsghdr	n;
 		struct xfrm_userspi_info xspi;
-		char   			buf[RTA_BUF_SIZE];
+		char  			buf[RTA_BUF_SIZE];
 	} req;
 	char *idp = NULL;
 	char *minp = NULL;
@@ -913,9 +912,9 @@ static int xfrm_state_get_or_delete(int argc, char **argv, int delete)
 {
 	struct rtnl_handle rth;
 	struct {
-		struct nlmsghdr 	n;
+		struct nlmsghdr	n;
 		struct xfrm_usersa_id	xsid;
-		char   			buf[RTA_BUF_SIZE];
+		char  			buf[RTA_BUF_SIZE];
 	} req;
 	struct xfrm_id id;
 	char *idp = NULL;
@@ -1189,7 +1188,7 @@ static int print_sadinfo(struct nlmsghdr *n, void *arg)
 				fprintf(fp,"BAD SAD length returned\n");
 				return -1;
 			}
-				
+
 			si = RTA_DATA(tb[XFRMA_SAD_HINFO]);
 			fprintf(fp," (buckets ");
 			fprintf(fp,"count %d", si->sadhcnt);
