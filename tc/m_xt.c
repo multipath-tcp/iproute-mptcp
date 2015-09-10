@@ -1,6 +1,6 @@
 /*
  * m_xt.c	xtables based targets
- * 		utilities mostly ripped from iptables <duh, its the linux way>
+ *		utilities mostly ripped from iptables <duh, its the linux way>
  *
  *		This program is free software; you can distribute it and/or
  *		modify it under the terms of the GNU General Public License
@@ -175,7 +175,7 @@ static int parse_ipt(struct action_util *a,int *argc_p,
 						     &m->option_offset);
 #endif
 			if (opts == NULL) {
-				fprintf(stderr, " failed to find aditional options for target %s\n\n", optarg);
+				fprintf(stderr, " failed to find additional options for target %s\n\n", optarg);
 				return -1;
 			} else
 				tcipt_globals.opts = opts;
@@ -298,7 +298,10 @@ print_ipt(struct action_util *au,FILE * f, struct rtattr *arg)
 	if (arg == NULL)
 		return -1;
 
-	xtables_init_all(&tcipt_globals, NFPROTO_IPV4);
+	/* copy tcipt_globals because .opts will be modified by iptables */
+	struct xtables_globals tmp_tcipt_globals = tcipt_globals;
+
+	xtables_init_all(&tmp_tcipt_globals, NFPROTO_IPV4);
 	set_lib_dir();
 
 	parse_rtattr_nested(tb, TCA_IPT_MAX, arg);
@@ -333,20 +336,20 @@ print_ipt(struct action_util *au,FILE * f, struct rtattr *arg)
 			}
 
 #if (XTABLES_VERSION_CODE >= 6)
-		opts = xtables_options_xfrm(tcipt_globals.orig_opts,
-					    tcipt_globals.opts,
+		opts = xtables_options_xfrm(tmp_tcipt_globals.orig_opts,
+					    tmp_tcipt_globals.opts,
 					    m->x6_options,
 					    &m->option_offset);
 #else
-		opts = xtables_merge_options(tcipt_globals.opts,
+		opts = xtables_merge_options(tmp_tcipt_globals.opts,
 					     m->extra_opts,
 					     &m->option_offset);
 #endif
 	if (opts == NULL) {
-		fprintf(stderr, " failed to find aditional options for target %s\n\n", optarg);
+		fprintf(stderr, " failed to find additional options for target %s\n\n", optarg);
 		return -1;
 	} else
-		tcipt_globals.opts = opts;
+		tmp_tcipt_globals.opts = opts;
 		} else {
 			fprintf(stderr, " failed to find target %s\n\n",
 				t->u.user.name);

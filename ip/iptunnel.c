@@ -167,10 +167,14 @@ static int parse_args(int argc, char **argv, int cmd, struct ip_tunnel_parm *p)
 			NEXT_ARG();
 			if (strcmp(*argv, "any"))
 				p->iph.daddr = get_addr32(*argv);
+			else
+				p->iph.daddr = htonl(INADDR_ANY);
 		} else if (strcmp(*argv, "local") == 0) {
 			NEXT_ARG();
 			if (strcmp(*argv, "any"))
 				p->iph.saddr = get_addr32(*argv);
+			else
+				p->iph.saddr = htonl(INADDR_ANY);
 		} else if (strcmp(*argv, "dev") == 0) {
 			NEXT_ARG();
 			strncpy(medium, *argv, IFNAMSIZ-1);
@@ -250,8 +254,11 @@ static int parse_args(int argc, char **argv, int cmd, struct ip_tunnel_parm *p)
 
 	if (medium[0]) {
 		p->link = if_nametoindex(medium);
-		if (p->link == 0)
+		if (p->link == 0) {
+			fprintf(stderr, "Cannot find device \"%s\"\n",
+				medium);
 			return -1;
+		}
 	}
 
 	if (p->i_key == 0 && IN_MULTICAST(ntohl(p->iph.daddr))) {
@@ -287,10 +294,10 @@ static int do_add(int cmd, int argc, char **argv)
 
 	switch (p.iph.protocol) {
 	case IPPROTO_IPIP:
-		if (p.i_flags != VTI_ISVTI)
-			return tnl_add_ioctl(cmd, "tunl0", p.name, &p);
-		else
+		if (p.i_flags & VTI_ISVTI)
 			return tnl_add_ioctl(cmd, "ip_vti0", p.name, &p);
+		else
+			return tnl_add_ioctl(cmd, "tunl0", p.name, &p);
 	case IPPROTO_GRE:
 		return tnl_add_ioctl(cmd, "gre0", p.name, &p);
 	case IPPROTO_IPV6:
@@ -311,10 +318,10 @@ static int do_del(int argc, char **argv)
 
 	switch (p.iph.protocol) {
 	case IPPROTO_IPIP:
-		if (p.i_flags != VTI_ISVTI)
-			return tnl_del_ioctl("tunl0", p.name, &p);
-		else
+		if (p.i_flags & VTI_ISVTI)
 			return tnl_del_ioctl("ip_vti0", p.name, &p);
+		else
+			return tnl_del_ioctl("tunl0", p.name, &p);
 	case IPPROTO_GRE:
 		return tnl_del_ioctl("gre0", p.name, &p);
 	case IPPROTO_IPV6:
@@ -339,7 +346,7 @@ static void print_tunnel(struct ip_tunnel_parm *p)
 	printf("%s: %s/ip  remote %s  local %s ",
 	       p->name,
 	       tnl_strproto(p->iph.protocol),
-	       p->iph.daddr ? format_host(AF_INET, 4, &p->iph.daddr, s1, sizeof(s1))  : "any",
+	       p->iph.daddr ? format_host(AF_INET, 4, &p->iph.daddr, s1, sizeof(s1)) : "any",
 	       p->iph.saddr ? rt_addr_n2a(AF_INET, 4, &p->iph.saddr, s2, sizeof(s2)) : "any");
 
 	if (p->iph.protocol == IPPROTO_IPV6 && (p->i_flags & SIT_ISATAP)) {
@@ -406,7 +413,7 @@ static void print_tunnel(struct ip_tunnel_parm *p)
 	}
 
 	if (p->i_flags&GRE_SEQ)
-		printf("%s  Drop packets out of sequence.\n", _SL_);
+		printf("%s  Drop packets out of sequence.", _SL_);
 	if (p->i_flags&GRE_CSUM)
 		printf("%s  Checksum in received packet is required.", _SL_);
 	if (p->o_flags&GRE_SEQ)
@@ -503,10 +510,10 @@ static int do_show(int argc, char **argv)
 
 	switch (p.iph.protocol) {
 	case IPPROTO_IPIP:
-		if (p.i_flags != VTI_ISVTI)
-			err = tnl_get_ioctl(p.name[0] ? p.name : "tunl0", &p);
-		else
+		if (p.i_flags & VTI_ISVTI)
 			err = tnl_get_ioctl(p.name[0] ? p.name : "ip_vti0", &p);
+		else
+			err = tnl_get_ioctl(p.name[0] ? p.name : "tunl0", &p);
 		break;
 	case IPPROTO_GRE:
 		err = tnl_get_ioctl(p.name[0] ? p.name : "gre0", &p);

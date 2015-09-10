@@ -31,3 +31,16 @@ series
 .gdbinit
 .gdb_history
 *.gdb
+
+# tests
+testsuite/results
+testsuite/iproute2/iproute2-this
+
+# doc files generated at runtime
+doc/*.aux
+doc/*.log
+doc/*.toc
+doc/*.ps
+doc/*.dvi
+doc/*.html
+doc/*.pdf

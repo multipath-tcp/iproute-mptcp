@@ -25,12 +25,17 @@
 #include <asm/types.h>
 #include <linux/pkt_sched.h>
 #include <linux/param.h>
+#include <linux/if_arp.h>
+#include <linux/mpls.h>
 #include <time.h>
 #include <sys/time.h>
 #include <errno.h>
 
-
+#include "rt_names.h"
 #include "utils.h"
+#include "namespace.h"
+
+int timestamp_short = 0;
 
 int get_integer(int *val, const char *arg, int base)
 {
@@ -144,8 +149,8 @@ int get_time_rtt(unsigned *val, const char *arg, int *raw)
 		if (t < 0.0)
 			return -1;
 
-		/* extra non-digits */
-		if (!p || p == arg || *p)
+		/* no digits? */
+		if (!p || p == arg)
 			return -1;
 
 		/* over/underflow */
@@ -154,8 +159,8 @@ int get_time_rtt(unsigned *val, const char *arg, int *raw)
 	} else {
 		res = strtoul(arg, &p, 0);
 
-		/* empty string or trailing non-digits */
-		if (!p || p == arg || *p)
+		/* empty string? */
+		if (!p || p == arg)
 			return -1;
 
 		/* overflow */
@@ -386,11 +391,23 @@ int get_addr_1(inet_prefix *addr, const char *name, int family)
 	if (strcmp(name, "default") == 0 ||
 	    strcmp(name, "all") == 0 ||
 	    strcmp(name, "any") == 0) {
-		if (family == AF_DECnet)
+		if ((family == AF_DECnet) || (family == AF_MPLS))
 			return -1;
 		addr->family = family;
 		addr->bytelen = (family == AF_INET6 ? 16 : 4);
 		addr->bitlen = -1;
+		return 0;
+	}
+
+	if (family == AF_PACKET) {
+		int len;
+		len = ll_addr_a2n((char *)&addr->data, sizeof(addr->data), name);
+		if (len < 0)
+			return -1;
+
+		addr->family = AF_PACKET;
+		addr->bytelen = len;
+		addr->bitlen = len * 8;
 		return 0;
 	}
 
@@ -416,6 +433,23 @@ int get_addr_1(inet_prefix *addr, const char *name, int family)
 		return 0;
 	}
 
+	if (family == AF_MPLS) {
+		int i;
+		addr->family = AF_MPLS;
+		if (mpls_pton(AF_MPLS, name, addr->data) <= 0)
+			return -1;
+		addr->bytelen = 4;
+		addr->bitlen = 20;
+		/* How many bytes do I need? */
+		for (i = 0; i < 8; i++) {
+			if (ntohl(addr->data[i]) & MPLS_LS_S_MASK) {
+				addr->bytelen = (i + 1)*4;
+				break;
+			}
+		}
+		return 0;
+	}
+
 	addr->family = AF_INET;
 	if (family != AF_UNSPEC && family != AF_INET)
 		return -1;
@@ -426,6 +460,29 @@ int get_addr_1(inet_prefix *addr, const char *name, int family)
 	addr->bytelen = 4;
 	addr->bitlen = -1;
 	return 0;
+}
+
+int af_bit_len(int af)
+{
+	switch (af) {
+	case AF_INET6:
+		return 128;
+	case AF_INET:
+		return 32;
+	case AF_DECnet:
+		return 16;
+	case AF_IPX:
+		return 80;
+	case AF_MPLS:
+		return 20;
+	}
+
+	return 0;
+}
+
+int af_byte_len(int af)
+{
+	return af_bit_len(af) / 8;
 }
 
 int get_prefix_1(inet_prefix *dst, char *arg, int family)
@@ -439,7 +496,7 @@ int get_prefix_1(inet_prefix *dst, char *arg, int family)
 	if (strcmp(arg, "default") == 0 ||
 	    strcmp(arg, "any") == 0 ||
 	    strcmp(arg, "all") == 0) {
-		if (family == AF_DECnet)
+		if ((family == AF_DECnet) || (family == AF_MPLS))
 			return -1;
 		dst->family = family;
 		dst->bytelen = 0;
@@ -453,20 +510,11 @@ int get_prefix_1(inet_prefix *dst, char *arg, int family)
 
 	err = get_addr_1(dst, arg, family);
 	if (err == 0) {
-		switch(dst->family) {
-			case AF_INET6:
-				dst->bitlen = 128;
-				break;
-			case AF_DECnet:
-				dst->bitlen = 16;
-				break;
-			default:
-			case AF_INET:
-				dst->bitlen = 32;
-		}
+		dst->bitlen = af_bit_len(dst->family);
+
 		if (slash) {
 			if (get_netmask(&plen, slash+1, 0)
-					|| plen > dst->bitlen) {
+			    || plen > dst->bitlen) {
 				err = -1;
 				goto done;
 			}
@@ -482,10 +530,6 @@ done:
 
 int get_addr(inet_prefix *dst, const char *arg, int family)
 {
-	if (family == AF_PACKET) {
-		fprintf(stderr, "Error: \"%s\" may be inet address, but it is not allowed in this context.\n", arg);
-		exit(1);
-	}
 	if (get_addr_1(dst, arg, family)) {
 		fprintf(stderr, "Error: an inet address is expected rather than \"%s\".\n", arg);
 		exit(1);
@@ -627,6 +671,8 @@ const char *rt_addr_n2a(int af, int len, const void *addr, char *buf, int buflen
 	case AF_INET:
 	case AF_INET6:
 		return inet_ntop(af, addr, buf, buflen);
+	case AF_MPLS:
+		return mpls_ntop(af, addr, buf, buflen);
 	case AF_IPX:
 		return ipx_ntop(af, addr, buf, buflen);
 	case AF_DECnet:
@@ -635,9 +681,50 @@ const char *rt_addr_n2a(int af, int len, const void *addr, char *buf, int buflen
 		memcpy(dna.a_addr, addr, 2);
 		return dnet_ntop(af, &dna, buf, buflen);
 	}
+	case AF_PACKET:
+		return ll_addr_n2a(addr, len, ARPHRD_VOID, buf, buflen);
 	default:
 		return "???";
 	}
+}
+
+int read_family(const char *name)
+{
+	int family = AF_UNSPEC;
+	if (strcmp(name, "inet") == 0)
+		family = AF_INET;
+	else if (strcmp(name, "inet6") == 0)
+		family = AF_INET6;
+	else if (strcmp(name, "dnet") == 0)
+		family = AF_DECnet;
+	else if (strcmp(name, "link") == 0)
+		family = AF_PACKET;
+	else if (strcmp(name, "ipx") == 0)
+		family = AF_IPX;
+	else if (strcmp(name, "mpls") == 0)
+		family = AF_MPLS;
+	else if (strcmp(name, "bridge") == 0)
+		family = AF_BRIDGE;
+	return family;
+}
+
+const char *family_name(int family)
+{
+	if (family == AF_INET)
+		return "inet";
+	if (family == AF_INET6)
+		return "inet6";
+	if (family == AF_DECnet)
+		return "dnet";
+	if (family == AF_PACKET)
+		return "link";
+	if (family == AF_IPX)
+		return "ipx";
+	if (family == AF_MPLS)
+		return "mpls";
+	if (family == AF_BRIDGE)
+		return "bridge";
+	return "???";
 }
 
 #ifdef RESOLVE_HOSTNAMES
@@ -694,7 +781,6 @@ static const char *resolve_address(const void *addr, int len, int af)
 }
 #endif
 
-
 const char *format_host(int af, int len, const void *addr,
 			char *buf, int buflen)
 {
@@ -702,27 +788,8 @@ const char *format_host(int af, int len, const void *addr,
 	if (resolve_hosts) {
 		const char *n;
 
-		if (len <= 0) {
-			switch (af) {
-			case AF_INET:
-				len = 4;
-				break;
-			case AF_INET6:
-				len = 16;
-				break;
-			case AF_IPX:
-				len = 10;
-				break;
-#ifdef AF_DECnet
-			/* I see no reasons why gethostbyname
-			   may not work for DECnet */
-			case AF_DECnet:
-				len = 2;
-				break;
-#endif
-			default: ;
-			}
-		}
+		len = len <= 0 ? af_byte_len(af) : len;
+
 		if (len > 0 &&
 		    (n = resolve_address(addr, len, af)) != NULL)
 			return n;
@@ -743,10 +810,6 @@ char *hexstring_n2a(const __u8 *str, int len, char *buf, int blen)
 		sprintf(ptr, "%02x", str[i]);
 		ptr += 2;
 		blen -= 2;
-		if (i != len-1 && blen > 1) {
-			*ptr++ = ':';
-			blen--;
-		}
 	}
 	return buf;
 }
@@ -754,52 +817,46 @@ char *hexstring_n2a(const __u8 *str, int len, char *buf, int blen)
 __u8* hexstring_a2n(const char *str, __u8 *buf, int blen)
 {
 	int cnt = 0;
+	char *endptr;
 
-	for (;;) {
-		unsigned acc;
-		char ch;
+	if (strlen(str) % 2)
+		return NULL;
+	while (cnt < blen && strlen(str) > 1) {
+		unsigned int tmp;
+		char tmpstr[3];
 
-		acc = 0;
-
-		while ((ch = *str) != ':' && ch != 0) {
-			if (ch >= '0' && ch <= '9')
-				ch -= '0';
-			else if (ch >= 'a' && ch <= 'f')
-				ch -= 'a'-10;
-			else if (ch >= 'A' && ch <= 'F')
-				ch -= 'A'-10;
-			else
-				return NULL;
-			acc = (acc<<4) + ch;
-			str++;
-		}
-
-		if (acc > 255)
+		strncpy(tmpstr, str, 2);
+		tmpstr[2] = '\0';
+		tmp = strtoul(tmpstr, &endptr, 16);
+		if (errno != 0 || tmp > 0xFF || *endptr != '\0')
 			return NULL;
-		if (cnt < blen) {
-			buf[cnt] = acc;
-			cnt++;
-		}
-		if (ch == 0)
-			break;
-		++str;
+		buf[cnt++] = tmp;
+		str += 2;
 	}
-	if (cnt < blen)
-		memset(buf+cnt, 0, blen-cnt);
 	return buf;
 }
 
 int print_timestamp(FILE *fp)
 {
 	struct timeval tv;
-	char *tstr;
+	struct tm *tm;
 
-	memset(&tv, 0, sizeof(tv));
 	gettimeofday(&tv, NULL);
+	tm = localtime(&tv.tv_sec);
 
-	tstr = asctime(localtime(&tv.tv_sec));
-	tstr[strlen(tstr)-1] = 0;
-	fprintf(fp, "Timestamp: %s %ld usec\n", tstr, (long)tv.tv_usec);
+	if (timestamp_short) {
+		char tshort[40];
+
+		strftime(tshort, sizeof(tshort), "%Y-%m-%dT%H:%M:%S", tm);
+		fprintf(fp, "[%s.%06ld] ", tshort, tv.tv_usec);
+	} else {
+		char *tstr = asctime(tm);
+
+		tstr[strlen(tstr)-1] = 0;
+		fprintf(fp, "Timestamp: %s %ld usec\n",
+			tstr, tv.tv_usec);
+	}
+
 	return 0;
 }
 
@@ -875,4 +932,47 @@ int inet_get_addr(const char *src, __u32 *dst, struct in6_addr *dst6)
 		return inet_pton(AF_INET6, src, dst6);
 	else
 		return inet_pton(AF_INET, src, dst);
+}
+
+void print_nlmsg_timestamp(FILE *fp, const struct nlmsghdr *n)
+{
+	char *tstr;
+	time_t secs = ((__u32*)NLMSG_DATA(n))[0];
+	long usecs = ((__u32*)NLMSG_DATA(n))[1];
+	tstr = asctime(localtime(&secs));
+	tstr[strlen(tstr)-1] = 0;
+	fprintf(fp, "Timestamp: %s %lu us\n", tstr, usecs);
+}
+
+static int on_netns(char *nsname, void *arg)
+{
+	struct netns_func *f = arg;
+
+	if (netns_switch(nsname))
+		return -1;
+
+	return f->func(nsname, f->arg);
+}
+
+static int on_netns_label(char *nsname, void *arg)
+{
+	printf("\nnetns: %s\n", nsname);
+	return on_netns(nsname, arg);
+}
+
+int do_each_netns(int (*func)(char *nsname, void *arg), void *arg,
+		bool show_label)
+{
+	struct netns_func nsf = { .func = func, .arg = arg };
+
+	if (show_label)
+		return netns_foreach(on_netns_label, &nsf);
+
+	return netns_foreach(on_netns, &nsf);
+}
+
+char *int_to_str(int val, char *buf)
+{
+	sprintf(buf, "%d", val);
+	return buf;
 }

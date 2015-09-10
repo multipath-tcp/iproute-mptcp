@@ -27,11 +27,12 @@
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: ... basic [ match EMATCH_TREE ] [ police POLICE_SPEC ]\n");
+	fprintf(stderr, "Usage: ... basic [ match EMATCH_TREE ] \n");
 	fprintf(stderr, "                 [ action ACTION_SPEC ] [ classid CLASSID ]\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Where: SELECTOR := SAMPLE SAMPLE ...\n");
 	fprintf(stderr, "       FILTERID := X:Y:Z\n");
+	fprintf(stderr, "       ACTION_SPEC := ... look at individual actions\n");
 	fprintf(stderr, "\nNOTE: CLASSID is parsed as hexadecimal input.\n");
 }
 
@@ -42,9 +43,6 @@ static int basic_parse_opt(struct filter_util *qu, char *handle,
 	struct rtattr *tail;
 	long h = 0;
 
-	if (argc == 0)
-		return 0;
-
 	if (handle) {
 		h = strtol(handle, NULL, 0);
 		if (h == LONG_MIN || h == LONG_MAX) {
@@ -53,8 +51,10 @@ static int basic_parse_opt(struct filter_util *qu, char *handle,
 			return -1;
 		}
 	}
-
 	t->tcm_handle = h;
+
+	if (argc == 0)
+		return 0;
 
 	tail = (struct rtattr*)(((void*)n)+NLMSG_ALIGN(n->nlmsg_len));
 	addattr_l(n, MAX_MSG, TCA_OPTIONS, NULL, 0);

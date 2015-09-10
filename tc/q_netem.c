@@ -263,6 +263,7 @@ static int netem_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 				set_percent(&gimodel.p31, 1. - p13);
 				set_percent(&gimodel.p32, 0);
 				set_percent(&gimodel.p23, 1.);
+				set_percent(&gimodel.p14, 0);
 				loss_type = NETEM_LOSS_GI;
 
 				if (!NEXT_IS_NUMBER())
@@ -288,6 +289,13 @@ static int netem_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 					explain1("loss p23");
 					return -1;
 				}
+				if (!NEXT_IS_NUMBER())
+					continue;
+				NEXT_ARG();
+				if (get_percent(&gimodel.p14, *argv)) {
+					explain1("loss p14");
+					return -1;
+				}
 
 			} else if (!strcmp(*argv, "gemodel")) {
 				NEXT_ARG();
@@ -299,7 +307,7 @@ static int netem_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 				/* set defaults */
 				set_percent(&gemodel.r, 1.);
 				set_percent(&gemodel.h, 0);
-				set_percent(&gemodel.k1, 1.);
+				set_percent(&gemodel.k1, 0);
 				loss_type = NETEM_LOSS_GE;
 
 				if (!NEXT_IS_NUMBER())
@@ -317,6 +325,10 @@ static int netem_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 					explain1("loss gemodel h");
 					return -1;
 				}
+				/* netem option is "1-h" but kernel
+				 * expects "h".
+				 */
+				gemodel.h = max_percent_value - gemodel.h;
 
 				if (!NEXT_IS_NUMBER())
 					continue;
@@ -493,7 +505,7 @@ static int netem_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 			fprintf(stderr, "loss in the weeds!\n");
 			return -1;
 		}
-		
+
 		addattr_nest_end(n, start);
 	}
 
@@ -569,10 +581,10 @@ static int netem_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 
 			parse_rtattr_nested(lb, NETEM_LOSS_MAX, tb[TCA_NETEM_LOSS]);
 			if (lb[NETEM_LOSS_GI])
-				gemodel = RTA_DATA(lb[NETEM_LOSS_GI]);
+				gimodel = RTA_DATA(lb[NETEM_LOSS_GI]);
 			if (lb[NETEM_LOSS_GE])
 				gemodel = RTA_DATA(lb[NETEM_LOSS_GE]);
-		}			
+		}
 		if (tb[TCA_NETEM_RATE]) {
 			if (RTA_PAYLOAD(tb[TCA_NETEM_RATE]) < sizeof(*rate))
 				return -1;
@@ -617,10 +629,11 @@ static int netem_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	}
 
 	if (gemodel) {
-		fprintf(f, "loss gemodel p %s",
+		fprintf(f, " loss gemodel p %s",
 			sprint_percent(gemodel->p, b1));
 		fprintf(f, " r %s", sprint_percent(gemodel->r, b1));
-		fprintf(f, " 1-h %s", sprint_percent(gemodel->h, b1));
+		fprintf(f, " 1-h %s", sprint_percent(max_percent_value -
+						     gemodel->h, b1));
 		fprintf(f, " 1-k %s", sprint_percent(gemodel->k1, b1));
 	}
 
