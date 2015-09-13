@@ -76,6 +76,11 @@ static int net_snmp6_open(void)
 	return generic_proc_open("PROC_NET_SNMP6", "net/snmp6");
 }
 
+static int net_mptcp_open(void)
+{
+	return generic_proc_open("PROC_NET_MPTCP", "net/mptcp_net/snmp");
+}
+
 static int net_sctp_snmp_open(void)
 {
 	return generic_proc_open("PROC_NET_SCTP_SNMP", "net/sctp/snmp");
@@ -282,6 +287,15 @@ static void load_snmp6(void)
 	}
 }
 
+static void load_mptcp(void)
+{
+	FILE *fp = fdopen(net_mptcp_open(), "r");
+	if (fp) {
+		load_good_table(fp);
+		fclose(fp);
+	}
+}
+
 static void load_netstat(void)
 {
 	FILE *fp = fdopen(net_netstat_open(), "r");
@@ -405,6 +419,7 @@ static void update_db(int interval)
 
 	load_netstat();
 	load_snmp6();
+	load_mptcp();
 	load_snmp();
 	load_sctp_snmp();
 
@@ -465,6 +480,7 @@ static void server_loop(int fd)
 
 	load_netstat();
 	load_snmp6();
+	load_mptcp();
 	load_snmp();
 	load_sctp_snmp();
 
@@ -722,6 +738,7 @@ int main(int argc, char *argv[])
 		}
 		load_netstat();
 		load_snmp6();
+		load_mptcp();
 		load_snmp();
 		load_sctp_snmp();
 		if (info_source[0] == 0)
