@@ -21,18 +21,26 @@
 #include "utils.h"
 #include "ip_common.h"
 
+static void print_explain(FILE *f)
+{
+	fprintf(f, "Usage: ... vxlan id VNI [ { group | remote } ADDR ] [ local ADDR ]\n");
+	fprintf(f, "                 [ ttl TTL ] [ tos TOS ] [ dev PHYS_DEV ]\n");
+	fprintf(f, "                 [ dstport PORT ] [ srcport MIN MAX ]\n");
+	fprintf(f, "                 [ [no]learning ] [ [no]proxy ] [ [no]rsc ]\n");
+	fprintf(f, "                 [ [no]l2miss ] [ [no]l3miss ]\n");
+	fprintf(f, "                 [ ageing SECONDS ] [ maxaddress NUMBER ]\n");
+	fprintf(f, "                 [ [no]udpcsum ] [ [no]udp6zerocsumtx ] [ [no]udp6zerocsumrx ]\n");
+	fprintf(f, "                 [ gbp ]\n");
+	fprintf(f, "\n");
+	fprintf(f, "Where: VNI := 0-16777215\n");
+	fprintf(f, "       ADDR := { IP_ADDRESS | any }\n");
+	fprintf(f, "       TOS  := { NUMBER | inherit }\n");
+	fprintf(f, "       TTL  := { 1..255 | inherit }\n");
+}
+
 static void explain(void)
 {
-	fprintf(stderr, "Usage: ... vxlan id VNI [ { group | remote } ADDR ] [ local ADDR ]\n");
-	fprintf(stderr, "                 [ ttl TTL ] [ tos TOS ] [ dev PHYS_DEV ]\n");
-	fprintf(stderr, "                 [ dstport PORT ] [ srcport MIN MAX ]\n");
-	fprintf(stderr, "                 [ [no]learning ] [ [no]proxy ] [ [no]rsc ]\n");
-	fprintf(stderr, "                 [ [no]l2miss ] [ [no]l3miss ]\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "Where: VNI := 0-16777215\n");
-	fprintf(stderr, "       ADDR := { IP_ADDRESS | any }\n");
-	fprintf(stderr, "       TOS  := { NUMBER | inherit }\n");
-	fprintf(stderr, "       TTL  := { 1..255 | inherit }\n");
+	print_explain(stderr);
 }
 
 static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
@@ -58,6 +66,10 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u32 age = 0;
 	__u32 maxaddr = 0;
 	__u16 dstport = 0;
+	__u8 udpcsum = 0;
+	__u8 udp6zerocsumtx = 0;
+	__u8 udp6zerocsumrx = 0;
+	__u8 gbp = 0;
 	int dst_port_set = 0;
 	struct ifla_vxlan_port_range range = { 0, 0 };
 
@@ -99,8 +111,11 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 		} else if (!matches(*argv, "dev")) {
 			NEXT_ARG();
 			link = if_nametoindex(*argv);
-			if (link == 0)
+			if (link == 0) {
+				fprintf(stderr, "Cannot find device \"%s\"\n",
+					*argv);
 				exit(-1);
+			}
 		} else if (!matches(*argv, "ttl") ||
 			   !matches(*argv, "hoplimit")) {
 			unsigned uval;
@@ -172,6 +187,20 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			l3miss = 0;
 		} else if (!matches(*argv, "l3miss")) {
 			l3miss = 1;
+		} else if (!matches(*argv, "udpcsum")) {
+			udpcsum = 1;
+		} else if (!matches(*argv, "noudpcsum")) {
+			udpcsum = 0;
+		} else if (!matches(*argv, "udp6zerocsumtx")) {
+			udp6zerocsumtx = 1;
+		} else if (!matches(*argv, "noudp6zerocsumtx")) {
+			udp6zerocsumtx = 0;
+		} else if (!matches(*argv, "udp6zerocsumrx")) {
+			udp6zerocsumrx = 1;
+		} else if (!matches(*argv, "noudp6zerocsumrx")) {
+			udp6zerocsumrx = 0;
+		} else if (!matches(*argv, "gbp")) {
+			gbp = 1;
 		} else if (matches(*argv, "help") == 0) {
 			explain();
 			return -1;
@@ -227,6 +256,9 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 	addattr8(n, 1024, IFLA_VXLAN_RSC, rsc);
 	addattr8(n, 1024, IFLA_VXLAN_L2MISS, l2miss);
 	addattr8(n, 1024, IFLA_VXLAN_L3MISS, l3miss);
+	addattr8(n, 1024, IFLA_VXLAN_UDP_CSUM, udpcsum);
+	addattr8(n, 1024, IFLA_VXLAN_UDP_ZERO_CSUM6_TX, udp6zerocsumtx);
+	addattr8(n, 1024, IFLA_VXLAN_UDP_ZERO_CSUM6_RX, udp6zerocsumrx);
 
 	if (noage)
 		addattr32(n, 1024, IFLA_VXLAN_AGEING, 0);
@@ -239,6 +271,10 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			  &range, sizeof(range));
 	if (dstport)
 		addattr16(n, 1024, IFLA_VXLAN_PORT, htons(dstport));
+
+	if (gbp)
+		addattr_l(n, 1024, IFLA_VXLAN_GBP, NULL, 0);
+
 
 	return 0;
 }
@@ -357,8 +393,28 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 	}
 
 	if (tb[IFLA_VXLAN_LIMIT] &&
-	    (maxaddr = rta_getattr_u32(tb[IFLA_VXLAN_LIMIT]) != 0))
+	    ((maxaddr = rta_getattr_u32(tb[IFLA_VXLAN_LIMIT])) != 0))
 		    fprintf(f, "maxaddr %u ", maxaddr);
+
+	if (tb[IFLA_VXLAN_UDP_CSUM] && rta_getattr_u8(tb[IFLA_VXLAN_UDP_CSUM]))
+		fputs("udpcsum ", f);
+
+	if (tb[IFLA_VXLAN_UDP_ZERO_CSUM6_TX] &&
+	    rta_getattr_u8(tb[IFLA_VXLAN_UDP_ZERO_CSUM6_TX]))
+		fputs("udp6zerocsumtx ", f);
+
+	if (tb[IFLA_VXLAN_UDP_ZERO_CSUM6_RX] &&
+	    rta_getattr_u8(tb[IFLA_VXLAN_UDP_ZERO_CSUM6_RX]))
+		fputs("udp6zerocsumrx ", f);
+
+	if (tb[IFLA_VXLAN_GBP])
+		fputs("gbp ", f);
+}
+
+static void vxlan_print_help(struct link_util *lu, int argc, char **argv,
+	FILE *f)
+{
+	print_explain(f);
 }
 
 struct link_util vxlan_link_util = {
@@ -366,4 +422,5 @@ struct link_util vxlan_link_util = {
 	.maxattr	= IFLA_VXLAN_MAX,
 	.parse_opt	= vxlan_parse_opt,
 	.print_opt	= vxlan_print_opt,
+	.print_help	= vxlan_print_help,
 };

@@ -22,12 +22,14 @@ int inet_proto_a2n(const char *buf);
 
 
 const char * ll_type_n2a(int type, char *buf, int len);
-const char *ll_addr_n2a(unsigned char *addr, int alen,
+const char *ll_addr_n2a(const unsigned char *addr, int alen,
 			int type, char *buf, int blen);
 int ll_addr_a2n(char *lladdr, int len, const char *arg);
 
 const char * ll_proto_n2a(unsigned short id, char *buf, int len);
 int ll_proto_a2n(unsigned short *id, const char *buf);
 
+const char *nl_proto_n2a(int id, char *buf, int len);
+int nl_proto_a2n(__u32 *id, const char *arg);
 
 #endif

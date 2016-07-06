@@ -1,8 +1,13 @@
-TCOBJ= tc.o tc_qdisc.o tc_class.o tc_filter.o tc_util.o \
-       tc_monitor.o m_police.o m_estimator.o m_action.o \
-       m_ematch.o emp_ematch.yacc.o emp_ematch.lex.o
+TCOBJ= tc.o tc_qdisc.o tc_class.o tc_filter.o tc_util.o tc_monitor.o \
+       tc_exec.o tc_bpf.o m_police.o m_estimator.o m_action.o m_ematch.o \
+       emp_ematch.yacc.o emp_ematch.lex.o
 
 include ../Config
+
+ifeq ($(IP_CONFIG_SETNS),y)
+	CFLAGS += -DHAVE_SETNS
+endif
+
 SHARED_LIBS ?= y
 
 TCMODULES :=
@@ -40,6 +45,9 @@ TCMODULES += m_pedit.o
 TCMODULES += m_skbedit.o
 TCMODULES += m_csum.o
 TCMODULES += m_simple.o
+TCMODULES += m_vlan.o
+TCMODULES += m_connmark.o
+TCMODULES += m_bpf.o
 TCMODULES += p_ip.o
 TCMODULES += p_icmp.o
 TCMODULES += p_tcp.o
@@ -54,6 +62,8 @@ TCMODULES += q_codel.o
 TCMODULES += q_fq_codel.o
 TCMODULES += q_fq.o
 TCMODULES += q_pie.o
+TCMODULES += q_hhf.o
+TCMODULES += e_bpf.o
 
 ifeq ($(TC_CONFIG_IPSET), y)
   ifeq ($(TC_CONFIG_XT), y)
@@ -79,6 +89,11 @@ else
       TCMODULES += m_ipt.o
     endif
   endif
+endif
+
+ifeq ($(TC_CONFIG_ELF),y)
+  CFLAGS += -DHAVE_ELF
+  LDLIBS += -lelf
 endif
 
 TCOBJ += $(TCMODULES)

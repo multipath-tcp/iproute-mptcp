@@ -1,10 +1,10 @@
 /*
  * f_flow.c		Flow filter
  *
- * 		This program is free software; you can redistribute it and/or
- * 		modify it under the terms of the GNU General Public License
- * 		as published by the Free Software Foundation; either version
- * 		2 of the License, or (at your option) any later version.
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  *
  * Authors:	Patrick McHardy <kaber@trash.net>
  */
@@ -27,7 +27,7 @@ static void explain(void)
 " [hashing mode]: hash keys KEY-LIST ... [ perturb SECS ]\n"
 "\n"
 "                 [ divisor NUM ] [ baseclass ID ] [ match EMATCH_TREE ]\n"
-"                 [ police POLICE_SPEC ] [ action ACTION_SPEC ]\n"
+"                 [ action ACTION_SPEC ]\n"
 "\n"
 "KEY-LIST := [ KEY-LIST , ] KEY\n"
 "KEY      := [ src | dst | proto | proto-src | proto-dst | iif | priority | \n"

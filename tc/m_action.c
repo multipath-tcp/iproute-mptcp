@@ -54,7 +54,7 @@ static void act_usage(void)
 			"\tACTSPEC := action <ACTDETAIL> [INDEXSPEC]\n"
 			"\tINDEXSPEC := index <32 bit indexvalue>\n"
 			"\tACTDETAIL := <ACTNAME> <ACTPARAMS>\n"
-			"\t\tExample ACTNAME is gact, mirred etc\n"
+			"\t\tExample ACTNAME is gact, mirred, bpf, etc\n"
 			"\t\tEach action has its own parameters (ACTPARAMS)\n"
 			"\n");
 
@@ -185,6 +185,10 @@ parse_action(int *argc_p, char ***argv_p, int tca_id, struct nlmsghdr *n)
 			}
 #endif
 			continue;
+		} else if (strcmp(*argv, "flowid") == 0) {
+			break;
+		} else if (strcmp(*argv, "classid") == 0) {
+			break;
 		} else if (strcmp(*argv, "help") == 0) {
 			return -1;
 		} else if (new_cmd(argv)) {
@@ -253,6 +257,7 @@ tc_print_one_action(FILE * f, struct rtattr *arg)
 		return -1;
 
 	parse_rtattr_nested(tb, TCA_ACT_MAX, arg);
+
 	if (tb[TCA_ACT_KIND] == NULL) {
 		fprintf(stderr, "NULL Action!\n");
 		return -1;
@@ -263,14 +268,7 @@ tc_print_one_action(FILE * f, struct rtattr *arg)
 	if (NULL == a)
 		return err;
 
-	if (tab_flush) {
-		fprintf(f," %s \n", a->id);
-		tab_flush = 0;
-		return 0;
-	}
-
-	err = a->print_aopt(a,f,tb[TCA_ACT_OPTIONS]);
-
+	err = a->print_aopt(a, f, tb[TCA_ACT_OPTIONS]);
 
 	if (0 > err)
 		return err;
@@ -284,8 +282,34 @@ tc_print_one_action(FILE * f, struct rtattr *arg)
 	return 0;
 }
 
+static int
+tc_print_action_flush(FILE *f, const struct rtattr *arg)
+{
+
+	struct rtattr *tb[TCA_MAX + 1];
+	int err = 0;
+	struct action_util *a = NULL;
+	__u32 *delete_count = 0;
+
+	parse_rtattr_nested(tb, TCA_MAX, arg);
+
+	if (tb[TCA_KIND] == NULL) {
+		fprintf(stderr, "NULL Action!\n");
+		return -1;
+	}
+
+	a = get_action_kind(RTA_DATA(tb[TCA_KIND]));
+	if (NULL == a)
+		return err;
+
+	delete_count = RTA_DATA(tb[TCA_FCNT]);
+	fprintf(f," %s (%d entries)\n", a->id, *delete_count);
+	tab_flush = 0;
+	return 0;
+}
+
 int
-tc_print_action(FILE * f, const struct rtattr *arg)
+tc_print_action(FILE *f, const struct rtattr *arg)
 {
 
 	int i;
@@ -296,10 +320,8 @@ tc_print_action(FILE * f, const struct rtattr *arg)
 
 	parse_rtattr_nested(tb, TCA_ACT_MAX_PRIO, arg);
 
-	if (tab_flush && NULL != tb[0]  && NULL == tb[1]) {
-		int ret = tc_print_one_action(f, tb[0]);
-		return ret;
-	}
+	if (tab_flush && NULL != tb[0]  && NULL == tb[1])
+		return tc_print_action_flush(f, tb[0]);
 
 	for (i = 0; i < TCA_ACT_MAX_PRIO; i++) {
 		if (tb[i]) {
@@ -450,7 +472,7 @@ static int tc_action_gd(int cmd, unsigned flags, int *argc_p, char ***argv_p)
 	if (cmd == RTM_GETACTION)
 		ans = &req.n;
 
-	if (rtnl_talk(&rth, &req.n, 0, 0, ans) < 0) {
+	if (rtnl_talk(&rth, &req.n, ans, MAX_MSG) < 0) {
 		fprintf(stderr, "We have an error talking to the kernel\n");
 		return 1;
 	}
@@ -495,7 +517,7 @@ static int tc_action_modify(int cmd, unsigned flags, int *argc_p, char ***argv_p
 	}
 	tail->rta_len = (void *) NLMSG_TAIL(&req.n) - (void *) tail;
 
-	if (rtnl_talk(&rth, &req.n, 0, 0, NULL) < 0) {
+	if (rtnl_talk(&rth, &req.n, NULL, 0) < 0) {
 		fprintf(stderr, "We have an error talking to the kernel\n");
 		ret = -1;
 	}
@@ -565,7 +587,7 @@ static int tc_act_list_or_flush(int argc, char **argv, int event)
 		req.n.nlmsg_type = RTM_DELACTION;
 		req.n.nlmsg_flags |= NLM_F_ROOT;
 		req.n.nlmsg_flags |= NLM_F_REQUEST;
-		if (rtnl_talk(&rth, &req.n, 0, 0, NULL) < 0) {
+		if (rtnl_talk(&rth, &req.n, NULL, 0) < 0) {
 			fprintf(stderr, "We have an error flushing\n");
 			return 1;
 		}

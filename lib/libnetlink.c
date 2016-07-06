@@ -25,6 +25,10 @@
 
 #include "libnetlink.h"
 
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
 int rcvbuf = 1024 * 1024;
 
 void rtnl_close(struct rtnl_handle *rth)
@@ -43,6 +47,7 @@ int rtnl_open_byproto(struct rtnl_handle *rth, unsigned subscriptions,
 
 	memset(rth, 0, sizeof(*rth));
 
+	rth->proto = protocol;
 	rth->fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, protocol);
 	if (rth->fd < 0) {
 		perror("Cannot open netlink socket");
@@ -219,12 +224,15 @@ int rtnl_dump_filter_l(struct rtnl_handle *rth,
 			return -1;
 		}
 
+		if (rth->dump_fp)
+			fwrite(buf, 1, NLMSG_ALIGN(status), rth->dump_fp);
+
 		for (a = arg; a->filter; a++) {
 			struct nlmsghdr *h = (struct nlmsghdr*)buf;
 			msglen = status;
 
 			while (NLMSG_OK(h, msglen)) {
-				int err;
+				int err = 0;
 
 				if (nladdr.nl_pid != 0 ||
 				    h->nlmsg_pid != rth->local.nl_pid ||
@@ -245,13 +253,21 @@ int rtnl_dump_filter_l(struct rtnl_handle *rth,
 							"ERROR truncated\n");
 					} else {
 						errno = -err->error;
+						if (rth->proto == NETLINK_SOCK_DIAG &&
+						    (errno == ENOENT ||
+						     errno == EOPNOTSUPP))
+							return -1;
+
 						perror("RTNETLINK answers");
 					}
 					return -1;
 				}
-				err = a->filter(&nladdr, h, a->arg1);
-				if (err < 0)
-					return err;
+
+				if (!rth->dump_fp) {
+					err = a->filter(&nladdr, h, a->arg1);
+					if (err < 0)
+						return err;
+				}
 
 skip_it:
 				h = NLMSG_NEXT(h, msglen);
@@ -288,8 +304,8 @@ int rtnl_dump_filter(struct rtnl_handle *rth,
 	return rtnl_dump_filter_l(rth, a);
 }
 
-int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n, pid_t peer,
-	      unsigned groups, struct nlmsghdr *answer)
+int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
+	      struct nlmsghdr *answer, size_t len)
 {
 	int status;
 	unsigned seq;
@@ -305,12 +321,10 @@ int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n, pid_t peer,
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
-	char   buf[16384];
+	char   buf[32768];
 
 	memset(&nladdr, 0, sizeof(nladdr));
 	nladdr.nl_family = AF_NETLINK;
-	nladdr.nl_pid = peer;
-	nladdr.nl_groups = groups;
 
 	n->nlmsg_seq = seq = ++rtnl->seq;
 
@@ -318,7 +332,6 @@ int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n, pid_t peer,
 		n->nlmsg_flags |= NLM_F_ACK;
 
 	status = sendmsg(rtnl->fd, &msg, 0);
-
 	if (status < 0) {
 		perror("Cannot talk to rtnetlink");
 		return -1;
@@ -327,7 +340,6 @@ int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n, pid_t peer,
 	memset(buf,0,sizeof(buf));
 
 	iov.iov_base = buf;
-
 	while (1) {
 		iov.iov_len = sizeof(buf);
 		status = recvmsg(rtnl->fd, &msg, 0);
@@ -360,7 +372,7 @@ int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n, pid_t peer,
 				exit(1);
 			}
 
-			if (nladdr.nl_pid != peer ||
+			if (nladdr.nl_pid != 0 ||
 			    h->nlmsg_pid != rtnl->local.nl_pid ||
 			    h->nlmsg_seq != seq) {
 				/* Don't forget to skip that message. */
@@ -373,20 +385,22 @@ int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n, pid_t peer,
 				struct nlmsgerr *err = (struct nlmsgerr*)NLMSG_DATA(h);
 				if (l < sizeof(struct nlmsgerr)) {
 					fprintf(stderr, "ERROR truncated\n");
-				} else {
-					if (!err->error) {
-						if (answer)
-							memcpy(answer, h, h->nlmsg_len);
-						return 0;
-					}
-
-					fprintf(stderr, "RTNETLINK answers: %s\n", strerror(-err->error));
-					errno = -err->error;
+				} else if (!err->error) {
+					if (answer)
+						memcpy(answer, h,
+						       MIN(len, h->nlmsg_len));
+					return 0;
 				}
+
+				fprintf(stderr, "RTNETLINK answers: %s\n",
+					strerror(-err->error));
+				errno = -err->error;
 				return -1;
 			}
+
 			if (answer) {
-				memcpy(answer, h, h->nlmsg_len);
+				memcpy(answer, h,
+				       MIN(len, h->nlmsg_len));
 				return 0;
 			}
 
@@ -395,10 +409,12 @@ int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n, pid_t peer,
 			status -= NLMSG_ALIGN(len);
 			h = (struct nlmsghdr*)((char*)h + NLMSG_ALIGN(len));
 		}
+
 		if (msg.msg_flags & MSG_TRUNC) {
 			fprintf(stderr, "Message truncated\n");
 			continue;
 		}
+
 		if (status) {
 			fprintf(stderr, "!!!Remnant of size %d\n", status);
 			exit(1);
@@ -420,7 +436,7 @@ int rtnl_listen(struct rtnl_handle *rtnl,
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
-	char   buf[8192];
+	char   buf[16384];
 
 	memset(&nladdr, 0, sizeof(nladdr));
 	nladdr.nl_family = AF_NETLINK;
@@ -486,7 +502,7 @@ int rtnl_from_file(FILE *rtnl, rtnl_filter_t handler,
 {
 	int status;
 	struct sockaddr_nl nladdr;
-	char   buf[8192];
+	char   buf[16384];
 	struct nlmsghdr *h = (void*)buf;
 
 	memset(&nladdr, 0, sizeof(nladdr));
@@ -699,6 +715,18 @@ int parse_rtattr_byindex(struct rtattr *tb[], int max, struct rtattr *rta, int l
 	if (len)
 		fprintf(stderr, "!!!Deficit %d, rta_len=%d\n", len, rta->rta_len);
 	return i;
+}
+
+struct rtattr *parse_rtattr_one(int type, struct rtattr *rta, int len)
+{
+	while (RTA_OK(rta, len)) {
+		if (rta->rta_type == type)
+			return rta;
+		rta = RTA_NEXT(rta, len);
+	}
+	if (len)
+		fprintf(stderr, "!!!Deficit %d, rta_len=%d\n", len, rta->rta_len);
+	return NULL;
 }
 
 int __parse_rtattr_nested_compat(struct rtattr *tb[], int max, struct rtattr *rta,
