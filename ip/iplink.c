@@ -483,8 +483,16 @@ int iplink_parse(int argc, char **argv, struct iplink_req *req,
 				return on_off("allmulticast", *argv);
 		} else if (strcmp(*argv, "multipath") == 0) {
 			NEXT_ARG();
-			fprintf(stderr, "Can't set multipath flags in IOCTL_COMPAT mode.");
-			return -1;
+			req->i.ifi_change |= IFF_NOMULTIPATH;
+			req->i.ifi_change |= IFF_MPBACKUP;
+			if (strcmp(*argv, "on") == 0) {
+				req->i.ifi_flags &= ~IFF_NOMULTIPATH;
+			} else if (strcmp(*argv, "off") == 0) {
+				req->i.ifi_flags |= IFF_NOMULTIPATH;
+			} else if (strcmp(*argv, "backup") == 0) {
+				req->i.ifi_flags |= IFF_MPBACKUP;
+			} else
+				return on_off("multipath", *argv);
 		} else if (strcmp(*argv, "promisc") == 0) {
 			NEXT_ARG();
 			req->i.ifi_change |= IFF_PROMISC;
@@ -1071,17 +1079,9 @@ static int do_set(int argc, char **argv)
 			} else
 				return on_off("allmulticast", *argv);
 		} else if (strcmp(*argv, "multipath") == 0) {
-			NEXT_ARG();
-			mask |= IFF_NOMULTIPATH;
-			mask |= IFF_MPBACKUP;
-			if (strcmp(*argv, "on") == 0) {
-				flags &= ~IFF_NOMULTIPATH;
-			} else if (strcmp(*argv, "off") == 0) {
-				flags |= IFF_NOMULTIPATH;
-			} else if (strcmp(*argv, "backup") == 0) {
-				flags |= IFF_MPBACKUP;
-			} else
-				return on_off("multipath", *argv);
+			fprintf(stderr, "Can't set multipath flags in IOCTL_COMPAT mode.");
+
+			return -1;
 		} else if (strcmp(*argv, "promisc") == 0) {
 			NEXT_ARG();
 			mask |= IFF_PROMISC;
