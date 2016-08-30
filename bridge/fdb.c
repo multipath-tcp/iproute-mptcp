@@ -20,20 +20,21 @@
 #include <linux/if_ether.h>
 #include <linux/neighbour.h>
 #include <string.h>
+#include <limits.h>
 
 #include "libnetlink.h"
 #include "br_common.h"
 #include "rt_names.h"
 #include "utils.h"
 
-int filter_index;
+static unsigned int filter_index;
 
 static void usage(void)
 {
 	fprintf(stderr, "Usage: bridge fdb { add | append | del | replace } ADDR dev DEV {self|master} [ temp ]\n"
 		        "              [router] [ dst IPADDR] [ vlan VID ]\n"
 		        "              [ port PORT] [ vni VNI ] [via DEV]\n");
-	fprintf(stderr, "       bridge fdb {show} [ dev DEV ]\n");
+	fprintf(stderr, "       bridge fdb {show} [ br BRDEV ] [ brport DEV ]\n");
 	exit(-1);
 }
 
@@ -130,26 +131,35 @@ int print_fdb(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		if (ifindex) {
 			char ifname[IF_NAMESIZE];
 
-			if (if_indextoname(ifindex, ifname))
+			if (!tb[NDA_LINK_NETNSID] &&
+			    if_indextoname(ifindex, ifname))
 				fprintf(fp, "via %s ", ifname);
 			else
 				fprintf(fp, "via ifindex %u ", ifindex);
 		}
 	}
+	if (tb[NDA_LINK_NETNSID])
+		fprintf(fp, "link-netnsid %d ",
+			rta_getattr_u32(tb[NDA_LINK_NETNSID]));
 
 	if (show_stats && tb[NDA_CACHEINFO]) {
 		struct nda_cacheinfo *ci = RTA_DATA(tb[NDA_CACHEINFO]);
 		int hz = get_user_hz();
 
-		fprintf(fp, " used %d/%d", ci->ndm_used/hz,
+		fprintf(fp, "used %d/%d ", ci->ndm_used/hz,
 		       ci->ndm_updated/hz);
 	}
 	if (r->ndm_flags & NTF_SELF)
 		fprintf(fp, "self ");
-	if (r->ndm_flags & NTF_MASTER)
+	if (tb[NDA_MASTER])
+		fprintf(fp, "master %s ",
+			ll_index_to_name(rta_getattr_u32(tb[NDA_MASTER])));
+	else if (r->ndm_flags & NTF_MASTER)
 		fprintf(fp, "master ");
 	if (r->ndm_flags & NTF_ROUTER)
 		fprintf(fp, "router ");
+	if (r->ndm_flags & NTF_EXT_LEARNED)
+		fprintf(fp, "offload ");
 
 	fprintf(fp, "%s\n", state_n2a(r->ndm_state));
 	return 0;
@@ -157,18 +167,45 @@ int print_fdb(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 
 static int fdb_show(int argc, char **argv)
 {
+	struct {
+		struct nlmsghdr 	n;
+		struct ifinfomsg	ifm;
+		char   			buf[256];
+	} req;
+
 	char *filter_dev = NULL;
+	char *br = NULL;
+	int msg_size = sizeof(struct ifinfomsg);
+
+	memset(&req, 0, sizeof(req));
+	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	req.ifm.ifi_family = PF_BRIDGE;
 
 	while (argc > 0) {
-		if (strcmp(*argv, "dev") == 0) {
+		if ((strcmp(*argv, "brport") == 0) || strcmp(*argv, "dev") == 0) {
 			NEXT_ARG();
-			if (filter_dev)
-				duparg("dev", *argv);
 			filter_dev = *argv;
+		} else if (strcmp(*argv, "br") == 0) {
+			NEXT_ARG();
+			br = *argv;
+		} else {
+			if (matches(*argv, "help") == 0)
+				usage();
 		}
 		argc--; argv++;
 	}
 
+	if (br) {
+		int br_ifindex = ll_name_to_index(br);
+		if (br_ifindex == 0) {
+			fprintf(stderr, "Cannot find bridge device \"%s\"\n", br);
+			return -1;
+		}
+		addattr32(&req.n, sizeof(req), IFLA_MASTER, br_ifindex);
+		msg_size += RTA_LENGTH(4);
+	}
+
+	/*we'll keep around filter_dev for older kernels */
 	if (filter_dev) {
 		filter_index = if_nametoindex(filter_dev);
 		if (filter_index == 0) {
@@ -176,9 +213,10 @@ static int fdb_show(int argc, char **argv)
 				filter_dev);
 			return -1;
 		}
+		req.ifm.ifi_index = filter_index;
 	}
 
-	if (rtnl_wilddump_request(&rth, PF_BRIDGE, RTM_GETNEIGH) < 0) {
+	if (rtnl_dump_request(&rth, RTM_GETNEIGH, &req.ifm, msg_size) < 0) {
 		perror("Cannot send dump request");
 		exit(1);
 	}
@@ -282,7 +320,7 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 
 	if (d == NULL || addr == NULL) {
 		fprintf(stderr, "Device and address are required arguments.\n");
-		exit(-1);
+		return -1;
 	}
 
 	/* Assume self */
@@ -297,7 +335,7 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 		   abuf, abuf+1, abuf+2,
 		   abuf+3, abuf+4, abuf+5) != 6) {
 		fprintf(stderr, "Invalid mac address %s\n", addr);
-		exit(-1);
+		return -1;
 	}
 
 	addattr_l(&req.n, sizeof(req), NDA_LLADDR, abuf, ETH_ALEN);
@@ -324,8 +362,8 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 		return -1;
 	}
 
-	if (rtnl_talk(&rth, &req.n, 0, 0, NULL) < 0)
-		exit(2);
+	if (rtnl_talk(&rth, &req.n, NULL, 0) < 0)
+		return -1;
 
 	return 0;
 }

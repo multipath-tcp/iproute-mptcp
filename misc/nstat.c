@@ -77,7 +77,6 @@ struct nstat_ent
 	struct nstat_ent *next;
 	char		 *id;
 	unsigned long long val;
-	unsigned long	   ival;
 	double		   rate;
 };
 
@@ -143,7 +142,6 @@ static void load_good_table(FILE *fp)
 		if ((n = malloc(sizeof(*n))) == NULL)
 			abort();
 		n->id = strdup(idbuf);
-		n->ival = (unsigned long)val;
 		n->val = val;
 		n->rate = rate;
 		n->next = db;
@@ -158,6 +156,15 @@ static void load_good_table(FILE *fp)
 	}
 }
 
+static int count_spaces(const char *line)
+{
+	int count = 0;
+	char c;
+
+	while ((c = *line++) != 0)
+		count += c == ' ' || c == '\n';
+	return count;
+}
 
 static void load_ugly_table(FILE *fp)
 {
@@ -169,10 +176,12 @@ static void load_ugly_table(FILE *fp)
 		char idbuf[sizeof(buf)];
 		int  off;
 		char *p;
+		int count1, count2, skip = 0;
 
 		p = strchr(buf, ':');
 		if (!p)
 			abort();
+		count1 = count_spaces(buf);
 		*p = 0;
 		idbuf[0] = 0;
 		strncat(idbuf, buf, sizeof(idbuf) - 1);
@@ -201,17 +210,19 @@ static void load_ugly_table(FILE *fp)
 		n = db;
 		if (fgets(buf, sizeof(buf), fp) == NULL)
 			abort();
+		count2 = count_spaces(buf);
+		if (count2 > count1)
+			skip = count2 - count1;
 		do {
 			p = strrchr(buf, ' ');
 			if (!p)
 				abort();
 			*p = 0;
-			if (sscanf(p+1, "%lu", &n->ival) != 1)
+			if (sscanf(p+1, "%llu", &n->val) != 1)
 				abort();
-			n->val = n->ival;
 			/* Trick to skip "dummy" trailing ICMP MIB in 2.4 */
-			if (strcmp(idbuf, "IcmpOutAddrMaskReps") == 0)
-				idbuf[5] = 0;
+			if (skip)
+				skip--;
 			else
 				n = n->next;
 		} while (p > buf + off + 2);
@@ -365,10 +376,10 @@ static void update_db(int interval)
 		for (h1 = h; h1; h1 = h1->next) {
 			if (strcmp(h1->id, n->id) == 0) {
 				double sample;
-				unsigned long incr = h1->ival - n->ival;
-				n->val += incr;
-				n->ival = h1->ival;
-				sample = (double)(incr*1000)/interval;
+				unsigned long long incr = h1->val - n->val;
+
+				n->val = h1->val;
+				sample = (double)incr * 1000.0 / interval;
 				if (interval >= scan_interval) {
 					n->rate += W*(sample-n->rate);
 				} else if (interval >= 1000) {

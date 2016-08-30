@@ -18,6 +18,8 @@ struct rtnl_handle
 	struct sockaddr_nl	peer;
 	__u32			seq;
 	__u32			dump;
+	int			proto;
+	FILE		       *dump_fp;
 };
 
 extern int rcvbuf;
@@ -52,8 +54,8 @@ extern int rtnl_dump_filter_l(struct rtnl_handle *rth,
 			      const struct rtnl_dump_filter_arg *arg);
 extern int rtnl_dump_filter(struct rtnl_handle *rth, rtnl_filter_t filter,
 			    void *arg);
-extern int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n, pid_t peer,
-		     unsigned groups, struct nlmsghdr *answer)
+extern int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
+		     struct nlmsghdr *answer, size_t len)
 	__attribute__((warn_unused_result));
 extern int rtnl_send(struct rtnl_handle *rth, const void *buf, int)
 	__attribute__((warn_unused_result));
@@ -80,10 +82,14 @@ extern int parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rta, int le
 extern int parse_rtattr_flags(struct rtattr *tb[], int max, struct rtattr *rta,
 			      int len, unsigned short flags);
 extern int parse_rtattr_byindex(struct rtattr *tb[], int max, struct rtattr *rta, int len);
+extern struct rtattr *parse_rtattr_one(int type, struct rtattr *rta, int len);
 extern int __parse_rtattr_nested_compat(struct rtattr *tb[], int max, struct rtattr *rta, int len);
 
 #define parse_rtattr_nested(tb, max, rta) \
 	(parse_rtattr((tb), (max), RTA_DATA(rta), RTA_PAYLOAD(rta)))
+
+#define parse_rtattr_one_nested(type, rta) \
+	(parse_rtattr_one(type, RTA_DATA(rta), RTA_PAYLOAD(rta)))
 
 #define parse_rtattr_nested_compat(tb, max, rta, data, len) \
 	({ data = RTA_PAYLOAD(rta) >= len ? RTA_DATA(rta) : NULL;	\
@@ -151,6 +157,18 @@ extern int rtnl_from_file(FILE *, rtnl_filter_t handler,
 #ifndef NDTA_PAYLOAD
 #define NDTA_PAYLOAD(n) NLMSG_PAYLOAD(n,sizeof(struct ndtmsg))
 #endif
+
+#ifndef NETNS_RTA
+#define NETNS_RTA(r) \
+	((struct rtattr*)(((char*)(r)) + NLMSG_ALIGN(sizeof(struct rtgenmsg))))
+#endif
+#ifndef NETNS_PAYLOAD
+#define NETNS_PAYLOAD(n)	NLMSG_PAYLOAD(n,sizeof(struct rtgenmsg))
+#endif
+
+/* User defined nlmsg_type which is used mostly for logging netlink
+ * messages from dump file */
+#define NLMSG_TSTAMP	15
 
 #endif /* __LIBNETLINK_H__ */
 

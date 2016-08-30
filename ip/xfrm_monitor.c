@@ -27,7 +27,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/in.h>
 #include <linux/xfrm.h>
+
 #include "utils.h"
 #include "xfrm.h"
 #include "ip_common.h"
@@ -36,7 +38,8 @@ static void usage(void) __attribute__((noreturn));
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: ip xfrm monitor [ all | LISTofXFRM-OBJECTS ]\n");
+	fprintf(stderr, "Usage: ip xfrm monitor [ all | OBJECTS | help ]\n");
+	fprintf(stderr, "OBJECTS := { acquire | expire | SA | aevent | policy | report }\n");
 	exit(-1);
 }
 
@@ -225,8 +228,9 @@ static void xfrm_usersa_print(const struct xfrm_usersa_id *sa_id, __u32 reqid, F
 	char buf[256];
 
 	buf[0] = 0;
-	fprintf(fp, "dst %s ", rt_addr_n2a(sa_id->family,
-		sizeof(sa_id->daddr), &sa_id->daddr, buf, sizeof(buf)));
+	fprintf(fp, "dst %s ",
+		rt_addr_n2a(sa_id->family, sizeof(sa_id->daddr), &sa_id->daddr,
+			    buf, sizeof(buf)));
 
 	fprintf(fp, " reqid 0x%x", reqid);
 
@@ -246,8 +250,8 @@ static int xfrm_ae_print(const struct sockaddr_nl *who,
 	fprintf(fp,"\n\t");
 	memset(abuf, '\0', sizeof(abuf));
 	fprintf(fp, "src %s ", rt_addr_n2a(id->sa_id.family,
-		sizeof(id->saddr), &id->saddr,
-		abuf, sizeof(abuf)));
+					   sizeof(id->saddr), &id->saddr,
+					   abuf, sizeof(abuf)));
 
 	xfrm_usersa_print(&id->sa_id, id->reqid, fp);
 
@@ -257,12 +261,12 @@ static int xfrm_ae_print(const struct sockaddr_nl *who,
 	return 0;
 }
 
-static void xfrm_print_addr(FILE *fp, int family, xfrm_address_t *a, size_t s)
+static void xfrm_print_addr(FILE *fp, int family, xfrm_address_t *a)
 {
 	char buf[256];
 
 	buf[0] = 0;
-	fprintf(fp, "%s", rt_addr_n2a(family, s, a, buf, sizeof(buf)));
+	fprintf(fp, "%s", rt_addr_n2a(family, sizeof(*a), a, buf, sizeof(buf)));
 }
 
 static int xfrm_mapping_print(const struct sockaddr_nl *who,
@@ -272,12 +276,10 @@ static int xfrm_mapping_print(const struct sockaddr_nl *who,
 	struct xfrm_user_mapping *map = NLMSG_DATA(n);
 
 	fprintf(fp, "Mapping change ");
-	xfrm_print_addr(fp, map->id.family, &map->old_saddr,
-			sizeof(map->old_saddr));
+	xfrm_print_addr(fp, map->id.family, &map->old_saddr);
 
 	fprintf(fp, ":%d -> ", ntohs(map->old_sport));
-	xfrm_print_addr(fp, map->id.family, &map->new_saddr,
-			sizeof(map->new_saddr));
+	xfrm_print_addr(fp, map->id.family, &map->new_saddr);
 	fprintf(fp, ":%d\n\t", ntohs(map->new_sport));
 
 	xfrm_usersa_print(&map->id, map->reqid, fp);
@@ -377,7 +379,7 @@ int do_xfrm_monitor(int argc, char **argv)
 			groups = 0;
 		} else if (matches(*argv, "help") == 0) {
 			usage();
-		} else {
+		} else if (strcmp(*argv, "all")) {
 			fprintf(stderr, "Argument \"%s\" is unknown, try \"ip xfrm monitor help\".\n", *argv);
 			exit(-1);
 		}

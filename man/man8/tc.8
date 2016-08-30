@@ -2,7 +2,9 @@
 .SH NAME
 tc \- show / manipulate traffic control settings
 .SH SYNOPSIS
-.B tc qdisc [ add | change | replace | link | delete ] dev
+.B tc
+.RI "[ " OPTIONS " ]"
+.B qdisc [ add | change | replace | link | delete ] dev
 DEV
 .B
 [ parent
@@ -13,7 +15,9 @@ qdisc-id ] qdisc
 [ qdisc specific parameters ]
 .P
 
-.B tc class [ add | change | replace | delete ] dev
+.B tc
+.RI "[ " OPTIONS " ]"
+.B class [ add | change | replace | delete ] dev
 DEV
 .B parent
 qdisc-id
@@ -22,7 +26,9 @@ class-id ] qdisc
 [ qdisc specific parameters ]
 .P
 
-.B tc filter [ add | change | replace | delete ] dev
+.B tc
+.RI "[ " OPTIONS " ]"
+.B filter [ add | change | replace | delete ] dev
 DEV
 .B [ parent
 qdisc-id
@@ -35,21 +41,30 @@ priority filtertype
 flow-id
 
 .B tc
+.RI "[ " OPTIONS " ]"
 .RI "[ " FORMAT " ]"
 .B qdisc show [ dev
 DEV
 .B ]
 .P
 .B tc
+.RI "[ " OPTIONS " ]"
 .RI "[ " FORMAT " ]"
 .B class show dev
 DEV
 .P
-.B tc filter show dev
+.B tc
+.RI "[ " OPTIONS " ]"
+.B filter show dev
 DEV
 
 .P
-.B tc [ -force ] -b\fR[\fIatch\fR] \fB[ filename ]
+.ti 8
+.IR OPTIONS " := {"
+\fB[ -force ] -b\fR[\fIatch\fR] \fB[ filename ] \fR|
+\fB[ \fB-n\fR[\fIetns\fR] name \fB] \fR|
+\fB[ \fB-nm \fR| \fB-nam\fR[\fIes\fR] \fB] \fR|
+\fB[ \fR{ \fB-cf \fR| \fB-c\fR[\fIonf\fR] \fR} \fB[ filename ] \fB] \fR}
 
 .ti 8
 .IR FORMAT " := {"
@@ -57,7 +72,8 @@ DEV
 \fB\-d\fR[\fIetails\fR] |
 \fB\-r\fR[\fIaw\fR] |
 \fB\-p\fR[\fIretty\fR] |
-\fB\-i\fR[\fIec\fR] }
+\fB\-i\fR[\fIec\fR] |
+\fB\-g\fR[\fIraph\fR] }
 
 .SH DESCRIPTION
 .B Tc
@@ -236,23 +252,33 @@ attached to that class. Check qdisc specific manpages for details, however.
 All qdiscs, classes and filters have IDs, which can either be specified
 or be automatically assigned.
 
-IDs consist of a major number and a minor number, separated by a colon.
-Both major and minor number are limited to 16 bits. There are two special
-values: root is signified by major and minor of all ones, and unspecified
-is all zeros.
+IDs consist of a
+.BR major " number and a " minor
+number, separated by a colon -
+.BR major ":" minor "."
+Both
+.BR major " and " minor
+are hexadecimal numbers and are limited to 16 bits. There are two special
+values: root is signified by
+.BR major " and " minor
+of all ones, and unspecified is all zeros.
 
 .TP
 QDISCS
-A qdisc, which potentially can have children,
-gets assigned a major number, called a 'handle', leaving the minor
+A qdisc, which potentially can have children, gets assigned a
+.B major
+number, called a 'handle', leaving the
+.B minor
 number namespace available for classes. The handle is expressed as '10:'.
-It is customary to explicitly assign a handle to qdiscs expected to have
-children.
+It is customary to explicitly assign a handle to qdiscs expected to have children.
 
 .TP
 CLASSES
-Classes residing under a qdisc share their qdisc major number, but each have
-a separate minor number called a 'classid' that has no relation to their
+Classes residing under a qdisc share their qdisc
+.B major
+number, but each have a separate
+.B minor
+number called a 'classid' that has no relation to their
 parent classes, only to their parent qdisc. The same naming custom as for
 qdiscs applies.
 
@@ -407,6 +433,43 @@ link
 Only available for qdiscs and performs a replace where the node
 must exist already.
 
+.SH OPTIONS
+
+.TP
+.BR "\-b", " \-b filename", " \-batch", " \-batch filename"
+read commands from provided file or standard input and invoke them.
+First failure will cause termination of tc.
+
+.TP
+.BR "\-force"
+don't terminate tc on errors in batch mode.
+If there were any errors during execution of the commands, the application return code will be non zero.
+
+.TP
+.BR "\-n" , " \-net" , " \-netns " <NETNS>
+switches
+.B tc
+to the specified network namespace
+.IR NETNS .
+Actually it just simplifies executing of:
+
+.B ip netns exec
+.IR NETNS
+.B tc
+.RI "[ " OPTIONS " ] " OBJECT " { " COMMAND " | "
+.BR help " }"
+
+to
+
+.B tc
+.RI "-n[etns] " NETNS " [ " OPTIONS " ] " OBJECT " { " COMMAND " | "
+.BR help " }"
+
+.TP
+.BR "\-cf" , " \-conf " <FILENAME>
+specifies path to the config file. This option is used in conjuction with other options (e.g.
+.BR -nm ")."
+
 .SH FORMAT
 The show command has additional formatting options:
 
@@ -431,20 +494,71 @@ decode filter offset and mask values to equivalent filter commands based on TCP/
 print rates in IEC units (ie. 1K = 1024).
 
 .TP
-.BR "\-b", " \-b filename", " \-batch", " \-batch filename"
-read commands from provided file or standard input and invoke them.
-First failure will cause termination of tc.
+.BR "\-g", " \-graph"
+shows classes as ASCII graph. Prints generic stats info under each class if
+.BR "-s"
+option was specified. Classes can be filtered only by
+.BR "dev"
+option.
 
 .TP
-.BR "\-force"
-don't terminate tc on errors in batch mode.
-If there were any errors during execution of the commands, the application return code will be non zero.
+.BR "\-nm" , " \-name"
+resolve class name from
+.B /etc/iproute2/tc_cls
+file or from file specified by
+.B -cf
+option. This file is just a mapping of
+.B classid
+to class name:
+
+.RS 10
+# Here is comment
+.RE
+.RS 10
+1:40   voip # Here is another comment
+.RE
+.RS 10
+1:50   web
+.RE
+.RS 10
+1:60   ftp
+.RE
+.RS 10
+1:2    home
+.RE
+
+.RS
+.B tc
+will not fail if
+.B -nm
+was specified without
+.B -cf
+option but
+.B /etc/iproute2/tc_cls
+file does not exist, which makes it possible to pass
+.B -nm
+option for creating
+.B tc
+alias.
+.RE
+
+.SH "EXAMPLES"
+.PP
+tc -g class show dev eth0
+.RS 4
+Shows classes as ASCII graph on eth0 interface.
+.RE
+.PP
+tc -g -s class show dev eth0
+.RS 4
+Shows classes as ASCII graph with stats info under each class.
 
 .SH HISTORY
 .B tc
 was written by Alexey N. Kuznetsov and added in Linux 2.2.
 .SH SEE ALSO
 .BR tc-bfifo (8),
+.BR tc-bpf (8),
 .BR tc-cbq (8),
 .BR tc-choke (8),
 .BR tc-codel (8),

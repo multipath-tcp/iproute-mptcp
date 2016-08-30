@@ -157,14 +157,19 @@ static int ipneigh_modify(int cmd, int flags, int argc, char **argv)
 		exit(-1);
 	}
 	req.ndm.ndm_family = dst.family;
-	addattr_l(&req.n, sizeof(req), NDA_DST, &dst.data, dst.bytelen);
+	if (addattr_l(&req.n, sizeof(req), NDA_DST, &dst.data, dst.bytelen) < 0)
+		return -1;
 
 	if (lla && strcmp(lla, "null")) {
 		char llabuf[20];
 		int l;
 
 		l = ll_addr_a2n(llabuf, sizeof(llabuf), lla);
-		addattr_l(&req.n, sizeof(req), NDA_LLADDR, llabuf, l);
+		if (l < 0)
+			return -1;
+
+		if (addattr_l(&req.n, sizeof(req), NDA_LLADDR, llabuf, l) < 0)
+			return -1;
 	}
 
 	ll_init_map(&rth);
@@ -174,7 +179,7 @@ static int ipneigh_modify(int cmd, int flags, int argc, char **argv)
 		return -1;
 	}
 
-	if (rtnl_talk(&rth, &req.n, 0, 0, NULL) < 0)
+	if (rtnl_talk(&rth, &req.n, NULL, 0) < 0)
 		exit(2);
 
 	return 0;
@@ -313,10 +318,11 @@ int print_neigh(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 	return 0;
 }
 
-void ipneigh_reset_filter(void)
+void ipneigh_reset_filter(int ifindex)
 {
 	memset(&filter, 0, sizeof(filter));
 	filter.state = ~0;
+	filter.index = ifindex;
 }
 
 static int do_show_or_flush(int argc, char **argv, int flush)
@@ -325,7 +331,7 @@ static int do_show_or_flush(int argc, char **argv, int flush)
 	int state_given = 0;
 	struct ndmsg ndm = { 0 };
 
-	ipneigh_reset_filter();
+	ipneigh_reset_filter(0);
 
 	if (!filter.family)
 		filter.family = preferred_family;
