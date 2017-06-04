@@ -36,6 +36,7 @@
 #include <string.h>
 #include <getopt.h>
 
+#include <json_writer.h>
 #include "lnstat.h"
 
 static struct option opts[] = {
@@ -49,6 +50,7 @@ static struct option opts[] = {
 	{ "keys", 1, NULL, 'k' },
 	{ "subject", 1, NULL, 's' },
 	{ "width", 1, NULL, 'w' },
+	{ "oneline", 0, NULL, 0 },
 };
 
 static int usage(char *name, int exit_code)
@@ -71,7 +73,10 @@ static int usage(char *name, int exit_code)
 	fprintf(stderr, "\t-i --interval <intv>\t"
 			"Set interval to 'intv' seconds\n");
 	fprintf(stderr, "\t-k --keys k,k,k,...\tDisplay only keys specified\n");
-	fprintf(stderr, "\t-s --subject [0-2]\t?\n");
+	fprintf(stderr, "\t-s --subject [0-2]\tControl header printing:\n");
+	fprintf(stderr, "\t\t\t\t0 = never\n");
+	fprintf(stderr, "\t\t\t\t1 = once\n");
+	fprintf(stderr, "\t\t\t\t2 = every 20 lines (default))\n");
 	fprintf(stderr, "\t-w --width n,n,n,...\tWidth for each field\n");
 	fprintf(stderr, "\n");
 
@@ -107,25 +112,17 @@ static void print_line(FILE *of, const struct lnstat_file *lnstat_files,
 static void print_json(FILE *of, const struct lnstat_file *lnstat_files,
 		       const struct field_params *fp)
 {
+	json_writer_t *jw = jsonw_new(of);
 	int i;
-	const char *sep;
-	const char *base = NULL;
 
-	fputs("{\n", of);
+	jsonw_start_object(jw);
 	for (i = 0; i < fp->num; i++) {
 		const struct lnstat_field *lf = fp->params[i].lf;
 
-		if (!base || lf->file->basename != base) {
-			if (base) fputs("},\n", of);
-			base = lf->file->basename;
-			sep = "\n\t";
-			fprintf(of, "    \"%s\":{", base);
-		}
-		fprintf(of, "%s\"%s\":%lu", sep,
-			lf->name, lf->result);
-		sep = ",\n\t";
+		jsonw_uint_field(jw, lf->name, lf->result);
 	}
-	fputs("}\n}\n", of);
+	jsonw_end_object(jw);
+	jsonw_destroy(&jw);
 }
 
 /* find lnstat_field according to user specification */
@@ -272,7 +269,7 @@ int main(int argc, char **argv)
 		num_req_files = 1;
 	}
 
-	while ((c = getopt_long(argc, argv,"Vc:djf:h?i:k:s:w:",
+	while ((c = getopt_long(argc, argv,"Vc:djpf:h?i:k:s:w:",
 				opts, NULL)) != -1) {
 		int len = 0;
 		char *tmp, *tok;
@@ -362,25 +359,22 @@ int main(int argc, char **argv)
 		if (interval < 1 )
 			interval = 1;
 
-		for (i = 0; i < count || !count; ) {
+		for (i = 0; i < count || !count; i++) {
 			lnstat_update(lnstat_files);
 			if (mode == MODE_JSON)
 				print_json(stdout, lnstat_files, &fp);
 			else {
-				if  ((hdr > 1 &&
-				      (! (i % 20))) || (hdr == 1 && i == 0))
+				if  ((hdr > 1 && !(i % 20)) ||
+				     (hdr == 1 && i == 0))
 					print_hdr(stdout, header);
 				print_line(stdout, lnstat_files, &fp);
 			}
 			fflush(stdout);
 			if (i < count - 1 || !count)
 				sleep(interval);
-			if (count)
-				++i;
 		}
 		break;
 	}
 
 	return 1;
 }
-

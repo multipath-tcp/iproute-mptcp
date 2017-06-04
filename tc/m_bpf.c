@@ -28,7 +28,7 @@ static const enum bpf_prog_type bpf_type = BPF_PROG_TYPE_SCHED_ACT;
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: ... bpf ...\n");
+	fprintf(stderr, "Usage: ... bpf ... [ index INDEX ]\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "BPF use case:\n");
 	fprintf(stderr, " bytecode BPF_BYTECODE\n");
@@ -49,6 +49,9 @@ static void explain(void)
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Where UDS_FILE points to a unix domain socket file in order\n");
 	fprintf(stderr, "to hand off control of all created eBPF maps to an agent.\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "Where optionally INDEX points to an existing action, or\n");
+	fprintf(stderr, "explicitly specifies an action index upon creation.\n");
 }
 
 static void usage(void)
@@ -64,6 +67,7 @@ static int parse_bpf(struct action_util *a, int *argc_p, char ***argv_p,
 	struct rtattr *tail;
 	struct tc_act_bpf parm = { 0 };
 	struct sock_filter bpf_ops[BPF_MAXINSNS];
+	bool ebpf_fill = false, bpf_fill = false;
 	bool ebpf = false, seen_run = false;
 	const char *bpf_uds_name = NULL;
 	const char *bpf_sec_name = NULL;
@@ -105,25 +109,30 @@ opt_bpf:
 
 			NEXT_ARG();
 			if (ebpf) {
+				bpf_uds_name = getenv(BPF_ENV_UDS);
 				bpf_obj = *argv;
-				NEXT_ARG();
 
-				if (strcmp(*argv, "section") == 0 ||
-				    strcmp(*argv, "sec") == 0) {
+				NEXT_ARG_FWD();
+
+				if (argc > 0 &&
+				    (strcmp(*argv, "section") == 0 ||
+				     strcmp(*argv, "sec") == 0)) {
 					NEXT_ARG();
 					bpf_sec_name = *argv;
-					NEXT_ARG();
+					NEXT_ARG_FWD();
 				}
-				if (strcmp(*argv, "export") == 0 ||
-				    strcmp(*argv, "exp") == 0) {
+				if (argc > 0 && !bpf_uds_name &&
+				    (strcmp(*argv, "export") == 0 ||
+				     strcmp(*argv, "exp") == 0)) {
 					NEXT_ARG();
 					bpf_uds_name = *argv;
-					NEXT_ARG();
+					NEXT_ARG_FWD();
 				}
-				if (strcmp(*argv, "verbose") == 0 ||
-				    strcmp(*argv, "verb") == 0) {
+				if (argc > 0 &&
+				    (strcmp(*argv, "verbose") == 0 ||
+				     strcmp(*argv, "verb") == 0)) {
 					bpf_verbose = true;
-					NEXT_ARG();
+					NEXT_ARG_FWD();
 				}
 
 				PREV_ARG();
@@ -146,43 +155,43 @@ opt_bpf:
 					 bpf_obj, bpf_sec_name);
 
 				bpf_fd = ret;
+				ebpf_fill = true;
 			} else {
 				bpf_len = ret;
+				bpf_fill = true;
 			}
 		} else if (matches(*argv, "help") == 0) {
 			usage();
+		} else if (matches(*argv, "index") == 0) {
+			break;
 		} else {
 			if (!seen_run)
 				goto opt_bpf;
 			break;
 		}
-		argc--;
-		argv++;
+
+		NEXT_ARG_FWD();
 	}
 
 	parm.action = TC_ACT_PIPE;
 	if (argc) {
 		if (matches(*argv, "reclassify") == 0) {
 			parm.action = TC_ACT_RECLASSIFY;
-			argc--;
-			argv++;
+			NEXT_ARG_FWD();
 		} else if (matches(*argv, "pipe") == 0) {
 			parm.action = TC_ACT_PIPE;
-			argc--;
-			argv++;
+			NEXT_ARG_FWD();
 		} else if (matches(*argv, "drop") == 0 ||
 			   matches(*argv, "shot") == 0) {
 			parm.action = TC_ACT_SHOT;
-			argc--;
-			argv++;
+			NEXT_ARG_FWD();
 		} else if (matches(*argv, "continue") == 0) {
 			parm.action = TC_ACT_UNSPEC;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "pass") == 0) {
+			NEXT_ARG_FWD();
+		} else if (matches(*argv, "pass") == 0 ||
+			   matches(*argv, "ok") == 0) {
 			parm.action = TC_ACT_OK;
-			argc--;
-			argv++;
+			NEXT_ARG_FWD();
 		}
 	}
 
@@ -193,15 +202,9 @@ opt_bpf:
 				fprintf(stderr, "bpf: Illegal \"index\"\n");
 				return -1;
 			}
-			argc--;
-			argv++;
-		}
-	}
 
-	if ((!bpf_len && !ebpf) || (!bpf_fd && ebpf)) {
-		fprintf(stderr, "bpf: Bytecode needs to be passed\n");
-		explain();
-		return -1;
+			NEXT_ARG_FWD();
+		}
 	}
 
 	tail = NLMSG_TAIL(n);
@@ -209,10 +212,10 @@ opt_bpf:
 	addattr_l(n, MAX_MSG, tca_id, NULL, 0);
 	addattr_l(n, MAX_MSG, TCA_ACT_BPF_PARMS, &parm, sizeof(parm));
 
-	if (ebpf) {
+	if (ebpf_fill) {
 		addattr32(n, MAX_MSG, TCA_ACT_BPF_FD, bpf_fd);
 		addattrstrz(n, MAX_MSG, TCA_ACT_BPF_NAME, bpf_name);
-	} else {
+	} else if (bpf_fill) {
 		addattr16(n, MAX_MSG, TCA_ACT_BPF_OPS_LEN, bpf_len);
 		addattr_l(n, MAX_MSG, TCA_ACT_BPF_OPS, &bpf_ops,
 			  bpf_len * sizeof(struct sock_filter));

@@ -4,7 +4,6 @@
 #include <sys/wait.h>
 #include <sys/inotify.h>
 #include <sys/mount.h>
-#include <sys/param.h>
 #include <sys/syscall.h>
 #include <stdio.h>
 #include <string.h>
@@ -43,6 +42,7 @@ static struct rtnl_handle rtnsh = { .fd = -1 };
 static int have_rtnl_getnsid = -1;
 
 static int ipnetns_accept_msg(const struct sockaddr_nl *who,
+			      struct rtnl_ctrl_data *ctrl,
 			      struct nlmsghdr *n, void *arg)
 {
 	struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(n);
@@ -139,7 +139,7 @@ struct nsid_cache {
 	struct hlist_node	nsid_hash;
 	struct hlist_node	name_hash;
 	int			nsid;
-	char			name[NAME_MAX];
+	char			name[0];
 };
 
 #define NSIDMAP_SIZE		128
@@ -164,7 +164,7 @@ static struct nsid_cache *netns_map_get_by_nsid(int nsid)
 	return NULL;
 }
 
-static int netns_map_add(int nsid, char *name)
+static int netns_map_add(int nsid, const char *name)
 {
 	struct nsid_cache *c;
 	uint32_t h;
@@ -172,7 +172,7 @@ static int netns_map_add(int nsid, char *name)
 	if (netns_map_get_by_nsid(nsid) != NULL)
 		return -EEXIST;
 
-	c = malloc(sizeof(*c));
+	c = malloc(sizeof(*c) + strlen(name));
 	if (c == NULL) {
 		perror("malloc");
 		return -ENOMEM;
@@ -436,7 +436,7 @@ static int is_pid(const char *str)
 static int netns_pids(int argc, char **argv)
 {
 	const char *name;
-	char net_path[MAXPATHLEN];
+	char net_path[PATH_MAX];
 	int netns;
 	struct stat netst;
 	DIR *dir;
@@ -471,7 +471,7 @@ static int netns_pids(int argc, char **argv)
 		return -1;
 	}
 	while((entry = readdir(dir))) {
-		char pid_net_path[MAXPATHLEN];
+		char pid_net_path[PATH_MAX];
 		struct stat st;
 		if (!is_pid(entry->d_name))
 			continue;
@@ -492,7 +492,7 @@ static int netns_pids(int argc, char **argv)
 static int netns_identify(int argc, char **argv)
 {
 	const char *pidstr;
-	char net_path[MAXPATHLEN];
+	char net_path[PATH_MAX];
 	int netns;
 	struct stat netst;
 	DIR *dir;
@@ -536,7 +536,7 @@ static int netns_identify(int argc, char **argv)
 	}
 
 	while((entry = readdir(dir))) {
-		char name_path[MAXPATHLEN];
+		char name_path[PATH_MAX];
 		struct stat st;
 
 		if (strcmp(entry->d_name, ".") == 0)
@@ -562,7 +562,7 @@ static int netns_identify(int argc, char **argv)
 
 static int on_netns_del(char *nsname, void *arg)
 {
-	char netns_path[MAXPATHLEN];
+	char netns_path[PATH_MAX];
 
 	snprintf(netns_path, sizeof(netns_path), "%s/%s", NETNS_RUN_DIR, nsname);
 	umount2(netns_path, MNT_DETACH);
@@ -611,7 +611,7 @@ static int netns_add(int argc, char **argv)
 	 * userspace tweaks like remounting /sys, or bind mounting
 	 * a new /etc/resolv.conf can be shared between uers.
 	 */
-	char netns_path[MAXPATHLEN];
+	char netns_path[PATH_MAX];
 	const char *name;
 	int fd;
 	int made_netns_run_dir_mount = 0;
@@ -706,7 +706,7 @@ static int set_netnsid_from_name(const char *name, int nsid)
 
 static int netns_set(int argc, char **argv)
 {
-	char netns_path[MAXPATHLEN];
+	char netns_path[PATH_MAX];
 	const char *name;
 	int netns, nsid;
 

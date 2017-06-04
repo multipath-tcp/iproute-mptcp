@@ -12,21 +12,22 @@ ip \- show / manipulate routing, devices, policy routing and tunnels
 .sp
 
 .ti -8
-.B ip 
+.B ip
 .RB "[ " -force " ] "
 .BI "-batch " filename
 .sp
 
 .ti -8
 .IR OBJECT " := { "
-.BR link " | " addr " | " addrlabel " | " route " | " rule " | " neigh " | "\
- ntable " | " tunnel " | " tuntap " | " maddr " | "  mroute " | " mrule " | "\
+.BR link " | " address " | " addrlabel " | " route " | " rule " | " neigh " | "\
+ ntable " | " tunnel " | " tuntap " | " maddress " | "  mroute " | " mrule " | "\
  monitor " | " xfrm " | " netns " | "  l2tp " | "  tcp_metrics " }"
 .sp
 
 .ti -8
 .IR OPTIONS " := { "
 \fB\-V\fR[\fIersion\fR] |
+\fB\-h\fR[\fIuman-readable\fR] |
 \fB\-s\fR[\fItatistics\fR] |
 \fB\-r\fR[\fIesolve\fR] |
 \fB\-f\fR[\fIamily\fR] {
@@ -44,6 +45,10 @@ ip \- show / manipulate routing, devices, policy routing and tunnels
 Print the version of the
 .B ip
 utility and exit.
+
+.TP
+.BR "\-h", " \-human", " \-human-readable"
+output statistics with human readable values followed by suffix.
 
 .TP
 .BR "\-b", " \-batch " <FILENAME>
@@ -67,7 +72,7 @@ Output more detailed information.
 
 .TP
 .BR "\-l" , " \-loops " <COUNT>
-Specify maximum number of loops the 'ip addr flush' logic
+Specify maximum number of loops the 'ip address flush' logic
 will attempt before giving up. The default is 10.
 Zero (0) means loop until all addresses are removed.
 
@@ -143,7 +148,7 @@ use the system's name resolver to print DNS names instead of
 host addresses.
 
 .TP
-.BR "\-n" , " \-net" , " \-netns " <NETNS>
+.BR "\-n" , " \-netns " <NETNS>
 switches
 .B ip
 to the specified network namespace
@@ -169,6 +174,10 @@ executes specified command over all objects, it depends if command supports this
 .TP
 .BR "\-c" , " -color"
 Use color output.
+
+.TP
+.BR "\-t" , " \-timestamp"
+display current time when using monitor option.
 
 .SH IP - COMMAND SYNTAX
 

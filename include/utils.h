@@ -19,9 +19,10 @@ extern int show_details;
 extern int show_raw;
 extern int resolve_hosts;
 extern int oneline;
+extern int brief;
 extern int timestamp;
 extern int timestamp_short;
-extern char * _SL_;
+extern const char * _SL_;
 extern int max_flush_loops;
 extern int batch_mode;
 extern bool do_all;
@@ -42,10 +43,11 @@ extern bool do_all;
 #define SPRINT_BSIZE 64
 #define SPRINT_BUF(x)	char x[SPRINT_BSIZE]
 
-extern void incomplete_command(void) __attribute__((noreturn));
+void incomplete_command(void) __attribute__((noreturn));
 
 #define NEXT_ARG() do { argv++; if (--argc <= 0) incomplete_command(); } while(0)
 #define NEXT_ARG_OK() (argc - 1 > 0)
+#define NEXT_ARG_FWD() do { argv++; argc--; } while(0)
 #define PREV_ARG() do { argv--; argc++; } while(0)
 
 typedef struct
@@ -85,47 +87,51 @@ struct ipx_addr {
 /* Maximum number of labels the mpls helpers support */
 #define MPLS_MAX_LABELS 8
 
-extern __u32 get_addr32(const char *name);
-extern int get_addr_1(inet_prefix *dst, const char *arg, int family);
-extern int get_prefix_1(inet_prefix *dst, char *arg, int family);
-extern int get_addr(inet_prefix *dst, const char *arg, int family);
-extern int get_prefix(inet_prefix *dst, char *arg, int family);
-extern int mask2bits(__u32 netmask);
+__u32 get_addr32(const char *name);
+int get_addr_1(inet_prefix *dst, const char *arg, int family);
+int get_prefix_1(inet_prefix *dst, char *arg, int family);
+int get_addr(inet_prefix *dst, const char *arg, int family);
+int get_prefix(inet_prefix *dst, char *arg, int family);
+int mask2bits(__u32 netmask);
+int get_addr_ila(__u64 *val, const char *arg);
 
-extern int get_integer(int *val, const char *arg, int base);
-extern int get_unsigned(unsigned *val, const char *arg, int base);
-extern int get_time_rtt(unsigned *val, const char *arg, int *raw);
+int get_integer(int *val, const char *arg, int base);
+int get_unsigned(unsigned *val, const char *arg, int base);
+int get_time_rtt(unsigned *val, const char *arg, int *raw);
 #define get_byte get_u8
 #define get_ushort get_u16
 #define get_short get_s16
-extern int get_u64(__u64 *val, const char *arg, int base);
-extern int get_u32(__u32 *val, const char *arg, int base);
-extern int get_s32(__s32 *val, const char *arg, int base);
-extern int get_u16(__u16 *val, const char *arg, int base);
-extern int get_s16(__s16 *val, const char *arg, int base);
-extern int get_u8(__u8 *val, const char *arg, int base);
-extern int get_s8(__s8 *val, const char *arg, int base);
+int get_u64(__u64 *val, const char *arg, int base);
+int get_u32(__u32 *val, const char *arg, int base);
+int get_s32(__s32 *val, const char *arg, int base);
+int get_u16(__u16 *val, const char *arg, int base);
+int get_s16(__s16 *val, const char *arg, int base);
+int get_u8(__u8 *val, const char *arg, int base);
+int get_s8(__s8 *val, const char *arg, int base);
+int get_addr64(__u64 *ap, const char *cp);
 
-extern char* hexstring_n2a(const __u8 *str, int len, char *buf, int blen);
-extern __u8* hexstring_a2n(const char *str, __u8 *buf, int blen);
+char* hexstring_n2a(const __u8 *str, int len, char *buf, int blen);
+__u8* hexstring_a2n(const char *str, __u8 *buf, int blen);
+#define ADDR64_BUF_SIZE sizeof("xxxx:xxxx:xxxx:xxxx")
+int addr64_n2a(__u64 addr, char *buff, size_t len);
 
-extern int af_bit_len(int af);
-extern int af_byte_len(int af);
+int af_bit_len(int af);
+int af_byte_len(int af);
 
-extern const char *format_host(int af, int len, const void *addr,
+const char *format_host(int af, int len, const void *addr,
 			       char *buf, int buflen);
-extern const char *rt_addr_n2a(int af, int len, const void *addr,
+const char *rt_addr_n2a(int af, int len, const void *addr,
 			       char *buf, int buflen);
 
-extern int read_family(const char *name);
-extern const char *family_name(int family);
+int read_family(const char *name);
+const char *family_name(int family);
 
 void missarg(const char *) __attribute__((noreturn));
 void invarg(const char *, const char *) __attribute__((noreturn));
 void duparg(const char *, const char *) __attribute__((noreturn));
 void duparg2(const char *, const char *) __attribute__((noreturn));
 int matches(const char *arg, const char *pattern);
-extern int inet_addr_match(const inet_prefix *a, const inet_prefix *b, int bits);
+int inet_addr_match(const inet_prefix *a, const inet_prefix *b, int bits);
 
 const char *dnet_ntop(int af, const void *addr, char *str, size_t len);
 int dnet_pton(int af, const char *src, void *addr);
@@ -137,7 +143,7 @@ const char *mpls_ntop(int af, const void *addr, char *str, size_t len);
 int mpls_pton(int af, const char *src, void *addr);
 
 extern int __iproute2_hz_internal;
-extern int __get_hz(void);
+int __get_hz(void);
 
 static __inline__ int get_hz(void)
 {
@@ -147,7 +153,7 @@ static __inline__ int get_hz(void)
 }
 
 extern int __iproute2_user_hz_internal;
-extern int __get_user_hz(void);
+int __get_user_hz(void);
 
 static __inline__ int get_user_hz(void)
 {
@@ -190,17 +196,20 @@ void print_nlmsg_timestamp(FILE *fp, const struct nlmsghdr *n);
 	__attribute__ ((format (printf, (pos_str), (pos_args))))
 #endif
 
+#define htonll(x) ((1==htonl(1)) ? (x) : ((uint64_t)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
+#define ntohll(x) ((1==ntohl(1)) ? (x) : ((uint64_t)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
+
 extern int cmdlineno;
-extern ssize_t getcmdline(char **line, size_t *len, FILE *in);
-extern int makeargs(char *line, char *argv[], int maxargs);
-extern int inet_get_addr(const char *src, __u32 *dst, struct in6_addr *dst6);
+ssize_t getcmdline(char **line, size_t *len, FILE *in);
+int makeargs(char *line, char *argv[], int maxargs);
+int inet_get_addr(const char *src, __u32 *dst, struct in6_addr *dst6);
 
 struct iplink_req;
 int iplink_parse(int argc, char **argv, struct iplink_req *req,
 		char **name, char **type, char **link, char **dev,
 		int *group, int *index);
 
-extern int do_each_netns(int (*func)(char *nsname, void *arg), void *arg,
+int do_each_netns(int (*func)(char *nsname, void *arg), void *arg,
 		bool show_label);
 
 char *int_to_str(int val, char *buf);

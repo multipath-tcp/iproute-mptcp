@@ -9,15 +9,16 @@
 
 #include <fcntl.h>
 #include <dirent.h>
+#include <limits.h>
 
 #include "utils.h"
 #include "namespace.h"
 
 static void bind_etc(const char *name)
 {
-	char etc_netns_path[MAXPATHLEN];
-	char netns_name[MAXPATHLEN];
-	char etc_name[MAXPATHLEN];
+	char etc_netns_path[PATH_MAX];
+	char netns_name[PATH_MAX];
+	char etc_name[PATH_MAX];
 	struct dirent *entry;
 	DIR *dir;
 
@@ -43,7 +44,7 @@ static void bind_etc(const char *name)
 
 int netns_switch(char *name)
 {
-	char net_path[MAXPATHLEN];
+	char net_path[PATH_MAX];
 	int netns;
 
 	snprintf(net_path, sizeof(net_path), "%s/%s", NETNS_RUN_DIR, name);
@@ -57,8 +58,10 @@ int netns_switch(char *name)
 	if (setns(netns, CLONE_NEWNET) < 0) {
 		fprintf(stderr, "setting the network namespace \"%s\" failed: %s\n",
 			name, strerror(errno));
+		close(netns);
 		return -1;
 	}
+	close(netns);
 
 	if (unshare(CLONE_NEWNS) < 0) {
 		fprintf(stderr, "unshare failed: %s\n", strerror(errno));
@@ -87,7 +90,7 @@ int netns_switch(char *name)
 
 int netns_get_fd(const char *name)
 {
-	char pathbuf[MAXPATHLEN];
+	char pathbuf[PATH_MAX];
 	const char *path, *ptr;
 
 	path = name;
