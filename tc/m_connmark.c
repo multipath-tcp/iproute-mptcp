@@ -27,10 +27,10 @@
 static void
 explain(void)
 {
-	fprintf(stderr, "Usage: ... connmark [zone ZONE] [BRANCH] [index <INDEX>]\n");
+	fprintf(stderr, "Usage: ... connmark [zone ZONE] [CONTROL] [index <INDEX>]\n");
 	fprintf(stderr, "where :\n"
 		"\tZONE is the conntrack zone\n"
-		"\tBRANCH := reclassify|pipe|drop|continue|ok\n");
+		"\tCONTROL := reclassify|pipe|drop|continue|ok\n");
 }
 
 static void
@@ -81,30 +81,8 @@ parse_connmark(struct action_util *a, int *argc_p, char ***argv_p, int tca_id,
 	}
 
 	sel.action = TC_ACT_PIPE;
-	if (argc) {
-		if (matches(*argv, "reclassify") == 0) {
-			sel.action = TC_ACT_RECLASSIFY;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "pipe") == 0) {
-			sel.action = TC_ACT_PIPE;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "drop") == 0 ||
-			   matches(*argv, "shot") == 0) {
-			sel.action = TC_ACT_SHOT;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "continue") == 0) {
-			sel.action = TC_ACT_UNSPEC;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "pass") == 0) {
-			sel.action = TC_ACT_OK;
-			argc--;
-			argv++;
-		}
-	}
+	if (argc && !action_a2n(*argv, &sel.action, false))
+		NEXT_ARG_FWD();
 
 	if (argc) {
 		if (matches(*argv, "index") == 0) {
@@ -151,6 +129,7 @@ static int print_connmark(struct action_util *au, FILE *f, struct rtattr *arg)
 	if (show_stats) {
 		if (tb[TCA_CONNMARK_TM]) {
 			struct tcf_t *tm = RTA_DATA(tb[TCA_CONNMARK_TM]);
+
 			print_tm(f, tm);
 		}
 	}

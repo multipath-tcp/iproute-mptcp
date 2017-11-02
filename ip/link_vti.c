@@ -46,31 +46,29 @@ static void usage(void)
 static int vti_parse_opt(struct link_util *lu, int argc, char **argv,
 			 struct nlmsghdr *n)
 {
+	struct ifinfomsg *ifi = (struct ifinfomsg *)(n + 1);
 	struct {
 		struct nlmsghdr n;
 		struct ifinfomsg i;
 		char buf[1024];
-	} req;
-	struct ifinfomsg *ifi = (struct ifinfomsg *)(n + 1);
+	} req = {
+		.n.nlmsg_len = NLMSG_LENGTH(sizeof(*ifi)),
+		.n.nlmsg_flags = NLM_F_REQUEST,
+		.n.nlmsg_type = RTM_GETLINK,
+		.i.ifi_family = preferred_family,
+		.i.ifi_index = ifi->ifi_index,
+	};
 	struct rtattr *tb[IFLA_MAX + 1];
 	struct rtattr *linkinfo[IFLA_INFO_MAX+1];
 	struct rtattr *vtiinfo[IFLA_VTI_MAX + 1];
-	unsigned ikey = 0;
-	unsigned okey = 0;
-	unsigned saddr = 0;
-	unsigned daddr = 0;
-	unsigned link = 0;
+	unsigned int ikey = 0;
+	unsigned int okey = 0;
+	unsigned int saddr = 0;
+	unsigned int daddr = 0;
+	unsigned int link = 0;
 	int len;
 
 	if (!(n->nlmsg_flags & NLM_F_CREATE)) {
-		memset(&req, 0, sizeof(req));
-
-		req.n.nlmsg_len = NLMSG_LENGTH(sizeof(*ifi));
-		req.n.nlmsg_flags = NLM_F_REQUEST;
-		req.n.nlmsg_type = RTM_GETLINK;
-		req.i.ifi_family = preferred_family;
-		req.i.ifi_index = ifi->ifi_index;
-
 		if (rtnl_talk(&rth, &req.n, &req.n, sizeof(req)) < 0) {
 get_failed:
 			fprintf(stderr,
@@ -114,7 +112,7 @@ get_failed:
 
 	while (argc > 0) {
 		if (!matches(*argv, "key")) {
-			unsigned uval;
+			unsigned int uval;
 
 			NEXT_ARG();
 			if (strchr(*argv, '.'))
@@ -130,7 +128,7 @@ get_failed:
 
 			ikey = okey = uval;
 		} else if (!matches(*argv, "ikey")) {
-			unsigned uval;
+			unsigned int uval;
 
 			NEXT_ARG();
 			if (strchr(*argv, '.'))
@@ -144,7 +142,7 @@ get_failed:
 			}
 			ikey = uval;
 		} else if (!matches(*argv, "okey")) {
-			unsigned uval;
+			unsigned int uval;
 
 			NEXT_ARG();
 			if (strchr(*argv, '.'))
@@ -198,7 +196,6 @@ get_failed:
 
 static void vti_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 {
-	char s1[1024];
 	char s2[64];
 	const char *local = "any";
 	const char *remote = "any";
@@ -207,25 +204,25 @@ static void vti_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		return;
 
 	if (tb[IFLA_VTI_REMOTE]) {
-		unsigned addr = *(__u32 *)RTA_DATA(tb[IFLA_VTI_REMOTE]);
+		unsigned int addr = *(__u32 *)RTA_DATA(tb[IFLA_VTI_REMOTE]);
 
 		if (addr)
-			remote = format_host(AF_INET, 4, &addr, s1, sizeof(s1));
+			remote = format_host(AF_INET, 4, &addr);
 	}
 
 	fprintf(f, "remote %s ", remote);
 
 	if (tb[IFLA_VTI_LOCAL]) {
-		unsigned addr = *(__u32 *)RTA_DATA(tb[IFLA_VTI_LOCAL]);
+		unsigned int addr = *(__u32 *)RTA_DATA(tb[IFLA_VTI_LOCAL]);
 
 		if (addr)
-			local = format_host(AF_INET, 4, &addr, s1, sizeof(s1));
+			local = format_host(AF_INET, 4, &addr);
 	}
 
 	fprintf(f, "local %s ", local);
 
 	if (tb[IFLA_VTI_LINK] && *(__u32 *)RTA_DATA(tb[IFLA_VTI_LINK])) {
-		unsigned link = *(__u32 *)RTA_DATA(tb[IFLA_VTI_LINK]);
+		unsigned int link = *(__u32 *)RTA_DATA(tb[IFLA_VTI_LINK]);
 		const char *n = if_indextoname(link, s2);
 
 		if (n)

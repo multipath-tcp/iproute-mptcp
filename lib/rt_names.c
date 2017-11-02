@@ -18,15 +18,13 @@
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <dirent.h>
+#include <limits.h>
 
 #include <asm/types.h>
 #include <linux/rtnetlink.h>
 
 #include "rt_names.h"
-
-#ifndef CONFDIR
-#define CONFDIR "/etc/iproute2"
-#endif
+#include "utils.h"
 
 #define NAME_MAX_LEN 512
 
@@ -561,8 +559,12 @@ const char *rtnl_group_n2a(int id, char *buf, int len)
 
 	for (i = 0; i < 256; i++) {
 		entry = rtnl_group_hash[i];
-		if (entry && entry->id == id)
-			return entry->name;
+
+		while (entry) {
+			if (entry->id == id)
+				return entry->name;
+			entry = entry->next;
+		}
 	}
 
 	snprintf(buf, len, "%d", id);

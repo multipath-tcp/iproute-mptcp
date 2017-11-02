@@ -49,7 +49,7 @@ static void explain(void)
 		" mtu      max packet size we create rate map for {1600}\n"
 		" prio     priority of leaf; lower are served first {0}\n"
 		" quantum  how much bytes to serve from leaf at once {use r2q}\n"
-		"\nTC HTB version %d.%d\n",HTB_TC_VER>>16,HTB_TC_VER&0xffff
+		"\nTC HTB version %d.%d\n", HTB_TC_VER>>16, HTB_TC_VER&0xffff
 		);
 }
 
@@ -63,12 +63,12 @@ static void explain1(char *arg)
 static int htb_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
 {
 	unsigned int direct_qlen = ~0U;
-	struct tc_htb_glob opt;
+	struct tc_htb_glob opt = {
+		.rate2quantum = 10,
+		.version = 3,
+	};
 	struct rtattr *tail;
-	unsigned i; char *p;
-	memset(&opt,0,sizeof(opt));
-	opt.rate2quantum = 10;
-	opt.version = 3;
+	unsigned int i; char *p;
 
 	while (argc > 0) {
 		if (matches(*argv, "r2q") == 0) {
@@ -83,8 +83,8 @@ static int htb_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nl
 			}
 		} else if (matches(*argv, "debug") == 0) {
 			NEXT_ARG(); p = *argv;
-			for (i=0; i<16; i++,p++) {
-				if (*p<'0' || *p>'3') break;
+			for (i = 0; i < 16; i++, p++) {
+				if (*p < '0' || *p > '3') break;
 				opt.debug |= (*p-'0')<<(2*i);
 			}
 		} else if (matches(*argv, "direct_qlen") == 0) {
@@ -111,19 +111,17 @@ static int htb_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nl
 
 static int htb_parse_class_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
 {
-	int ok=0;
-	struct tc_htb_opt opt;
-	__u32 rtab[256],ctab[256];
-	unsigned buffer=0,cbuffer=0;
-	int cell_log=-1,ccell_log = -1;
-	unsigned mtu;
+	int ok = 0;
+	struct tc_htb_opt opt = {};
+	__u32 rtab[256], ctab[256];
+	unsigned buffer = 0, cbuffer = 0;
+	int cell_log =  -1, ccell_log = -1;
+	unsigned int mtu = 1600; /* eth packet len */
 	unsigned short mpu = 0;
 	unsigned short overhead = 0;
 	unsigned int linklayer  = LINKLAYER_ETHERNET; /* Assume ethernet */
 	struct rtattr *tail;
 	__u64 ceil64 = 0, rate64 = 0;
-
-	memset(&opt, 0, sizeof(opt)); mtu = 1600; /* eth packet len */
 
 	while (argc > 0) {
 		if (matches(*argv, "prio") == 0) {
@@ -268,13 +266,13 @@ static int htb_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	struct rtattr *tb[TCA_HTB_MAX + 1];
 	struct tc_htb_opt *hopt;
 	struct tc_htb_glob *gopt;
-	double buffer,cbuffer;
+	double buffer, cbuffer;
 	unsigned int linklayer;
 	__u64 rate64, ceil64;
+
 	SPRINT_BUF(b1);
 	SPRINT_BUF(b2);
 	SPRINT_BUF(b3);
-	SPRINT_BUF(b4);
 
 	if (opt == NULL)
 		return 0;
@@ -311,18 +309,16 @@ static int htb_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 		cbuffer = tc_calc_xmitsize(ceil64, hopt->cbuffer);
 		linklayer = (hopt->rate.linklayer & TC_LINKLAYER_MASK);
 		if (linklayer > TC_LINKLAYER_ETHERNET || show_details)
-			fprintf(f, "linklayer %s ", sprint_linklayer(linklayer, b4));
+			fprintf(f, "linklayer %s ", sprint_linklayer(linklayer, b3));
 		if (show_details) {
-			fprintf(f, "burst %s/%u mpu %s overhead %s ",
+			fprintf(f, "burst %s/%u mpu %s ",
 				sprint_size(buffer, b1),
 				1<<hopt->rate.cell_log,
-				sprint_size(hopt->rate.mpu&0xFF, b2),
-				sprint_size((hopt->rate.mpu>>8)&0xFF, b3));
-			fprintf(f, "cburst %s/%u mpu %s overhead %s ",
+				sprint_size(hopt->rate.mpu, b2));
+			fprintf(f, "cburst %s/%u mpu %s ",
 				sprint_size(cbuffer, b1),
 				1<<hopt->ceil.cell_log,
-				sprint_size(hopt->ceil.mpu&0xFF, b2),
-				sprint_size((hopt->ceil.mpu>>8)&0xFF, b3));
+				sprint_size(hopt->ceil.mpu, b2));
 			fprintf(f, "level %d ", (int)hopt->level);
 		} else {
 			fprintf(f, "burst %s ", sprint_size(buffer, b1));
@@ -330,16 +326,16 @@ static int htb_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 		}
 		if (show_raw)
 			fprintf(f, "buffer [%08x] cbuffer [%08x] ",
-				hopt->buffer,hopt->cbuffer);
+				hopt->buffer, hopt->cbuffer);
 	}
 	if (tb[TCA_HTB_INIT]) {
 		gopt = RTA_DATA(tb[TCA_HTB_INIT]);
 		if (RTA_PAYLOAD(tb[TCA_HTB_INIT])  < sizeof(*gopt)) return -1;
 
 		fprintf(f, "r2q %d default %x direct_packets_stat %u",
-			gopt->rate2quantum,gopt->defcls,gopt->direct_pkts);
+			gopt->rate2quantum, gopt->defcls, gopt->direct_pkts);
 		if (show_details)
-			fprintf(f," ver %d.%d",gopt->version >> 16,gopt->version & 0xffff);
+			fprintf(f, " ver %d.%d", gopt->version >> 16, gopt->version & 0xffff);
 	}
 	if (tb[TCA_HTB_DIRECT_QLEN] &&
 	    RTA_PAYLOAD(tb[TCA_HTB_DIRECT_QLEN]) >= sizeof(__u32)) {
@@ -353,6 +349,7 @@ static int htb_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 static int htb_print_xstats(struct qdisc_util *qu, FILE *f, struct rtattr *xstats)
 {
 	struct tc_htb_xstats *st;
+
 	if (xstats == NULL)
 		return 0;
 
@@ -361,16 +358,16 @@ static int htb_print_xstats(struct qdisc_util *qu, FILE *f, struct rtattr *xstat
 
 	st = RTA_DATA(xstats);
 	fprintf(f, " lended: %u borrowed: %u giants: %u\n",
-		st->lends,st->borrows,st->giants);
-	fprintf(f, " tokens: %d ctokens: %d\n", st->tokens,st->ctokens);
+		st->lends, st->borrows, st->giants);
+	fprintf(f, " tokens: %d ctokens: %d\n", st->tokens, st->ctokens);
 	return 0;
 }
 
 struct qdisc_util htb_qdisc_util = {
-	.id 		= "htb",
+	.id		= "htb",
 	.parse_qopt	= htb_parse_opt,
 	.print_qopt	= htb_print_opt,
-	.print_xstats 	= htb_print_xstats,
+	.print_xstats	= htb_print_xstats,
 	.parse_copt	= htb_parse_class_opt,
 	.print_copt	= htb_print_opt,
 };

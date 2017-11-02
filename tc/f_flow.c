@@ -30,8 +30,8 @@ static void explain(void)
 "                 [ action ACTION_SPEC ]\n"
 "\n"
 "KEY-LIST := [ KEY-LIST , ] KEY\n"
-"KEY      := [ src | dst | proto | proto-src | proto-dst | iif | priority | \n"
-"              mark | nfct | nfct-src | nfct-dst | nfct-proto-src | \n"
+"KEY      := [ src | dst | proto | proto-src | proto-dst | iif | priority |\n"
+"              mark | nfct | nfct-src | nfct-dst | nfct-proto-src |\n"
 "              nfct-proto-dst | rt-classid | sk-uid | sk-gid |\n"
 "              vlan-tag | rxhash ]\n"
 "OPS      := [ or NUM | and NUM | xor NUM | rshift NUM | addend NUM ]\n"
@@ -133,15 +133,12 @@ out:
 static int flow_parse_opt(struct filter_util *fu, char *handle,
 			  int argc, char **argv, struct nlmsghdr *n)
 {
-	struct tc_police tp;
 	struct tcmsg *t = NLMSG_DATA(n);
 	struct rtattr *tail;
 	__u32 mask = ~0U, xor = 0;
 	__u32 keys = 0, nkeys = 0;
 	__u32 mode = FLOW_MODE_MAP;
 	__u32 tmp;
-
-	memset(&tp, 0, sizeof(tp));
 
 	if (handle) {
 		if (get_u32(&t->tcm_handle, handle, 0)) {
@@ -270,6 +267,7 @@ static int flow_print_opt(struct filter_util *fu, FILE *f, struct rtattr *opt,
 			  __u32 handle)
 {
 	struct rtattr *tb[TCA_FLOW_MAX+1];
+
 	SPRINT_BUF(b1);
 	unsigned int i;
 	__u32 mask = ~0, val = 0;

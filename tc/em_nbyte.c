@@ -44,12 +44,10 @@ static int nbyte_parse_eopt(struct nlmsghdr *n, struct tcf_ematch_hdr *hdr,
 	struct bstr *needle = args;
 	unsigned long offset = 0, layer = TCF_LAYER_NETWORK;
 	int offset_present = 0;
-	struct tcf_em_nbyte nb;
-
-	memset(&nb, 0, sizeof(nb));
+	struct tcf_em_nbyte nb = {};
 
 #define PARSE_ERR(CARG, FMT, ARGS...) \
-	em_parse_error(EINVAL, args, CARG, &nbyte_ematch_util, FMT ,##ARGS)
+	em_parse_error(EINVAL, args, CARG, &nbyte_ematch_util, FMT, ##ARGS)
 
 	if (args == NULL)
 		return PARSE_ERR(args, "nbyte: missing arguments");

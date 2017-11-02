@@ -41,7 +41,7 @@ usage(void)
 }
 
 static int
-parse_nat_args(int *argc_p, char ***argv_p,struct tc_nat *sel)
+parse_nat_args(int *argc_p, char ***argv_p, struct tc_nat *sel)
 {
 	int argc = *argc_p;
 	char **argv = *argv_p;
@@ -84,20 +84,18 @@ bad_val:
 static int
 parse_nat(struct action_util *a, int *argc_p, char ***argv_p, int tca_id, struct nlmsghdr *n)
 {
-	struct tc_nat sel;
+	struct tc_nat sel = {};
 
 	int argc = *argc_p;
 	char **argv = *argv_p;
 	int ok = 0;
 	struct rtattr *tail;
 
-	memset(&sel, 0, sizeof(sel));
-
 	while (argc > 0) {
 		if (matches(*argv, "nat") == 0) {
 			NEXT_ARG();
 			if (parse_nat_args(&argc, &argv, &sel)) {
-				fprintf(stderr, "Illegal nat construct (%s) \n",
+				fprintf(stderr, "Illegal nat construct (%s)\n",
 					*argv);
 				explain();
 				return -1;
@@ -117,30 +115,8 @@ parse_nat(struct action_util *a, int *argc_p, char ***argv_p, int tca_id, struct
 		return -1;
 	}
 
-	if (argc) {
-		if (matches(*argv, "reclassify") == 0) {
-			sel.action = TC_ACT_RECLASSIFY;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "pipe") == 0) {
-			sel.action = TC_ACT_PIPE;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "drop") == 0 ||
-			matches(*argv, "shot") == 0) {
-			sel.action = TC_ACT_SHOT;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "continue") == 0) {
-			sel.action = TC_ACT_UNSPEC;
-			argc--;
-			argv++;
-		} else if (matches(*argv, "pass") == 0) {
-			sel.action = TC_ACT_OK;
-			argc--;
-			argv++;
-		}
-	}
+	if (argc && !action_a2n(*argv, &sel.action, false))
+		NEXT_ARG_FWD();
 
 	if (argc) {
 		if (matches(*argv, "index") == 0) {
@@ -165,13 +141,13 @@ parse_nat(struct action_util *a, int *argc_p, char ***argv_p, int tca_id, struct
 }
 
 static int
-print_nat(struct action_util *au,FILE * f, struct rtattr *arg)
+print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 {
 	struct tc_nat *sel;
 	struct rtattr *tb[TCA_NAT_MAX + 1];
 	char buf1[256];
 	char buf2[256];
-	SPRINT_BUF(buf3);
+
 	int len;
 
 	if (arg == NULL)
@@ -190,15 +166,16 @@ print_nat(struct action_util *au,FILE * f, struct rtattr *arg)
 
 	fprintf(f, " nat %s %s/%d %s %s", sel->flags & TCA_NAT_FLAG_EGRESS ?
 					  "egress" : "ingress",
-		format_host(AF_INET, 4, &sel->old_addr, buf1, sizeof(buf1)),
+		format_host_r(AF_INET, 4, &sel->old_addr, buf1, sizeof(buf1)),
 		len,
-		format_host(AF_INET, 4, &sel->new_addr, buf2, sizeof(buf2)),
-		action_n2a(sel->action, buf3, sizeof (buf3)));
+		format_host_r(AF_INET, 4, &sel->new_addr, buf2, sizeof(buf2)),
+		action_n2a(sel->action));
 
 	if (show_stats) {
 		if (tb[TCA_NAT_TM]) {
 			struct tcf_t *tm = RTA_DATA(tb[TCA_NAT_TM]);
-			print_tm(f,tm);
+
+			print_tm(f, tm);
 		}
 	}
 

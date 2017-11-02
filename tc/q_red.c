@@ -35,17 +35,15 @@ static void explain(void)
 
 static int red_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
 {
-	struct tc_red_qopt opt;
-	unsigned burst = 0;
-	unsigned avpkt = 0;
+	struct tc_red_qopt opt = {};
+	unsigned int burst = 0;
+	unsigned int avpkt = 0;
 	double probability = 0.02;
-	unsigned rate = 0;
+	unsigned int rate = 0;
 	int parm;
 	__u8 sbuf[256];
 	__u32 max_P;
 	struct rtattr *tail;
-
-	memset(&opt, 0, sizeof(opt));
 
 	while (argc > 0) {
 		if (strcmp(*argv, "limit") == 0) {
@@ -160,6 +158,7 @@ static int red_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	struct rtattr *tb[TCA_RED_MAX + 1];
 	struct tc_red_qopt *qopt;
 	__u32 max_P = 0;
+
 	SPRINT_BUF(b1);
 	SPRINT_BUF(b2);
 	SPRINT_BUF(b3);

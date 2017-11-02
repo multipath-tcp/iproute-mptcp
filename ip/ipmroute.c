@@ -44,8 +44,7 @@ static void usage(void)
 	exit(-1);
 }
 
-struct rtfilter
-{
+struct rtfilter {
 	int tb;
 	int af;
 	int iif;
@@ -55,12 +54,12 @@ struct rtfilter
 
 int print_mroute(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 {
-	FILE *fp = (FILE*)arg;
+	FILE *fp = (FILE *)arg;
 	struct rtmsg *r = NLMSG_DATA(n);
 	int len = n->nlmsg_len;
-	struct rtattr * tb[RTA_MAX+1];
-	char abuf[256];
+	struct rtattr *tb[RTA_MAX+1];
 	char obuf[256];
+
 	SPRINT_BUF(b1);
 	__u32 table;
 	int iif = 0;
@@ -90,7 +89,7 @@ int print_mroute(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		return 0;
 
 	if (tb[RTA_IIF])
-		iif = *(int*)RTA_DATA(tb[RTA_IIF]);
+		iif = *(int *)RTA_DATA(tb[RTA_IIF]);
 	if (filter.iif && filter.iif != iif)
 		return 0;
 
@@ -98,44 +97,34 @@ int print_mroute(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		return 0;
 
 	if (tb[RTA_DST] && filter.mdst.bitlen > 0) {
-		inet_prefix dst;
+		inet_prefix dst = { .family = r->rtm_family };
 
-		memset(&dst, 0, sizeof(dst));
-		dst.family = r->rtm_family;
 		memcpy(&dst.data, RTA_DATA(tb[RTA_DST]), RTA_PAYLOAD(tb[RTA_DST]));
 		if (inet_addr_match(&dst, &filter.mdst, filter.mdst.bitlen))
 			return 0;
 	}
 
 	if (tb[RTA_SRC] && filter.msrc.bitlen > 0) {
-		inet_prefix src;
+		inet_prefix src = { .family = r->rtm_family };
 
-		memset(&src, 0, sizeof(src));
-		src.family = r->rtm_family;
 		memcpy(&src.data, RTA_DATA(tb[RTA_SRC]), RTA_PAYLOAD(tb[RTA_SRC]));
 		if (inet_addr_match(&src, &filter.msrc, filter.msrc.bitlen))
 			return 0;
 	}
 
-	family = r->rtm_family == RTNL_FAMILY_IPMR ? AF_INET : AF_INET6;
+	family = get_real_family(r->rtm_type, r->rtm_family);
 
 	if (n->nlmsg_type == RTM_DELROUTE)
 		fprintf(fp, "Deleted ");
 
 	if (tb[RTA_SRC])
 		len = snprintf(obuf, sizeof(obuf),
-			       "(%s, ", rt_addr_n2a(family,
-						    RTA_PAYLOAD(tb[RTA_SRC]),
-						    RTA_DATA(tb[RTA_SRC]),
-						    abuf, sizeof(abuf)));
+			       "(%s, ", rt_addr_n2a_rta(family, tb[RTA_SRC]));
 	else
 		len = sprintf(obuf, "(unknown, ");
 	if (tb[RTA_DST])
 		snprintf(obuf + len, sizeof(obuf) - len,
-			 "%s)", rt_addr_n2a(family,
-					    RTA_PAYLOAD(tb[RTA_DST]),
-					    RTA_DATA(tb[RTA_DST]),
-					    abuf, sizeof(abuf)));
+			 "%s)", rt_addr_n2a_rta(family, tb[RTA_DST]));
 	else
 		snprintf(obuf + len, sizeof(obuf) - len, "unknown) ");
 
@@ -180,6 +169,13 @@ int print_mroute(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			fprintf(fp, ", %"PRIu64" arrived on wrong iif.",
 				(uint64_t)mfcs->mfcs_wrong_if);
 	}
+	if (show_stats && tb[RTA_EXPIRES]) {
+		struct timeval tv;
+
+		__jiffies_to_tv(&tv, rta_getattr_u64(tb[RTA_EXPIRES]));
+		fprintf(fp, ", Age %4i.%.2i", (int)tv.tv_sec,
+			(int)tv.tv_usec/10000);
+	}
 	fprintf(fp, "\n");
 	fflush(fp);
 	return 0;
@@ -212,6 +208,7 @@ static int mroute_list(int argc, char **argv)
 	while (argc > 0) {
 		if (matches(*argv, "table") == 0) {
 			__u32 tid;
+
 			NEXT_ARG();
 			if (rtnl_rttable_a2n(&tid, *argv)) {
 				if (strcmp(*argv, "all") == 0) {

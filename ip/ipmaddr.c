@@ -50,6 +50,7 @@ static int parse_hex(char *str, unsigned char *addr, size_t size)
 
 	while (*str && (len < 2 * size)) {
 		int tmp;
+
 		if (str[1] == 0)
 			return -1;
 		if (sscanf(str, "%02x", &tmp) != 1)
@@ -61,8 +62,7 @@ static int parse_hex(char *str, unsigned char *addr, size_t size)
 	return len;
 }
 
-struct ma_info
-{
+struct ma_info {
 	struct ma_info *next;
 	int		index;
 	int		users;
@@ -93,19 +93,16 @@ static void read_dev_mcast(struct ma_info **result_p)
 
 	while (fgets(buf, sizeof(buf), fp)) {
 		char hexa[256];
-		struct ma_info m;
+		struct ma_info m = { .addr.family = AF_PACKET };
 		int len;
 		int st;
 
-		memset(&m, 0, sizeof(m));
 		sscanf(buf, "%d%s%d%d%s", &m.index, m.name, &m.users, &st,
 		       hexa);
 		if (filter.dev && strcmp(filter.dev, m.name))
 			continue;
 
-		m.addr.family = AF_PACKET;
-
-		len = parse_hex(hexa, (unsigned char*)&m.addr.data, sizeof (m.addr.data));
+		len = parse_hex(hexa, (unsigned char *)&m.addr.data, sizeof(m.addr.data));
 		if (len >= 0) {
 			struct ma_info *ma = malloc(sizeof(m));
 
@@ -122,21 +119,20 @@ static void read_dev_mcast(struct ma_info **result_p)
 
 static void read_igmp(struct ma_info **result_p)
 {
-	struct ma_info m;
+	struct ma_info m = {
+		.addr.family = AF_INET,
+		.addr.bitlen = 32,
+		.addr.bytelen = 4,
+	};
 	char buf[256];
 	FILE *fp = fopen("/proc/net/igmp", "r");
 
 	if (!fp)
 		return;
-	memset(&m, 0, sizeof(m));
 	if (!fgets(buf, sizeof(buf), fp)) {
 		fclose(fp);
 		return;
 	}
-
-	m.addr.family = AF_INET;
-	m.addr.bitlen = 32;
-	m.addr.bytelen = 4;
 
 	while (fgets(buf, sizeof(buf), fp)) {
 		struct ma_info *ma;
@@ -149,7 +145,7 @@ static void read_igmp(struct ma_info **result_p)
 		if (filter.dev && strcmp(filter.dev, m.name))
 			continue;
 
-		sscanf(buf, "%08x%d", (__u32*)&m.addr.data, &m.users);
+		sscanf(buf, "%08x%d", (__u32 *)&m.addr.data, &m.users);
 
 		ma = malloc(sizeof(m));
 		memcpy(ma, &m, sizeof(m));
@@ -169,18 +165,15 @@ static void read_igmp6(struct ma_info **result_p)
 
 	while (fgets(buf, sizeof(buf), fp)) {
 		char hexa[256];
-		struct ma_info m;
+		struct ma_info m = { .addr.family = AF_INET6 };
 		int len;
 
-		memset(&m, 0, sizeof(m));
 		sscanf(buf, "%d%s%s%d", &m.index, m.name, hexa, &m.users);
 
 		if (filter.dev && strcmp(filter.dev, m.name))
 			continue;
 
-		m.addr.family = AF_INET6;
-
-		len = parse_hex(hexa, (unsigned char*)&m.addr.data, sizeof (m.addr.data));
+		len = parse_hex(hexa, (unsigned char *)&m.addr.data, sizeof(m.addr.data));
 		if (len >= 0) {
 			struct ma_info *ma = malloc(sizeof(m));
 
@@ -200,12 +193,11 @@ static void print_maddr(FILE *fp, struct ma_info *list)
 
 	if (list->addr.family == AF_PACKET) {
 		SPRINT_BUF(b1);
-		fprintf(fp, "link  %s", ll_addr_n2a((unsigned char*)list->addr.data,
+		fprintf(fp, "link  %s", ll_addr_n2a((unsigned char *)list->addr.data,
 						    list->addr.bytelen, 0,
 						    b1, sizeof(b1)));
 	} else {
-		char abuf[256];
-		switch(list->addr.family) {
+		switch (list->addr.family) {
 		case AF_INET:
 			fprintf(fp, "inet  ");
 			break;
@@ -218,9 +210,7 @@ static void print_maddr(FILE *fp, struct ma_info *list)
 		}
 		fprintf(fp, "%s",
 			format_host(list->addr.family,
-				    -1,
-				    list->addr.data,
-				    abuf, sizeof(abuf)));
+				    -1, list->addr.data));
 	}
 	if (list->users != 1)
 		fprintf(fp, " users %d", list->users);
@@ -256,8 +246,7 @@ static int multiaddr_list(int argc, char **argv)
 		if (1) {
 			if (strcmp(*argv, "dev") == 0) {
 				NEXT_ARG();
-			}
-			else if (matches(*argv, "help") == 0)
+			} else if (matches(*argv, "help") == 0)
 				usage();
 			if (filter.dev)
 				duparg2("dev", *argv);
@@ -278,10 +267,8 @@ static int multiaddr_list(int argc, char **argv)
 
 static int multiaddr_modify(int cmd, int argc, char **argv)
 {
-	struct ifreq ifr;
+	struct ifreq ifr = {};
 	int fd;
-
-	memset(&ifr, 0, sizeof(ifr));
 
 	if (cmd == RTM_NEWADDR)
 		cmd = SIOCADDMULTI;
@@ -320,7 +307,7 @@ static int multiaddr_modify(int cmd, int argc, char **argv)
 		perror("Cannot create socket");
 		exit(1);
 	}
-	if (ioctl(fd, cmd, (char*)&ifr) != 0) {
+	if (ioctl(fd, cmd, (char *)&ifr) != 0) {
 		perror("ioctl");
 		exit(1);
 	}

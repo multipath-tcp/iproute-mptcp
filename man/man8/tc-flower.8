@@ -18,10 +18,16 @@ flower \- flow based traffic control filter
 .ti -8
 .IR MATCH " := { "
 .B indev
-.IR ifname " | { "
+.IR ifname " | "
+.BR skip_sw " | " skip_hw
+.R " | { "
 .BR dst_mac " | " src_mac " } "
 .IR mac_address " | "
-.BR eth_type " { " ipv4 " | " ipv6 " | "
+.B vlan_id
+.IR VID " | "
+.B vlan_prio
+.IR PRIORITY " | "
+.BR vlan_eth_type " { " ipv4 " | " ipv6 " | "
 .IR ETH_TYPE " } | "
 .BR ip_proto " { " tcp " | " udp " | "
 .IR IP_PROTO " } | { "
@@ -55,12 +61,29 @@ is the name of an interface which must exist at the time of
 .B tc
 invocation.
 .TP
+.BI skip_sw
+Do not process filter by software. If hardware has no offload support for this
+filter, or TC offload is not enabled for the interface, operation will fail.
+.TP
+.BI skip_hw
+Do not process filter by hardware.
+.TP
 .BI dst_mac " mac_address"
 .TQ
 .BI src_mac " mac_address"
 Match on source or destination MAC address.
 .TP
-.BI eth_type " ETH_TYPE"
+.BI vlan_id " VID"
+Match on vlan tag id.
+.I VID
+is an unsigned 12bit value in decimal format.
+.TP
+.BI vlan_prio " priority"
+Match on vlan tag priority.
+.I PRIORITY
+is an unsigned 3bit value in decimal format.
+.TP
+.BI vlan_eth_type " VLAN_ETH_TYPE"
 Match on layer three protocol.
 .I ETH_TYPE
 may be either

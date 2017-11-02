@@ -26,10 +26,19 @@ static char *argv_default[] = { BPF_DEFAULT_CMD, NULL };
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: ... bpf [ import UDS_FILE ] [ run CMD ]\n\n");
+	fprintf(stderr, "Usage: ... bpf [ import UDS_FILE ] [ run CMD ]\n");
+	fprintf(stderr, "       ... bpf [ debug ]\n");
+	fprintf(stderr, "       ... bpf [ graft MAP_FILE ] [ key KEY ]\n");
+	fprintf(stderr, "          `... [ object-file OBJ_FILE ] [ type TYPE ] [ section NAME ] [ verbose ]\n");
+	fprintf(stderr, "          `... [ object-pinned PROG_FILE ]\n");
+	fprintf(stderr, "\n");
 	fprintf(stderr, "Where UDS_FILE provides the name of a unix domain socket file\n");
 	fprintf(stderr, "to import eBPF maps and the optional CMD denotes the command\n");
 	fprintf(stderr, "to be executed (default: \'%s\').\n", BPF_DEFAULT_CMD);
+	fprintf(stderr, "Where MAP_FILE points to a pinned map, OBJ_FILE to an object file\n");
+	fprintf(stderr, "and PROG_FILE to a pinned program. TYPE can be {cls, act}, where\n");
+	fprintf(stderr, "\'cls\' is default. KEY is optional and can be inferred from the\n");
+	fprintf(stderr, "section name, otherwise it needs to be provided.\n");
 }
 
 static int bpf_num_env_entries(void)
@@ -47,8 +56,8 @@ static int parse_bpf(struct exec_util *eu, int argc, char **argv)
 	char **argv_run = argv_default, **envp_run, *tmp;
 	int ret, i, env_old, env_num, env_map;
 	const char *bpf_uds_name = NULL;
-	int fds[BPF_SCM_MAX_FDS];
-	struct bpf_map_aux aux;
+	int fds[BPF_SCM_MAX_FDS] = {};
+	struct bpf_map_aux aux = {};
 
 	if (argc == 0)
 		return 0;
@@ -58,17 +67,40 @@ static int parse_bpf(struct exec_util *eu, int argc, char **argv)
 			NEXT_ARG();
 			argv_run = argv;
 			break;
-		} else if (matches(*argv, "import") == 0 ||
-			   matches(*argv, "imp") == 0) {
+		} else if (matches(*argv, "import") == 0) {
 			NEXT_ARG();
 			bpf_uds_name = *argv;
+		} else if (matches(*argv, "debug") == 0 ||
+			   matches(*argv, "dbg") == 0) {
+			if (bpf_trace_pipe())
+				fprintf(stderr,
+					"No trace pipe, tracefs not mounted?\n");
+			return -1;
+		} else if (matches(*argv, "graft") == 0) {
+			const char *bpf_map_path;
+			bool has_key = false;
+			uint32_t key;
+
+			NEXT_ARG();
+			bpf_map_path = *argv;
+			NEXT_ARG();
+			if (matches(*argv, "key") == 0) {
+				NEXT_ARG();
+				if (get_unsigned(&key, *argv, 0)) {
+					fprintf(stderr, "Illegal \"key\"\n");
+					return -1;
+				}
+				has_key = true;
+				NEXT_ARG();
+			}
+			return bpf_graft_map(bpf_map_path, has_key ?
+					     &key : NULL, argc, argv);
 		} else {
 			explain();
 			return -1;
 		}
 
-		argc--;
-		argv++;
+		NEXT_ARG_FWD();
 	}
 
 	if (!bpf_uds_name) {
@@ -82,9 +114,6 @@ static int parse_bpf(struct exec_util *eu, int argc, char **argv)
 		explain();
 		return -1;
 	}
-
-	memset(fds, 0, sizeof(fds));
-	memset(&aux, 0, sizeof(aux));
 
 	ret = bpf_recv_map_fds(bpf_uds_name, fds, &aux, ARRAY_SIZE(fds));
 	if (ret < 0) {
@@ -142,6 +171,6 @@ err:
 }
 
 struct exec_util bpf_exec_util = {
-	.id = "bpf",
-	.parse_eopt = parse_bpf,
+	.id		= "bpf",
+	.parse_eopt	= parse_bpf,
 };

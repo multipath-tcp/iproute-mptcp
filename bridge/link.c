@@ -25,17 +25,17 @@ static const char *port_states[] = {
 	[BR_STATE_BLOCKING] = "blocking",
 };
 
-extern char *if_indextoname (unsigned int __ifindex, char *__ifname);
+extern char *if_indextoname(unsigned int __ifindex, char *__ifname);
 
-static void print_link_flags(FILE *fp, unsigned flags)
+static void print_link_flags(FILE *fp, unsigned int flags)
 {
 	fprintf(fp, "<");
 	if (flags & IFF_UP && !(flags & IFF_RUNNING))
 		fprintf(fp, "NO-CARRIER%s", flags ? "," : "");
 	flags &= ~IFF_RUNNING;
 #define _PF(f) if (flags&IFF_##f) { \
-                  flags &= ~IFF_##f ; \
-                  fprintf(fp, #f "%s", flags ? "," : ""); }
+		  flags &= ~IFF_##f ; \
+		  fprintf(fp, #f "%s", flags ? "," : ""); }
 	_PF(LOOPBACK);
 	_PF(BROADCAST);
 	_PF(POINTOPOINT);
@@ -55,7 +55,7 @@ static void print_link_flags(FILE *fp, unsigned flags)
 	_PF(DORMANT);
 	_PF(ECHO);
 #undef _PF
-        if (flags)
+	if (flags)
 		fprintf(fp, "%x", flags);
 	fprintf(fp, "> ");
 }
@@ -69,7 +69,7 @@ static const char *hw_mode[] = {"VEB", "VEPA"};
 
 static void print_operstate(FILE *f, __u8 state)
 {
-	if (state >= sizeof(oper_states)/sizeof(oper_states[0]))
+	if (state >= ARRAY_SIZE(oper_states))
 		fprintf(f, "state %#x ", state);
 	else
 		fprintf(f, "state %s ", oper_states[state]);
@@ -90,7 +90,7 @@ static void print_onoff(FILE *f, char *flag, __u8 val)
 
 static void print_hwmode(FILE *f, __u16 mode)
 {
-	if (mode >= sizeof(hw_mode)/sizeof(hw_mode[0]))
+	if (mode >= ARRAY_SIZE(hw_mode))
 		fprintf(f, "hwmode %#hx ", mode);
 	else
 		fprintf(f, "hwmode %s ", hw_mode[mode]);
@@ -102,14 +102,14 @@ int print_linkinfo(const struct sockaddr_nl *who,
 	FILE *fp = arg;
 	int len = n->nlmsg_len;
 	struct ifinfomsg *ifi = NLMSG_DATA(n);
-	struct rtattr * tb[IFLA_MAX+1];
+	struct rtattr *tb[IFLA_MAX+1];
 	char b1[IFNAMSIZ];
 
 	len -= NLMSG_LENGTH(sizeof(*ifi));
 	if (len < 0) {
 		fprintf(stderr, "Message too short!\n");
 		return -1;
-        }
+	}
 
 	if (!(ifi->ifi_family == AF_BRIDGE || ifi->ifi_family == AF_UNSPEC))
 		return 0;
@@ -136,6 +136,7 @@ int print_linkinfo(const struct sockaddr_nl *who,
 	if (tb[IFLA_LINK]) {
 		SPRINT_BUF(b1);
 		int iflink = rta_getattr_u32(tb[IFLA_LINK]);
+
 		if (iflink == 0)
 			fprintf(fp, "@NONE: ");
 		else
@@ -194,6 +195,9 @@ int print_linkinfo(const struct sockaddr_nl *who,
 				if (prtb[IFLA_BRPORT_UNICAST_FLOOD])
 					print_onoff(fp, "flood",
 						    rta_getattr_u8(prtb[IFLA_BRPORT_UNICAST_FLOOD]));
+				if (prtb[IFLA_BRPORT_MCAST_FLOOD])
+					print_onoff(fp, "mcast_flood",
+						    rta_getattr_u8(prtb[IFLA_BRPORT_MCAST_FLOOD]));
 			}
 		} else
 			print_portstate(fp, rta_getattr_u8(tb[IFLA_PROTINFO]));
@@ -220,12 +224,13 @@ static void usage(void)
 {
 	fprintf(stderr, "Usage: bridge link set dev DEV [ cost COST ] [ priority PRIO ] [ state STATE ]\n");
 	fprintf(stderr, "                               [ guard {on | off} ]\n");
-	fprintf(stderr, "                               [ hairpin {on | off} ] \n");
+	fprintf(stderr, "                               [ hairpin {on | off} ]\n");
 	fprintf(stderr, "                               [ fastleave {on | off} ]\n");
 	fprintf(stderr,	"                               [ root_block {on | off} ]\n");
 	fprintf(stderr,	"                               [ learning {on | off} ]\n");
 	fprintf(stderr,	"                               [ learning_sync {on | off} ]\n");
 	fprintf(stderr,	"                               [ flood {on | off} ]\n");
+	fprintf(stderr,	"                               [ mcast_flood {on | off} ]\n");
 	fprintf(stderr, "                               [ hwmode {vepa | veb} ]\n");
 	fprintf(stderr, "                               [ self ] [ master ]\n");
 	fprintf(stderr, "       bridge link show [dev DEV]\n");
@@ -254,11 +259,17 @@ static int brlink_modify(int argc, char **argv)
 		struct nlmsghdr  n;
 		struct ifinfomsg ifm;
 		char             buf[512];
-	} req;
+	} req = {
+		.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
+		.n.nlmsg_flags = NLM_F_REQUEST,
+		.n.nlmsg_type = RTM_SETLINK,
+		.ifm.ifi_family = PF_BRIDGE,
+	};
 	char *d = NULL;
 	__s8 learning = -1;
 	__s8 learning_sync = -1;
 	__s8 flood = -1;
+	__s8 mcast_flood = -1;
 	__s8 hairpin = -1;
 	__s8 bpdu_guard = -1;
 	__s8 fast_leave = -1;
@@ -269,13 +280,6 @@ static int brlink_modify(int argc, char **argv)
 	__s16 mode = -1;
 	__u16 flags = 0;
 	struct rtattr *nest;
-
-	memset(&req, 0, sizeof(req));
-
-	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
-	req.n.nlmsg_flags = NLM_F_REQUEST;
-	req.n.nlmsg_type = RTM_SETLINK;
-	req.ifm.ifi_family = PF_BRIDGE;
 
 	while (argc > 0) {
 		if (strcmp(*argv, "dev") == 0) {
@@ -309,6 +313,10 @@ static int brlink_modify(int argc, char **argv)
 			NEXT_ARG();
 			if (!on_off("flood", &flood, *argv))
 				return -1;
+		} else if (strcmp(*argv, "mcast_flood") == 0) {
+			NEXT_ARG();
+			if (!on_off("mcast_flood", &mcast_flood, *argv))
+				return -1;
 		} else if (strcmp(*argv, "cost") == 0) {
 			NEXT_ARG();
 			cost = atoi(*argv);
@@ -318,7 +326,8 @@ static int brlink_modify(int argc, char **argv)
 		} else if (strcmp(*argv, "state") == 0) {
 			NEXT_ARG();
 			char *endptr;
-			size_t nstates = sizeof(port_states) / sizeof(*port_states);
+			size_t nstates = ARRAY_SIZE(port_states);
+
 			state = strtol(*argv, &endptr, 10);
 			if (!(**argv != '\0' && *endptr == '\0')) {
 				for (state = 0; state < nstates; state++)
@@ -339,8 +348,7 @@ static int brlink_modify(int argc, char **argv)
 				mode = BRIDGE_MODE_VEB;
 			else {
 				fprintf(stderr,
-					"Mode argument must be \"vepa\" or "
-					"\"veb\".\n");
+					"Mode argument must be \"vepa\" or \"veb\".\n");
 				return -1;
 			}
 		} else if (strcmp(*argv, "self") == 0) {
@@ -381,6 +389,9 @@ static int brlink_modify(int argc, char **argv)
 		addattr8(&req.n, sizeof(req), IFLA_BRPORT_PROTECT, root_block);
 	if (flood >= 0)
 		addattr8(&req.n, sizeof(req), IFLA_BRPORT_UNICAST_FLOOD, flood);
+	if (mcast_flood >= 0)
+		addattr8(&req.n, sizeof(req), IFLA_BRPORT_MCAST_FLOOD,
+			 mcast_flood);
 	if (learning >= 0)
 		addattr8(&req.n, sizeof(req), IFLA_BRPORT_LEARNING, learning);
 	if (learning_sync >= 0)

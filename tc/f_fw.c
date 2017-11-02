@@ -25,24 +25,31 @@
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: ... fw [ classid CLASSID ] [ action ACTION_SPEC ]\n");
-	fprintf(stderr, "       ACTION_SPEC := ... look at individual actions\n");
-	fprintf(stderr, "       CLASSID := X:Y\n");
-	fprintf(stderr, "\nNOTE: CLASSID is parsed as hexadecimal input.\n");
+	fprintf(stderr,
+		"Usage: ... fw [ classid CLASSID ] [ indev DEV ] [ action ACTION_SPEC ]\n");
+	fprintf(stderr,
+		"       CLASSID := Push matching packets to the class identified by CLASSID with format X:Y\n");
+	fprintf(stderr,
+		"                  CLASSID is parsed as hexadecimal input.\n");
+	fprintf(stderr,
+		"       DEV := specify device for incoming device classification.\n");
+	fprintf(stderr,
+		"       ACTION_SPEC := Apply an action on matching packets.\n");
+	fprintf(stderr,
+		"       NOTE: handle is represented as HANDLE[/FWMASK].\n");
+	fprintf(stderr, "             FWMASK is 0xffffffff by default.\n");
 }
 
 static int fw_parse_opt(struct filter_util *qu, char *handle, int argc, char **argv, struct nlmsghdr *n)
 {
-	struct tc_police tp;
 	struct tcmsg *t = NLMSG_DATA(n);
 	struct rtattr *tail;
 	__u32 mask = 0;
 	int mask_set = 0;
 
-	memset(&tp, 0, sizeof(tp));
-
 	if (handle) {
 		char *slash;
+
 		if ((slash = strchr(handle, '/')) != NULL)
 			*slash = '\0';
 		if (get_u32(&t->tcm_handle, handle, 0)) {
@@ -70,7 +77,8 @@ static int fw_parse_opt(struct filter_util *qu, char *handle, int argc, char **a
 	while (argc > 0) {
 		if (matches(*argv, "classid") == 0 ||
 		    matches(*argv, "flowid") == 0) {
-			unsigned handle;
+			unsigned int handle;
+
 			NEXT_ARG();
 			if (get_tc_classid(&handle, *argv)) {
 				fprintf(stderr, "Illegal \"classid\"\n");
@@ -92,15 +100,15 @@ static int fw_parse_opt(struct filter_util *qu, char *handle, int argc, char **a
 			}
 			continue;
 		} else if (strcmp(*argv, "indev") == 0) {
-			char d[IFNAMSIZ+1];
-			memset(d, 0, sizeof (d));
+			char d[IFNAMSIZ+1] = {};
+
 			argc--;
 			argv++;
 			if (argc < 1) {
 				fprintf(stderr, "Illegal indev\n");
 				return -1;
 			}
-			strncpy(d, *argv, sizeof (d) - 1);
+			strncpy(d, *argv, sizeof(d) - 1);
 			addattr_l(n, MAX_MSG, TCA_FW_INDEV, d, strlen(d) + 1);
 		} else if (strcmp(*argv, "help") == 0) {
 			explain();
@@ -127,9 +135,10 @@ static int fw_print_opt(struct filter_util *qu, FILE *f, struct rtattr *opt, __u
 
 	if (handle || tb[TCA_FW_MASK]) {
 		__u32 mark = 0, mask = 0;
-		if(handle)
+
+		if (handle)
 			mark = handle;
-		if(tb[TCA_FW_MASK] &&
+		if (tb[TCA_FW_MASK] &&
 		    (mask = rta_getattr_u32(tb[TCA_FW_MASK])) != 0xFFFFFFFF)
 			fprintf(f, "handle 0x%x/0x%x ", mark, mask);
 		else
@@ -145,7 +154,8 @@ static int fw_print_opt(struct filter_util *qu, FILE *f, struct rtattr *opt, __u
 		tc_print_police(f, tb[TCA_FW_POLICE]);
 	if (tb[TCA_FW_INDEV]) {
 		struct rtattr *idev = tb[TCA_FW_INDEV];
-		fprintf(f, "input dev %s ",rta_getattr_str(idev));
+
+		fprintf(f, "input dev %s ", rta_getattr_str(idev));
 	}
 
 	if (tb[TCA_FW_ACT]) {

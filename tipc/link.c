@@ -22,6 +22,7 @@
 #include "cmdl.h"
 #include "msg.h"
 #include "link.h"
+#include "bearer.h"
 
 static int link_list_cb(const struct nlmsghdr *nlh, void *data)
 {
@@ -57,7 +58,8 @@ static int cmd_link_list(struct nlmsghdr *nlh, const struct cmd *cmd,
 		return -EINVAL;
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_LINK_GET))) {
+	nlh = msg_init(buf, TIPC_NL_LINK_GET);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
@@ -90,7 +92,6 @@ static int link_get_cb(const struct nlmsghdr *nlh, void *data)
 	return MNL_CB_OK;
 }
 
-
 static int cmd_link_get_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 			     struct cmdl *cmdl, void *data)
 {
@@ -98,7 +99,7 @@ static int cmd_link_get_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct opt *opt;
 	struct opt opts[] = {
-		{ "link",		NULL },
+		{ "link",		OPT_KEYVAL,	NULL },
 		{ NULL }
 	};
 
@@ -119,12 +120,14 @@ static int cmd_link_get_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 	if (parse_opts(opts, cmdl) < 0)
 		return -EINVAL;
 
-	if (!(nlh = msg_init(buf, TIPC_NL_LINK_GET))) {
+	nlh = msg_init(buf, TIPC_NL_LINK_GET);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
 
-	if (!(opt = get_opt(opts, "link"))) {
+	opt = get_opt(opts, "link");
+	if (!opt) {
 		fprintf(stderr, "error, missing link\n");
 		return -EINVAL;
 	}
@@ -169,7 +172,7 @@ static int cmd_link_stat_reset(struct nlmsghdr *nlh, const struct cmd *cmd,
 	struct opt *opt;
 	struct nlattr *nest;
 	struct opt opts[] = {
-		{ "link",		NULL },
+		{ "link",		OPT_KEYVAL,	NULL },
 		{ NULL }
 	};
 
@@ -183,12 +186,14 @@ static int cmd_link_stat_reset(struct nlmsghdr *nlh, const struct cmd *cmd,
 		return -EINVAL;
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_LINK_RESET_STATS))) {
+	nlh = msg_init(buf, TIPC_NL_LINK_RESET_STATS);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
 
-	if (!(opt = get_opt(opts, "link"))) {
+	opt = get_opt(opts, "link");
+	if (!opt) {
 		fprintf(stderr, "error, missing link\n");
 		return -EINVAL;
 	}
@@ -245,8 +250,7 @@ static int _show_link_stat(struct nlattr *attrs[], struct nlattr *prop[],
 	       mnl_attr_get_u32(stats[TIPC_NLA_STATS_MSG_LEN_CNT]),
 	       mnl_attr_get_u32(stats[TIPC_NLA_STATS_MSG_LEN_TOT]) / proft);
 
-	printf("  0-64:%u%% -256:%u%% -1024:%u%% -4096:%u%% "
-	       "-16384:%u%% -32768:%u%% -66000:%u%%\n",
+	printf("  0-64:%u%% -256:%u%% -1024:%u%% -4096:%u%% -16384:%u%% -32768:%u%% -66000:%u%%\n",
 	       perc(mnl_attr_get_u32(stats[TIPC_NLA_STATS_MSG_LEN_P0]), proft),
 	       perc(mnl_attr_get_u32(stats[TIPC_NLA_STATS_MSG_LEN_P1]), proft),
 	       perc(mnl_attr_get_u32(stats[TIPC_NLA_STATS_MSG_LEN_P2]), proft),
@@ -365,7 +369,7 @@ static int cmd_link_stat_show(struct nlmsghdr *nlh, const struct cmd *cmd,
 	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct opt *opt;
 	struct opt opts[] = {
-		{ "link",		NULL },
+		{ "link",		OPT_KEYVAL,	NULL },
 		{ NULL }
 	};
 
@@ -374,7 +378,8 @@ static int cmd_link_stat_show(struct nlmsghdr *nlh, const struct cmd *cmd,
 		return -EINVAL;
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_LINK_GET))) {
+	nlh = msg_init(buf, TIPC_NL_LINK_GET);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
@@ -382,7 +387,8 @@ static int cmd_link_stat_show(struct nlmsghdr *nlh, const struct cmd *cmd,
 	if (parse_opts(opts, cmdl) < 0)
 		return -EINVAL;
 
-	if ((opt = get_opt(opts, "link")))
+	opt = get_opt(opts, "link");
+	if (opt)
 		link = opt->val;
 
 	return msg_dumpit(nlh, link_stat_show_cb, link);
@@ -429,7 +435,7 @@ static int cmd_link_set_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 	struct nlattr *attrs;
 	struct opt *opt;
 	struct opt opts[] = {
-		{ "link",	NULL },
+		{ "link",		OPT_KEYVAL,	NULL },
 		{ NULL }
 	};
 
@@ -456,13 +462,15 @@ static int cmd_link_set_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 	if (parse_opts(opts, cmdl) < 0)
 		return -EINVAL;
 
-	if (!(nlh = msg_init(buf, TIPC_NL_LINK_SET))) {
+	nlh = msg_init(buf, TIPC_NL_LINK_SET);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
 	attrs = mnl_attr_nest_start(nlh, TIPC_NLA_LINK);
 
-	if (!(opt = get_opt(opts, "link"))) {
+	opt = get_opt(opts, "link");
+	if (!opt) {
 		fprintf(stderr, "error, missing link\n");
 		return -EINVAL;
 	}
@@ -475,8 +483,6 @@ static int cmd_link_set_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 	mnl_attr_nest_end(nlh, attrs);
 
 	return msg_doit(nlh, link_get_cb, &prop);
-
-	return 0;
 }
 
 static int cmd_link_set(struct nlmsghdr *nlh, const struct cmd *cmd,
@@ -492,6 +498,414 @@ static int cmd_link_set(struct nlmsghdr *nlh, const struct cmd *cmd,
 	return run_cmd(nlh, cmd, cmds, cmdl, NULL);
 }
 
+static int cmd_link_mon_set_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
+				 struct cmdl *cmdl, void *data)
+{
+	int size;
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct nlattr *attrs;
+
+	if (cmdl->argc != cmdl->optind + 1) {
+		fprintf(stderr, "error, missing value\n");
+		return -EINVAL;
+	}
+	size = atoi(shift_cmdl(cmdl));
+
+	nlh = msg_init(buf, TIPC_NL_MON_SET);
+	if (!nlh) {
+		fprintf(stderr, "error, message initialisation failed\n");
+		return -1;
+	}
+	attrs = mnl_attr_nest_start(nlh, TIPC_NLA_MON);
+
+	mnl_attr_put_u32(nlh, TIPC_NLA_MON_ACTIVATION_THRESHOLD, size);
+
+	mnl_attr_nest_end(nlh, attrs);
+
+	return msg_doit(nlh, NULL, NULL);
+}
+
+static int link_mon_summary_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct genlmsghdr *genl = mnl_nlmsg_get_payload(nlh);
+	struct nlattr *info[TIPC_NLA_MAX + 1] = {};
+	struct nlattr *attrs[TIPC_NLA_MON_MAX + 1] = {};
+
+	mnl_attr_parse(nlh, sizeof(*genl), parse_attrs, info);
+	if (!info[TIPC_NLA_MON])
+		return MNL_CB_ERROR;
+
+	mnl_attr_parse_nested(info[TIPC_NLA_MON], parse_attrs, attrs);
+
+	printf("\nbearer %s\n",
+		mnl_attr_get_str(attrs[TIPC_NLA_MON_BEARER_NAME]));
+
+	printf("    table_generation %u\n",
+	       mnl_attr_get_u32(attrs[TIPC_NLA_MON_LISTGEN]));
+	printf("    cluster_size %u\n",
+		mnl_attr_get_u32(attrs[TIPC_NLA_MON_PEERCNT]));
+	printf("    algorithm %s\n",
+		attrs[TIPC_NLA_MON_ACTIVE] ? "overlapping-ring" : "full-mesh");
+
+	return MNL_CB_OK;
+}
+
+static int cmd_link_mon_summary(struct nlmsghdr *nlh, const struct cmd *cmd,
+				struct cmdl *cmdl, void *data)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+
+	if (help_flag) {
+		fprintf(stderr,	"Usage: %s monitor summary\n", cmdl->argv[0]);
+		return -EINVAL;
+	}
+
+	nlh = msg_init(buf, TIPC_NL_MON_GET);
+	if (!nlh) {
+		fprintf(stderr, "error, message initialisation failed\n");
+		return -1;
+	}
+
+	return msg_dumpit(nlh, link_mon_summary_cb, NULL);
+}
+
+#define STATUS_WIDTH 7
+#define MAX_NODE_WIDTH 14 /* 255.4095.4095 */
+#define MAX_DOM_GEN_WIDTH 11 /* 65535 */
+#define DIRECTLY_MON_WIDTH 10
+
+#define APPL_NODE_STATUS_WIDTH 5
+
+static int map_get(uint64_t up_map, int i)
+{
+	return (up_map & (1 << i)) >> i;
+}
+
+/* print the applied members, since we know the the members
+ * are listed in ascending order, we print only the state
+ */
+static void link_mon_print_applied(uint16_t applied, uint64_t up_map)
+{
+	int i;
+	char state;
+
+	for (i = 0; i < applied; i++) {
+		/* print the delimiter for every -n- entry */
+		if (i && !(i % APPL_NODE_STATUS_WIDTH))
+			printf(",");
+
+		state = map_get(up_map, i) ? 'U' : 'D';
+		printf("%c", state);
+	}
+}
+
+/* print the non applied members, since we dont know
+ * the members, we print them along with the state
+ */
+static void link_mon_print_non_applied(uint16_t applied, uint16_t member_cnt,
+				       uint64_t up_map,  uint32_t *members)
+{
+	int i;
+	char state;
+
+	printf(" [");
+	for (i = applied; i < member_cnt; i++) {
+		char addr_str[16];
+
+		/* print the delimiter for every entry */
+		if (i != applied)
+			printf(",");
+
+		sprintf(addr_str, "%u.%u.%u:", tipc_zone(members[i]),
+			tipc_cluster(members[i]), tipc_node(members[i]));
+		state = map_get(up_map, i) ? 'U' : 'D';
+		printf("%s%c", addr_str, state);
+	}
+	printf("]");
+}
+
+static void link_mon_print_peer_state(const uint32_t addr, const char *status,
+				      const char *monitored,
+				      const uint32_t dom_gen)
+{
+	char addr_str[16];
+
+	sprintf(addr_str, "%u.%u.%u", tipc_zone(addr), tipc_cluster(addr),
+		tipc_node(addr));
+
+	printf("%-*s", MAX_NODE_WIDTH, addr_str);
+	printf("%-*s", STATUS_WIDTH, status);
+	printf("%-*s", DIRECTLY_MON_WIDTH, monitored);
+	printf("%-*u", MAX_DOM_GEN_WIDTH, dom_gen);
+}
+
+static int link_mon_peer_list_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct genlmsghdr *genl = mnl_nlmsg_get_payload(nlh);
+	struct nlattr *attrs[TIPC_NLA_MON_PEER_MAX + 1] = {};
+	struct nlattr *info[TIPC_NLA_MAX + 1] = {};
+	uint16_t member_cnt;
+	uint32_t applied;
+	uint32_t dom_gen;
+	uint64_t up_map;
+	char status[16];
+	char monitored[16];
+
+	mnl_attr_parse(nlh, sizeof(*genl), parse_attrs, info);
+	if (!info[TIPC_NLA_MON_PEER])
+		return MNL_CB_ERROR;
+
+	mnl_attr_parse_nested(info[TIPC_NLA_MON_PEER], parse_attrs, attrs);
+
+	(attrs[TIPC_NLA_MON_PEER_LOCAL] || attrs[TIPC_NLA_MON_PEER_HEAD]) ?
+		strcpy(monitored, "direct") :
+		strcpy(monitored, "indirect");
+
+	attrs[TIPC_NLA_MON_PEER_UP] ?
+		strcpy(status, "up") :
+		strcpy(status, "down");
+
+	dom_gen = attrs[TIPC_NLA_MON_PEER_DOMGEN] ?
+		mnl_attr_get_u32(attrs[TIPC_NLA_MON_PEER_DOMGEN]) : 0;
+
+	link_mon_print_peer_state(mnl_attr_get_u32(attrs[TIPC_NLA_MON_PEER_ADDR]),
+				  status, monitored, dom_gen);
+
+	applied = mnl_attr_get_u32(attrs[TIPC_NLA_MON_PEER_APPLIED]);
+
+	if (!applied)
+		goto exit;
+
+	up_map = mnl_attr_get_u64(attrs[TIPC_NLA_MON_PEER_UPMAP]);
+
+	member_cnt = mnl_attr_get_payload_len(attrs[TIPC_NLA_MON_PEER_MEMBERS]);
+
+	/* each tipc address occupies 4 bytes of payload, hence compensate it */
+	member_cnt /= sizeof(uint32_t);
+
+	link_mon_print_applied(applied, up_map);
+
+	link_mon_print_non_applied(applied, member_cnt, up_map,
+				   mnl_attr_get_payload(attrs[TIPC_NLA_MON_PEER_MEMBERS]));
+
+exit:
+	printf("\n");
+
+	return MNL_CB_OK;
+}
+
+static int link_mon_peer_list(uint32_t mon_ref)
+{
+	struct nlmsghdr *nlh;
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct nlattr *nest;
+
+	nlh = msg_init(buf, TIPC_NL_MON_PEER_GET);
+	if (!nlh) {
+		fprintf(stderr, "error, message initialisation failed\n");
+		return -1;
+	}
+
+	nest = mnl_attr_nest_start(nlh, TIPC_NLA_MON);
+	mnl_attr_put_u32(nlh, TIPC_NLA_MON_REF, mon_ref);
+	mnl_attr_nest_end(nlh, nest);
+
+	return msg_dumpit(nlh, link_mon_peer_list_cb, NULL);
+}
+
+static int link_mon_list_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct genlmsghdr *genl = mnl_nlmsg_get_payload(nlh);
+	struct nlattr *info[TIPC_NLA_MAX + 1] = {};
+	struct nlattr *attrs[TIPC_NLA_MON_MAX + 1] = {};
+	char *req_bearer = data;
+	const char *bname;
+	const char title[] =
+	  "node          status monitored generation applied_node_status [non_applied_node:status]";
+
+	mnl_attr_parse(nlh, sizeof(*genl), parse_attrs, info);
+	if (!info[TIPC_NLA_MON])
+		return MNL_CB_ERROR;
+
+	mnl_attr_parse_nested(info[TIPC_NLA_MON], parse_attrs, attrs);
+
+	bname = mnl_attr_get_str(attrs[TIPC_NLA_MON_BEARER_NAME]);
+
+	if (*req_bearer && (strcmp(req_bearer, bname) != 0))
+		return MNL_CB_OK;
+
+	printf("\nbearer %s\n", bname);
+	printf("%s\n", title);
+
+	if (mnl_attr_get_u32(attrs[TIPC_NLA_MON_PEERCNT]))
+		link_mon_peer_list(mnl_attr_get_u32(attrs[TIPC_NLA_MON_REF]));
+
+	return MNL_CB_OK;
+}
+
+static void cmd_link_mon_list_help(struct cmdl *cmdl)
+{
+	fprintf(stderr, "Usage: %s monitor list [ media MEDIA ARGS...]\n\n",
+		cmdl->argv[0]);
+	print_bearer_media();
+}
+
+static void cmd_link_mon_list_l2_help(struct cmdl *cmdl, char *media)
+{
+	fprintf(stderr,
+		"Usage: %s monitor list media %s device DEVICE [OPTIONS]\n",
+		cmdl->argv[0], media);
+}
+
+static void cmd_link_mon_list_udp_help(struct cmdl *cmdl, char *media)
+{
+	fprintf(stderr,
+		"Usage: %s monitor list media udp name NAME\n\n",
+		cmdl->argv[0]);
+}
+
+static int cmd_link_mon_list(struct nlmsghdr *nlh, const struct cmd *cmd,
+			     struct cmdl *cmdl, void *data)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	char bname[TIPC_MAX_BEARER_NAME] = {0};
+	struct opt opts[] = {
+		{ "media",	OPT_KEYVAL,	NULL },
+		{ "device",	OPT_KEYVAL,	NULL },
+		{ "name",	OPT_KEYVAL,	NULL },
+		{ NULL }
+	};
+	struct tipc_sup_media sup_media[] = {
+		{ "udp",        "name",         cmd_link_mon_list_udp_help},
+		{ "eth",        "device",       cmd_link_mon_list_l2_help },
+		{ "ib",         "device",       cmd_link_mon_list_l2_help },
+		{ NULL, },
+	};
+
+	int err;
+
+	if (parse_opts(opts, cmdl) < 0)
+		return -EINVAL;
+
+	if (get_opt(opts, "media")) {
+		err = cmd_get_unique_bearer_name(cmd, cmdl, opts, bname,
+						 sup_media);
+		if (err)
+			return err;
+	}
+
+	if (help_flag) {
+		cmd->help(cmdl);
+		return -EINVAL;
+	}
+
+	nlh = msg_init(buf, TIPC_NL_MON_GET);
+	if (!nlh) {
+		fprintf(stderr, "error, message initialisation failed\n");
+		return -1;
+	}
+
+	return msg_dumpit(nlh, link_mon_list_cb, bname);
+}
+
+static void cmd_link_mon_set_help(struct cmdl *cmdl)
+{
+	fprintf(stderr, "Usage: %s monitor set PPROPERTY\n\n"
+		"PROPERTIES\n"
+		" threshold SIZE	- Set monitor activation threshold\n",
+		cmdl->argv[0]);
+}
+
+static int cmd_link_mon_set(struct nlmsghdr *nlh, const struct cmd *cmd,
+			    struct cmdl *cmdl, void *data)
+{
+	const struct cmd cmds[] = {
+		{ "threshold",	cmd_link_mon_set_prop,	NULL },
+		{ NULL }
+	};
+
+	return run_cmd(nlh, cmd, cmds, cmdl, NULL);
+}
+
+static void cmd_link_mon_get_help(struct cmdl *cmdl)
+{
+	fprintf(stderr, "Usage: %s monitor get PPROPERTY\n\n"
+		"PROPERTIES\n"
+		" threshold	- Get monitor activation threshold\n",
+		cmdl->argv[0]);
+}
+
+static int link_mon_get_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct genlmsghdr *genl = mnl_nlmsg_get_payload(nlh);
+	struct nlattr *info[TIPC_NLA_MAX + 1] = {};
+	struct nlattr *attrs[TIPC_NLA_MON_MAX + 1] = {};
+
+	mnl_attr_parse(nlh, sizeof(*genl), parse_attrs, info);
+	if (!info[TIPC_NLA_MON])
+		return MNL_CB_ERROR;
+
+	mnl_attr_parse_nested(info[TIPC_NLA_MON], parse_attrs, attrs);
+	if (!attrs[TIPC_NLA_MON_ACTIVATION_THRESHOLD])
+		return MNL_CB_ERROR;
+
+	printf("%u\n",
+	       mnl_attr_get_u32(attrs[TIPC_NLA_MON_ACTIVATION_THRESHOLD]));
+
+	return MNL_CB_OK;
+}
+
+static int cmd_link_mon_get_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
+				 struct cmdl *cmdl, void *data)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+
+	nlh = msg_init(buf, TIPC_NL_MON_GET);
+	if (!nlh) {
+		fprintf(stderr, "error, message initialisation failed\n");
+		return -1;
+	}
+
+	return msg_doit(nlh,	link_mon_get_cb,	NULL);
+}
+
+static int cmd_link_mon_get(struct nlmsghdr *nlh, const struct cmd *cmd,
+			    struct cmdl *cmdl, void *data)
+{
+	const struct cmd cmds[] = {
+		{ "threshold",	cmd_link_mon_get_prop,	NULL},
+		{ NULL }
+	};
+
+	return run_cmd(nlh, cmd, cmds, cmdl, NULL);
+}
+
+static void cmd_link_mon_help(struct cmdl *cmdl)
+{
+	fprintf(stderr,
+		"Usage: %s montior COMMAND [ARGS] ...\n\n"
+		"COMMANDS\n"
+		" set			- Set monitor properties\n"
+		" get			- Get monitor properties\n"
+		" list			- List all cluster members\n"
+		" summary		- Show local node monitor summary\n",
+		cmdl->argv[0]);
+}
+
+static int cmd_link_mon(struct nlmsghdr *nlh, const struct cmd *cmd, struct cmdl *cmdl,
+			void *data)
+{
+	const struct cmd cmds[] = {
+		{ "set",	cmd_link_mon_set,	cmd_link_mon_set_help },
+		{ "get",	cmd_link_mon_get,	cmd_link_mon_get_help },
+		{ "list",	cmd_link_mon_list,	cmd_link_mon_list_help },
+		{ "summary",	cmd_link_mon_summary,	NULL },
+		{ NULL }
+	};
+
+	return run_cmd(nlh, cmd, cmds, cmdl, NULL);
+}
+
 void cmd_link_help(struct cmdl *cmdl)
 {
 	fprintf(stderr,
@@ -501,7 +915,8 @@ void cmd_link_help(struct cmdl *cmdl)
 		" list                  - List links\n"
 		" get                   - Get various link properties\n"
 		" set                   - Set various link properties\n"
-		" statistics            - Show or reset statistics\n",
+		" statistics            - Show or reset statistics\n"
+		" monitor               - Show or set link supervision\n",
 		cmdl->argv[0]);
 }
 
@@ -513,6 +928,7 @@ int cmd_link(struct nlmsghdr *nlh, const struct cmd *cmd, struct cmdl *cmdl,
 		{ "list",	cmd_link_list,	NULL },
 		{ "set",	cmd_link_set,	cmd_link_set_help },
 		{ "statistics", cmd_link_stat,	cmd_link_stat_help },
+		{ "monitor",	cmd_link_mon,	cmd_link_mon_help },
 		{ NULL }
 	};
 

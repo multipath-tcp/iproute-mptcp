@@ -25,8 +25,9 @@
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: ip fou add port PORT { ipproto PROTO  | gue }\n");
-	fprintf(stderr, "       ip fou del port PORT\n");
+	fprintf(stderr, "Usage: ip fou add port PORT "
+		"{ ipproto PROTO  | gue } [ -6 ]\n");
+	fprintf(stderr, "       ip fou del port PORT [ -6 ]\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Where: PROTO { ipproto-name | 1..255 }\n");
 	fprintf(stderr, "       PORT { 1..65535 }\n");
@@ -50,14 +51,14 @@ static int fou_parse_opt(int argc, char **argv, struct nlmsghdr *n,
 	__u8 ipproto, type;
 	bool gue_set = false;
 	int ipproto_set = 0;
+	unsigned short family = AF_INET;
 
 	while (argc > 0) {
 		if (!matches(*argv, "port")) {
 			NEXT_ARG();
 
-			if (get_u16(&port, *argv, 0) || port == 0)
+			if (get_be16(&port, *argv, 0) || port == 0)
 				invarg("invalid port", *argv);
-			port = htons(port);
 			port_set = 1;
 		} else if (!matches(*argv, "ipproto")) {
 			struct protoent *servptr;
@@ -72,6 +73,8 @@ static int fou_parse_opt(int argc, char **argv, struct nlmsghdr *n,
 			ipproto_set = 1;
 		} else if (!matches(*argv, "gue")) {
 			gue_set = true;
+		} else if (!matches(*argv, "-6")) {
+			family = AF_INET6;
 		} else {
 			fprintf(stderr, "fou: unknown command \"%s\"?\n", *argv);
 			usage();
@@ -99,6 +102,7 @@ static int fou_parse_opt(int argc, char **argv, struct nlmsghdr *n,
 
 	addattr16(n, 1024, FOU_ATTR_PORT, port);
 	addattr8(n, 1024, FOU_ATTR_TYPE, type);
+	addattr16(n, 1024, FOU_ATTR_AF, family);
 
 	if (ipproto_set)
 		addattr8(n, 1024, FOU_ATTR_IPPROTO, ipproto);
@@ -132,27 +136,19 @@ static int do_del(int argc, char **argv)
 
 int do_ipfou(int argc, char **argv)
 {
-	if (genl_family < 0) {
-		if (rtnl_open_byproto(&genl_rth, 0, NETLINK_GENERIC) < 0) {
-			fprintf(stderr, "Cannot open generic netlink socket\n");
-			exit(1);
-		}
-
-		genl_family = genl_resolve_family(&genl_rth, FOU_GENL_NAME);
-		if (genl_family < 0)
-			exit(1);
-	}
-
 	if (argc < 1)
 		usage();
+
+	if (matches(*argv, "help") == 0)
+		usage();
+
+	if (genl_init_handle(&genl_rth, FOU_GENL_NAME, &genl_family))
+		exit(1);
 
 	if (matches(*argv, "add") == 0)
 		return do_add(argc-1, argv+1);
 	if (matches(*argv, "delete") == 0)
 		return do_del(argc-1, argv+1);
-	if (matches(*argv, "help") == 0)
-		usage();
-
 	fprintf(stderr, "Command \"%s\" is unknown, try \"ip fou help\".\n", *argv);
 	exit(-1);
 }

@@ -21,6 +21,9 @@ Show summary of options.
 .B \-V, \-\-version
 Output version information.
 .TP
+.B \-H, \-\-no-header
+Suppress header line.
+.TP
 .B \-n, \-\-numeric
 Do not try to resolve service names.
 .TP
@@ -47,6 +50,11 @@ Show process using socket.
 .TP
 .B \-i, \-\-info
 Show internal TCP information.
+.TP
+.B \-K, \-\-kill
+Attempts to forcibly close sockets. This option displays sockets that are
+successfully closed and silently skips sockets that the kernel does not support
+closing. It supports IPv4 and IPv6 sockets only.
 .TP
 .B \-s, \-\-summary
 Print summary statistics. This option does not parse socket lists obtaining
@@ -113,6 +121,9 @@ Display RAW sockets.
 .TP
 .B \-x, \-\-unix
 Display Unix domain sockets (alias for -f unix).
+.TP
+.B \-S, \-\-sctp
+Display SCTP sockets.
 .TP
 .B \-f FAMILY, \-\-family=FAMILY
 Display sockets of type FAMILY.

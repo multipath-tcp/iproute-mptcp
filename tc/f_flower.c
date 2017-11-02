@@ -17,6 +17,7 @@
 #include <net/if.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
+#include <linux/tc_act/tc_vlan.h>
 
 #include "utils.h"
 #include "tc_util.h"
@@ -25,22 +26,25 @@
 static void explain(void)
 {
 	fprintf(stderr, "Usage: ... flower [ MATCH-LIST ]\n");
+	fprintf(stderr, "                  [ skip_sw | skip_hw ]\n");
 	fprintf(stderr, "                  [ action ACTION-SPEC ] [ classid CLASSID ]\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Where: MATCH-LIST := [ MATCH-LIST ] MATCH\n");
-	fprintf(stderr, "       MATCH      := { indev DEV-NAME | \n");
-	fprintf(stderr, "                       dst_mac MAC-ADDR | \n");
-	fprintf(stderr, "                       src_mac MAC-ADDR | \n");
-	fprintf(stderr, "                       [ipv4 | ipv6 ] | \n");
-	fprintf(stderr, "                       ip_proto [tcp | udp | IP-PROTO ] | \n");
-	fprintf(stderr, "                       dst_ip [ IPV4-ADDR | IPV6-ADDR ] | \n");
-	fprintf(stderr, "                       src_ip [ IPV4-ADDR | IPV6-ADDR ] | \n");
-	fprintf(stderr, "                       dst_port PORT-NUMBER | \n");
+	fprintf(stderr, "       MATCH      := { indev DEV-NAME |\n");
+	fprintf(stderr, "                       vlan_id VID |\n");
+	fprintf(stderr, "                       vlan_prio PRIORITY |\n");
+	fprintf(stderr, "                       vlan_ethtype [ ipv4 | ipv6 | ETH-TYPE ] |\n");
+	fprintf(stderr, "                       dst_mac MAC-ADDR |\n");
+	fprintf(stderr, "                       src_mac MAC-ADDR |\n");
+	fprintf(stderr, "                       ip_proto [tcp | udp | IP-PROTO ] |\n");
+	fprintf(stderr, "                       dst_ip [ IPV4-ADDR | IPV6-ADDR ] |\n");
+	fprintf(stderr, "                       src_ip [ IPV4-ADDR | IPV6-ADDR ] |\n");
+	fprintf(stderr, "                       dst_port PORT-NUMBER |\n");
 	fprintf(stderr, "                       src_port PORT-NUMBER }\n");
 	fprintf(stderr,	"       FILTERID := X:Y:Z\n");
 	fprintf(stderr,	"       ACTION-SPEC := ... look at individual actions\n");
 	fprintf(stderr,	"\n");
-	fprintf(stderr,	"NOTE: CLASSID, ETH-TYPE, IP-PROTO are parsed as hexadecimal input.\n");
+	fprintf(stderr,	"NOTE: CLASSID, IP-PROTO are parsed as hexadecimal input.\n");
 	fprintf(stderr,	"NOTE: There can be only used one mask per one prio. If user needs\n");
 	fprintf(stderr,	"      to specify different mask, he has to use different prio.\n");
 }
@@ -57,6 +61,23 @@ static int flower_parse_eth_addr(char *str, int addr_type, int mask_type,
 	addattr_l(n, MAX_MSG, addr_type, addr, sizeof(addr));
 	memset(addr, 0xff, ETH_ALEN);
 	addattr_l(n, MAX_MSG, mask_type, addr, sizeof(addr));
+	return 0;
+}
+
+static int flower_parse_vlan_eth_type(char *str, __be16 eth_type, int type,
+				      __be16 *p_vlan_eth_type, struct nlmsghdr *n)
+{
+	__be16 vlan_eth_type;
+
+	if (eth_type != htons(ETH_P_8021Q)) {
+		fprintf(stderr, "Can't set \"vlan_ethtype\" if ethertype isn't 802.1Q\n");
+		return -1;
+	}
+
+	if (ll_proto_a2n(&vlan_eth_type, str))
+		invarg("invalid vlan_ethtype", str);
+	addattr16(n, MAX_MSG, type, vlan_eth_type);
+	*p_vlan_eth_type = vlan_eth_type;
 	return 0;
 }
 
@@ -150,11 +171,11 @@ static int flower_parse_port(char *str, __u8 ip_port,
 		return -1;
 	}
 
-	ret = get_u16(&port, str, 10);
+	ret = get_be16(&port, str, 10);
 	if (ret)
 		return -1;
 
-	addattr16(n, MAX_MSG, type, htons(port));
+	addattr16(n, MAX_MSG, type, port);
 
 	return 0;
 }
@@ -166,7 +187,9 @@ static int flower_parse_opt(struct filter_util *qu, char *handle,
 	struct tcmsg *t = NLMSG_DATA(n);
 	struct rtattr *tail;
 	__be16 eth_type = TC_H_MIN(t->tcm_info);
+	__be16 vlan_ethtype = 0;
 	__u8 ip_proto = 0xff;
+	__u32 flags = 0;
 
 	if (handle) {
 		ret = get_u32(&t->tcm_handle, handle, 0);
@@ -187,7 +210,7 @@ static int flower_parse_opt(struct filter_util *qu, char *handle,
 	while (argc > 0) {
 		if (matches(*argv, "classid") == 0 ||
 		    matches(*argv, "flowid") == 0) {
-			unsigned handle;
+			unsigned int handle;
 
 			NEXT_ARG();
 			ret = get_tc_classid(&handle, *argv);
@@ -196,13 +219,51 @@ static int flower_parse_opt(struct filter_util *qu, char *handle,
 				return -1;
 			}
 			addattr_l(n, MAX_MSG, TCA_FLOWER_CLASSID, &handle, 4);
+		} else if (matches(*argv, "skip_hw") == 0) {
+			flags |= TCA_CLS_FLAGS_SKIP_HW;
+		} else if (matches(*argv, "skip_sw") == 0) {
+			flags |= TCA_CLS_FLAGS_SKIP_SW;
 		} else if (matches(*argv, "indev") == 0) {
-			char ifname[IFNAMSIZ];
+			char ifname[IFNAMSIZ] = {};
 
 			NEXT_ARG();
-			memset(ifname, 0, sizeof(ifname));
 			strncpy(ifname, *argv, sizeof(ifname) - 1);
 			addattrstrz(n, MAX_MSG, TCA_FLOWER_INDEV, ifname);
+		} else if (matches(*argv, "vlan_id") == 0) {
+			__u16 vid;
+
+			NEXT_ARG();
+			if (eth_type != htons(ETH_P_8021Q)) {
+				fprintf(stderr, "Can't set \"vlan_id\" if ethertype isn't 802.1Q\n");
+				return -1;
+			}
+			ret = get_u16(&vid, *argv, 10);
+			if (ret < 0 || vid & ~0xfff) {
+				fprintf(stderr, "Illegal \"vlan_id\"\n");
+				return -1;
+			}
+			addattr16(n, MAX_MSG, TCA_FLOWER_KEY_VLAN_ID, vid);
+		} else if (matches(*argv, "vlan_prio") == 0) {
+			__u8 vlan_prio;
+
+			NEXT_ARG();
+			if (eth_type != htons(ETH_P_8021Q)) {
+				fprintf(stderr, "Can't set \"vlan_prio\" if ethertype isn't 802.1Q\n");
+				return -1;
+			}
+			ret = get_u8(&vlan_prio, *argv, 10);
+			if (ret < 0 || vlan_prio & ~0x7) {
+				fprintf(stderr, "Illegal \"vlan_prio\"\n");
+				return -1;
+			}
+			addattr8(n, MAX_MSG, TCA_FLOWER_KEY_VLAN_PRIO, vlan_prio);
+		} else if (matches(*argv, "vlan_ethtype") == 0) {
+			NEXT_ARG();
+			ret = flower_parse_vlan_eth_type(*argv, eth_type,
+							 TCA_FLOWER_KEY_VLAN_ETH_TYPE,
+							 &vlan_ethtype, n);
+			if (ret < 0)
+				return -1;
 		} else if (matches(*argv, "dst_mac") == 0) {
 			NEXT_ARG();
 			ret = flower_parse_eth_addr(*argv,
@@ -225,7 +286,8 @@ static int flower_parse_opt(struct filter_util *qu, char *handle,
 			}
 		} else if (matches(*argv, "ip_proto") == 0) {
 			NEXT_ARG();
-			ret = flower_parse_ip_proto(*argv, eth_type,
+			ret = flower_parse_ip_proto(*argv, vlan_ethtype ?
+						    vlan_ethtype : eth_type,
 						    TCA_FLOWER_KEY_IP_PROTO,
 						    &ip_proto, n);
 			if (ret < 0) {
@@ -234,7 +296,8 @@ static int flower_parse_opt(struct filter_util *qu, char *handle,
 			}
 		} else if (matches(*argv, "dst_ip") == 0) {
 			NEXT_ARG();
-			ret = flower_parse_ip_addr(*argv, eth_type,
+			ret = flower_parse_ip_addr(*argv, vlan_ethtype ?
+						   vlan_ethtype : eth_type,
 						   TCA_FLOWER_KEY_IPV4_DST,
 						   TCA_FLOWER_KEY_IPV4_DST_MASK,
 						   TCA_FLOWER_KEY_IPV6_DST,
@@ -246,7 +309,8 @@ static int flower_parse_opt(struct filter_util *qu, char *handle,
 			}
 		} else if (matches(*argv, "src_ip") == 0) {
 			NEXT_ARG();
-			ret = flower_parse_ip_addr(*argv, eth_type,
+			ret = flower_parse_ip_addr(*argv, vlan_ethtype ?
+						   vlan_ethtype : eth_type,
 						   TCA_FLOWER_KEY_IPV4_SRC,
 						   TCA_FLOWER_KEY_IPV4_SRC_MASK,
 						   TCA_FLOWER_KEY_IPV6_SRC,
@@ -294,6 +358,8 @@ static int flower_parse_opt(struct filter_util *qu, char *handle,
 	}
 
 parse_done:
+	addattr32(n, MAX_MSG, TCA_FLOWER_FLAGS, flags);
+
 	ret = addattr16(n, MAX_MSG, TCA_FLOWER_KEY_ETH_TYPE, eth_type);
 	if (ret) {
 		fprintf(stderr, "Illegal \"eth_type\"(0x%x)\n",
@@ -301,7 +367,7 @@ parse_done:
 		return -1;
 	}
 
-	tail->rta_len = (((void*)n)+n->nlmsg_len) - (void*)tail;
+	tail->rta_len = (((void *)n)+n->nlmsg_len) - (void *)tail;
 
 	return 0;
 }
@@ -394,7 +460,6 @@ static void flower_print_ip_addr(FILE *f, char *name, __be16 eth_type,
 				 struct rtattr *addr6_attr,
 				 struct rtattr *mask6_attr)
 {
-	SPRINT_BUF(b1);
 	struct rtattr *addr_attr;
 	struct rtattr *mask_attr;
 	int family;
@@ -416,18 +481,12 @@ static void flower_print_ip_addr(FILE *f, char *name, __be16 eth_type,
 	}
 	if (!addr_attr || RTA_PAYLOAD(addr_attr) != len)
 		return;
-	fprintf(f, "\n  %s %s", name, rt_addr_n2a(family,
-						  RTA_PAYLOAD(addr_attr),
-						  RTA_DATA(addr_attr),
-						  b1, sizeof(b1)));
+	fprintf(f, "\n  %s %s", name, rt_addr_n2a_rta(family, addr_attr));
 	if (!mask_attr || RTA_PAYLOAD(mask_attr) != len)
 		return;
 	bits = __mask_bits(RTA_DATA(mask_attr), len);
 	if (bits < 0)
-		fprintf(f, "/%s", rt_addr_n2a(family,
-					      RTA_PAYLOAD(mask_attr),
-					      RTA_DATA(mask_attr),
-					      b1, sizeof(b1)));
+		fprintf(f, "/%s", rt_addr_n2a_rta(family, mask_attr));
 	else if (bits < len * 8)
 		fprintf(f, "/%d", bits);
 }
@@ -477,6 +536,18 @@ static int flower_print_opt(struct filter_util *qu, FILE *f,
 		fprintf(f, "\n  indev %s", rta_getattr_str(attr));
 	}
 
+	if (tb[TCA_FLOWER_KEY_VLAN_ID]) {
+		struct rtattr *attr = tb[TCA_FLOWER_KEY_VLAN_ID];
+
+		fprintf(f, "\n  vlan_id %d", rta_getattr_u16(attr));
+	}
+
+	if (tb[TCA_FLOWER_KEY_VLAN_PRIO]) {
+		struct rtattr *attr = tb[TCA_FLOWER_KEY_VLAN_PRIO];
+
+		fprintf(f, "\n  vlan_prio %d", rta_getattr_u8(attr));
+	}
+
 	flower_print_eth_addr(f, "dst_mac", tb[TCA_FLOWER_KEY_ETH_DST],
 			      tb[TCA_FLOWER_KEY_ETH_DST_MASK]);
 	flower_print_eth_addr(f, "src_mac", tb[TCA_FLOWER_KEY_ETH_SRC],
@@ -504,6 +575,15 @@ static int flower_print_opt(struct filter_util *qu, FILE *f,
 	flower_print_port(f, "src_port", ip_proto,
 			  tb[TCA_FLOWER_KEY_TCP_SRC],
 			  tb[TCA_FLOWER_KEY_UDP_SRC]);
+
+	if (tb[TCA_FLOWER_FLAGS])  {
+		__u32 flags = rta_getattr_u32(tb[TCA_FLOWER_FLAGS]);
+
+		if (flags & TCA_CLS_FLAGS_SKIP_HW)
+			fprintf(f, "\n  skip_hw");
+		if (flags & TCA_CLS_FLAGS_SKIP_SW)
+			fprintf(f, "\n  skip_sw");
+	}
 
 	if (tb[TCA_FLOWER_ACT]) {
 		tc_print_action(f, tb[TCA_FLOWER_ACT]);

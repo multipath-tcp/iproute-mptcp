@@ -35,7 +35,7 @@
 static struct
 {
 	int family;
-        int index;
+	int index;
 #define NONE_DEV	(-1)
 	char name[1024];
 } filter;
@@ -52,7 +52,7 @@ static void usage(void)
 
 		"PARMS := [ base_reachable MSEC ] [ retrans MSEC ] [ gc_stale MSEC ]\n"
 		"         [ delay_probe MSEC ] [ queue LEN ]\n"
-		"         [ app_probs VAL ] [ ucast_probes VAL ] [ mcast_probes VAL ]\n"
+		"         [ app_probes VAL ] [ ucast_probes VAL ] [ mcast_probes VAL ]\n"
 		"         [ anycast_delay MSEC ] [ proxy_delay MSEC ] [ proxy_queue LEN ]\n"
 		"         [ locktime MSEC ]\n"
 		);
@@ -65,26 +65,19 @@ static int ipntable_modify(int cmd, int flags, int argc, char **argv)
 	struct {
 		struct nlmsghdr	n;
 		struct ndtmsg		ndtm;
-		char  			buf[1024];
-	} req;
+		char			buf[1024];
+	} req = {
+		.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndtmsg)),
+		.n.nlmsg_flags = NLM_F_REQUEST | flags,
+		.n.nlmsg_type = cmd,
+		.ndtm.ndtm_family = preferred_family,
+	};
 	char *namep = NULL;
 	char *threshsp = NULL;
 	char *gc_intp = NULL;
-	char parms_buf[1024];
+	char parms_buf[1024] = {};
 	struct rtattr *parms_rta = (struct rtattr *)parms_buf;
 	int parms_change = 0;
-
-	memset(&req, 0, sizeof(req));
-
-	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndtmsg));
-	req.n.nlmsg_flags = NLM_F_REQUEST|flags;
-	req.n.nlmsg_type = cmd;
-
-	req.ndtm.ndtm_family = preferred_family;
-	req.ndtm.ndtm_pad1 = 0;
-	req.ndtm.ndtm_pad2 = 0;
-
-	memset(&parms_buf, 0, sizeof(parms_buf));
 
 	parms_rta->rta_type = NDTA_PARMS;
 	parms_rta->rta_len = RTA_LENGTH(0);
@@ -322,14 +315,12 @@ static int ipntable_modify(int cmd, int flags, int argc, char **argv)
 static const char *ntable_strtime_delta(__u32 msec)
 {
 	static char str[32];
-	struct timeval now;
+	struct timeval now = {};
 	time_t t;
 	struct tm *tp;
 
 	if (msec == 0)
 		goto error;
-
-	memset(&now, 0, sizeof(now));
 
 	if (gettimeofday(&now, NULL) < 0) {
 		perror("gettimeofday");
@@ -351,7 +342,7 @@ static const char *ntable_strtime_delta(__u32 msec)
 
 static int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 {
-	FILE *fp = (FILE*)arg;
+	FILE *fp = (FILE *)arg;
 	struct ndtmsg *ndtm = NLMSG_DATA(n);
 	int len = n->nlmsg_len;
 	struct rtattr *tb[NDTA_MAX+1];
@@ -407,6 +398,7 @@ static int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void 
 
 	if (tb[NDTA_NAME]) {
 		const char *name = rta_getattr_str(tb[NDTA_NAME]);
+
 		fprintf(fp, "%s ", name);
 	}
 
@@ -419,18 +411,22 @@ static int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void 
 
 	if (tb[NDTA_THRESH1]) {
 		__u32 thresh1 = rta_getattr_u32(tb[NDTA_THRESH1]);
+
 		fprintf(fp, "thresh1 %u ", thresh1);
 	}
 	if (tb[NDTA_THRESH2]) {
 		__u32 thresh2 = rta_getattr_u32(tb[NDTA_THRESH2]);
+
 		fprintf(fp, "thresh2 %u ", thresh2);
 	}
 	if (tb[NDTA_THRESH3]) {
 		__u32 thresh3 = rta_getattr_u32(tb[NDTA_THRESH3]);
+
 		fprintf(fp, "thresh3 %u ", thresh3);
 	}
 	if (tb[NDTA_GC_INTERVAL]) {
 		unsigned long long gc_int = rta_getattr_u64(tb[NDTA_GC_INTERVAL]);
+
 		fprintf(fp, "gc_int %llu ", gc_int);
 	}
 
@@ -480,18 +476,22 @@ static int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void 
 
 		if (tpb[NDTPA_REFCNT]) {
 			__u32 refcnt = rta_getattr_u32(tpb[NDTPA_REFCNT]);
+
 			fprintf(fp, "refcnt %u ", refcnt);
 		}
 		if (tpb[NDTPA_REACHABLE_TIME]) {
 			unsigned long long reachable = rta_getattr_u64(tpb[NDTPA_REACHABLE_TIME]);
+
 			fprintf(fp, "reachable %llu ", reachable);
 		}
 		if (tpb[NDTPA_BASE_REACHABLE_TIME]) {
 			unsigned long long breachable = rta_getattr_u64(tpb[NDTPA_BASE_REACHABLE_TIME]);
+
 			fprintf(fp, "base_reachable %llu ", breachable);
 		}
 		if (tpb[NDTPA_RETRANS_TIME]) {
 			unsigned long long retrans = rta_getattr_u64(tpb[NDTPA_RETRANS_TIME]);
+
 			fprintf(fp, "retrans %llu ", retrans);
 		}
 
@@ -501,14 +501,17 @@ static int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void 
 
 		if (tpb[NDTPA_GC_STALETIME]) {
 			unsigned long long gc_stale = rta_getattr_u64(tpb[NDTPA_GC_STALETIME]);
+
 			fprintf(fp, "gc_stale %llu ", gc_stale);
 		}
 		if (tpb[NDTPA_DELAY_PROBE_TIME]) {
 			unsigned long long delay_probe = rta_getattr_u64(tpb[NDTPA_DELAY_PROBE_TIME]);
+
 			fprintf(fp, "delay_probe %llu ", delay_probe);
 		}
 		if (tpb[NDTPA_QUEUE_LEN]) {
 			__u32 queue = rta_getattr_u32(tpb[NDTPA_QUEUE_LEN]);
+
 			fprintf(fp, "queue %u ", queue);
 		}
 
@@ -518,14 +521,17 @@ static int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void 
 
 		if (tpb[NDTPA_APP_PROBES]) {
 			__u32 aprobe = rta_getattr_u32(tpb[NDTPA_APP_PROBES]);
+
 			fprintf(fp, "app_probes %u ", aprobe);
 		}
 		if (tpb[NDTPA_UCAST_PROBES]) {
 			__u32 uprobe = rta_getattr_u32(tpb[NDTPA_UCAST_PROBES]);
+
 			fprintf(fp, "ucast_probes %u ", uprobe);
 		}
 		if (tpb[NDTPA_MCAST_PROBES]) {
 			__u32 mprobe = rta_getattr_u32(tpb[NDTPA_MCAST_PROBES]);
+
 			fprintf(fp, "mcast_probes %u ", mprobe);
 		}
 
@@ -535,18 +541,22 @@ static int print_ntable(const struct sockaddr_nl *who, struct nlmsghdr *n, void 
 
 		if (tpb[NDTPA_ANYCAST_DELAY]) {
 			unsigned long long anycast_delay = rta_getattr_u64(tpb[NDTPA_ANYCAST_DELAY]);
+
 			fprintf(fp, "anycast_delay %llu ", anycast_delay);
 		}
 		if (tpb[NDTPA_PROXY_DELAY]) {
 			unsigned long long proxy_delay = rta_getattr_u64(tpb[NDTPA_PROXY_DELAY]);
+
 			fprintf(fp, "proxy_delay %llu ", proxy_delay);
 		}
 		if (tpb[NDTPA_PROXY_QLEN]) {
 			__u32 pqueue = rta_getattr_u32(tpb[NDTPA_PROXY_QLEN]);
+
 			fprintf(fp, "proxy_queue %u ", pqueue);
 		}
 		if (tpb[NDTPA_LOCKTIME]) {
 			unsigned long long locktime = rta_getattr_u64(tpb[NDTPA_LOCKTIME]);
+
 			fprintf(fp, "locktime %llu ", locktime);
 		}
 

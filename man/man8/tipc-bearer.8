@@ -11,6 +11,11 @@ tipc-bearer \- show or modify TIPC bearers
 .in +8
 
 .ti -8
+.B tipc bearer add media udp name
+.IB "NAME " "remoteip " REMOTEIP
+.br
+
+.ti -8
 .B tipc bearer enable
 .RB "[ " domain
 .IR DOMAIN " ]"
@@ -39,14 +44,12 @@ tipc-bearer \- show or modify TIPC bearers
 .B tipc bearer disable media
 .br
 .RB "{ { " eth " | " ib " } " device
-.IR DEVICE
+.IR "DEVICE " }
 .RB "|"
 .br
 .RB "{ " udp
 .B name
-.IR NAME
-.B localip
-.IR LOCALIP " } }"
+.IR NAME " }"
 .br
 
 .ti -8
@@ -65,14 +68,12 @@ tipc-bearer \- show or modify TIPC bearers
 .br
 .RB "{ " udp
 .B name
-.IR NAME
-.B localip
-.IR LOCALIP " } }"
+.IR NAME " }"
 .br
 
 .ti -8
 .B tipc bearer get
-.RB "{ " "priority" " | " tolerance " | " window " } " media
+.RB "[ " "priority" " | " tolerance " | " window " ] " media
 .br
 .RB "{ { " eth " | " ib " } " device
 .IR "DEVICE" " }"
@@ -81,8 +82,7 @@ tipc-bearer \- show or modify TIPC bearers
 .RB "{ " udp
 .B name
 .IR NAME
-.B localip
-.IR LOCALIP " } }"
+.RB "[ " "localip " "| " "localport " "| " "remoteip " "| " "remoteport " "] }"
 .br
 
 .ti -8
@@ -202,6 +202,25 @@ IP is specified the
 .B udp
 bearer runs in point-to-point mode.
 
+Multiple
+.B remoteip
+addresses can be added via the
+.B bearer add
+command. Adding one or more unicast
+.B remoteip
+addresses to an existing
+.B udp
+bearer puts the bearer in replicast mode where IP
+multicast is emulated by sending multiple unicast messages to each configured
+.B remoteip.
+When a peer sees a TIPC discovery message from an unknown peer the peer address
+is automatically added to the
+.B remoteip
+(replicast) list, thus only one side of
+a link needs to be manually configured. A
+.B remoteip
+address cannot be added to a multicast bearer.
+
 .TP
 .BI "remoteport " REMOTEPORT
 .br
@@ -218,6 +237,7 @@ Exit status is 0 if command was successful or a positive integer upon failure.
 .BR tipc-media (8),
 .BR tipc-nametable (8),
 .BR tipc-node (8),
+.BR tipc-peer (8),
 .BR tipc-socket (8)
 .br
 .SH REPORTING BUGS

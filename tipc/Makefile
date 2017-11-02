@@ -6,7 +6,7 @@ TIPCOBJ=bearer.o \
     media.o misc.o \
     msg.o nametable.o \
     node.o socket.o \
-    tipc.o
+    peer.o tipc.o
 
 include ../Config
 
@@ -19,6 +19,7 @@ endif
 all: $(TARGETS) $(LIBS)
 
 tipc: $(TIPCOBJ)
+	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
 install: all
 	install -m 0755 $(TARGETS) $(DESTDIR)$(SBINDIR)

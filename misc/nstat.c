@@ -30,16 +30,17 @@
 
 #include <json_writer.h>
 #include <SNAPSHOT.h>
+#include "utils.h"
 
-int dump_zeros = 0;
-int reset_history = 0;
-int ignore_history = 0;
-int no_output = 0;
-int json_output = 0;
-int pretty = 0;
-int no_update = 0;
-int scan_interval = 0;
-int time_constant = 0;
+int dump_zeros;
+int reset_history;
+int ignore_history;
+int no_output;
+int json_output;
+int pretty;
+int no_update;
+int scan_interval;
+int time_constant;
 double W;
 char **patterns;
 int npatterns;
@@ -51,6 +52,7 @@ static int generic_proc_open(const char *env, char *name)
 {
 	char store[128];
 	char *p = getenv(env);
+
 	if (!p) {
 		p = getenv("PROC_ROOT") ? : "/proc";
 		snprintf(store, sizeof(store)-1, "%s/%s", p, name);
@@ -74,8 +76,12 @@ static int net_snmp6_open(void)
 	return generic_proc_open("PROC_NET_SNMP6", "net/snmp6");
 }
 
-struct nstat_ent
+static int net_sctp_snmp_open(void)
 {
+	return generic_proc_open("PROC_NET_SCTP_SNMP", "net/sctp/snmp");
+}
+
+struct nstat_ent {
 	struct nstat_ent *next;
 	char		 *id;
 	unsigned long long val;
@@ -94,7 +100,8 @@ static const char *useless_numbers[] = {
 static int useless_number(const char *id)
 {
 	int i;
-	for (i=0; i<sizeof(useless_numbers)/sizeof(*useless_numbers); i++)
+
+	for (i = 0; i < ARRAY_SIZE(useless_numbers); i++)
 		if (strcmp(id, useless_numbers[i]) == 0)
 			return 1;
 	return 0;
@@ -107,7 +114,7 @@ static int match(const char *id)
 	if (npatterns == 0)
 		return 1;
 
-	for (i=0; i<npatterns; i++) {
+	for (i = 0; i < npatterns; i++) {
 		if (!fnmatch(patterns[i], id, 0))
 			return 1;
 	}
@@ -125,6 +132,7 @@ static void load_good_table(FILE *fp)
 		unsigned long long val;
 		double rate;
 		char idbuf[sizeof(buf)];
+
 		if (buf[0] == '#') {
 			buf[strlen(buf)-1] = 0;
 			if (info_source[0] && strcmp(info_source, buf+1))
@@ -192,6 +200,7 @@ static void load_ugly_table(FILE *fp)
 
 		while (*p) {
 			char *next;
+
 			if ((next = strchr(p, ' ')) != NULL)
 				*next++ = 0;
 			else if ((next = strchr(p, '\n')) != NULL)
@@ -243,9 +252,20 @@ static void load_ugly_table(FILE *fp)
 	}
 }
 
+static void load_sctp_snmp(void)
+{
+	FILE *fp = fdopen(net_sctp_snmp_open(), "r");
+
+	if (fp) {
+		load_good_table(fp);
+		fclose(fp);
+	}
+}
+
 static void load_snmp(void)
 {
 	FILE *fp = fdopen(net_snmp_open(), "r");
+
 	if (fp) {
 		load_ugly_table(fp);
 		fclose(fp);
@@ -255,6 +275,7 @@ static void load_snmp(void)
 static void load_snmp6(void)
 {
 	FILE *fp = fdopen(net_snmp6_open(), "r");
+
 	if (fp) {
 		load_good_table(fp);
 		fclose(fp);
@@ -264,6 +285,7 @@ static void load_snmp6(void)
 static void load_netstat(void)
 {
 	FILE *fp = fdopen(net_netstat_open(), "r");
+
 	if (fp) {
 		load_ugly_table(fp);
 		fclose(fp);
@@ -278,18 +300,21 @@ static void dump_kern_db(FILE *fp, int to_hist)
 
 	h = hist_db;
 	if (jw) {
+		jsonw_start_object(jw);
 		jsonw_pretty(jw, pretty);
 		jsonw_name(jw, info_source);
 		jsonw_start_object(jw);
 	} else
 		fprintf(fp, "#%s\n", info_source);
 
-	for (n=kern_db; n; n=n->next) {
+	for (n = kern_db; n; n = n->next) {
 		unsigned long long val = n->val;
+
 		if (!dump_zeros && !val && !n->rate)
 			continue;
 		if (!match(n->id)) {
 			struct nstat_ent *h1;
+
 			if (!to_hist)
 				continue;
 			for (h1 = h; h1; h1 = h1->next) {
@@ -309,6 +334,8 @@ static void dump_kern_db(FILE *fp, int to_hist)
 
 	if (jw) {
 		jsonw_end_object(jw);
+
+		jsonw_end_object(jw);
 		jsonw_destroy(&jw);
 	}
 }
@@ -320,16 +347,18 @@ static void dump_incr_db(FILE *fp)
 
 	h = hist_db;
 	if (jw) {
+		jsonw_start_object(jw);
 		jsonw_pretty(jw, pretty);
 		jsonw_name(jw, info_source);
 		jsonw_start_object(jw);
 	} else
 		fprintf(fp, "#%s\n", info_source);
 
-	for (n=kern_db; n; n=n->next) {
+	for (n = kern_db; n; n = n->next) {
 		int ovfl = 0;
 		unsigned long long val = n->val;
 		struct nstat_ent *h1;
+
 		for (h1 = h; h1; h1 = h1->next) {
 			if (strcmp(h1->id, n->id) == 0) {
 				if (val < h1->val) {
@@ -355,6 +384,8 @@ static void dump_incr_db(FILE *fp)
 
 	if (jw) {
 		jsonw_end_object(jw);
+
+		jsonw_end_object(jw);
 		jsonw_destroy(&jw);
 	}
 }
@@ -375,12 +406,14 @@ static void update_db(int interval)
 	load_netstat();
 	load_snmp6();
 	load_snmp();
+	load_sctp_snmp();
 
 	h = kern_db;
 	kern_db = n;
 
 	for (n = kern_db; n; n = n->next) {
 		struct nstat_ent *h1;
+
 		for (h1 = h; h1; h1 = h1->next) {
 			if (strcmp(h1->id, n->id) == 0) {
 				double sample;
@@ -395,12 +428,14 @@ static void update_db(int interval)
 						n->rate = sample;
 					} else {
 						double w = W*(double)interval/scan_interval;
+
 						n->rate += w*(sample-n->rate);
 					}
 				}
 
 				while (h != h1) {
 					struct nstat_ent *tmp = h;
+
 					h = h->next;
 					free(tmp->id);
 					free(tmp);
@@ -414,13 +449,14 @@ static void update_db(int interval)
 	}
 }
 
-#define T_DIFF(a,b) (((a).tv_sec-(b).tv_sec)*1000 + ((a).tv_usec-(b).tv_usec)/1000)
+#define T_DIFF(a, b) (((a).tv_sec-(b).tv_sec)*1000 + ((a).tv_usec-(b).tv_usec)/1000)
 
 
 static void server_loop(int fd)
 {
 	struct timeval snaptime = { 0 };
 	struct pollfd p;
+
 	p.fd = fd;
 	p.events = p.revents = POLLIN;
 
@@ -430,11 +466,13 @@ static void server_loop(int fd)
 	load_netstat();
 	load_snmp6();
 	load_snmp();
+	load_sctp_snmp();
 
 	for (;;) {
 		int status;
-		int tdiff;
+		time_t tdiff;
 		struct timeval now;
+
 		gettimeofday(&now, NULL);
 		tdiff = T_DIFF(now, snaptime);
 		if (tdiff >= scan_interval) {
@@ -442,24 +480,24 @@ static void server_loop(int fd)
 			snaptime = now;
 			tdiff = 0;
 		}
-		if (poll(&p, 1, tdiff + scan_interval) > 0
+		if (poll(&p, 1, scan_interval - tdiff) > 0
 		    && (p.revents&POLLIN)) {
 			int clnt = accept(fd, NULL, NULL);
+
 			if (clnt >= 0) {
 				pid_t pid;
+
 				if (children >= 5) {
 					close(clnt);
 				} else if ((pid = fork()) != 0) {
-					if (pid>0)
+					if (pid > 0)
 						children++;
 					close(clnt);
 				} else {
 					FILE *fp = fdopen(clnt, "w");
-					if (fp) {
-						if (tdiff > 0)
-							update_db(tdiff);
+
+					if (fp)
 						dump_kern_db(fp, 0);
-					}
 					exit(0);
 				}
 			}
@@ -474,7 +512,7 @@ static int verify_forging(int fd)
 	struct ucred cred;
 	socklen_t olen = sizeof(cred);
 
-	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, (void*)&cred, &olen) ||
+	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, (void *)&cred, &olen) ||
 	    olen < sizeof(cred))
 		return -1;
 	if (cred.uid == getuid() || cred.uid == 0)
@@ -488,17 +526,17 @@ static void usage(void)
 {
 	fprintf(stderr,
 "Usage: nstat [OPTION] [ PATTERN [ PATTERN ] ]\n"
-"   -h, --help		this message\n"
-"   -a, --ignore	ignore history\n"
-"   -d, --scan=SECS	sample every statistics every SECS\n"
-"   -j, --json          format output in JSON\n"
-"   -n, --nooutput	do history only\n"
-"   -p, --pretty        pretty print\n"
-"   -r, --reset		reset history\n"
-"   -s, --noupdate	don\'t update history\n"
-"   -t, --interval=SECS	report average over the last SECS\n"
-"   -V, --version	output version information\n"
-"   -z, --zeros		show entries with zero activity\n");
+"   -h, --help           this message\n"
+"   -a, --ignore         ignore history\n"
+"   -d, --scan=SECS      sample every statistics every SECS\n"
+"   -j, --json           format output in JSON\n"
+"   -n, --nooutput       do history only\n"
+"   -p, --pretty         pretty print\n"
+"   -r, --reset          reset history\n"
+"   -s, --noupdate       don't update history\n"
+"   -t, --interval=SECS  report average over the last SECS\n"
+"   -V, --version        output version information\n"
+"   -z, --zeros          show entries with zero activity\n");
 	exit(-1);
 }
 
@@ -527,7 +565,7 @@ int main(int argc, char *argv[])
 
 	while ((ch = getopt_long(argc, argv, "h?vVzrnasd:t:jp",
 				 longopts, NULL)) != EOF) {
-		switch(ch) {
+		switch (ch) {
 		case 'z':
 			dump_zeros = 1;
 			break;
@@ -586,7 +624,7 @@ int main(int argc, char *argv[])
 			perror("nstat: socket");
 			exit(-1);
 		}
-		if (bind(fd, (struct sockaddr*)&sun, 2+1+strlen(sun.sun_path+1)) < 0) {
+		if (bind(fd, (struct sockaddr *)&sun, 2+1+strlen(sun.sun_path+1)) < 0) {
 			perror("nstat: bind");
 			exit(-1);
 		}
@@ -642,6 +680,7 @@ int main(int argc, char *argv[])
 		if (!ignore_history) {
 			FILE *tfp;
 			long uptime = -1;
+
 			if ((tfp = fopen("/proc/uptime", "r")) != NULL) {
 				if (fscanf(tfp, "%ld", &uptime) != 1)
 					uptime = -1;
@@ -661,11 +700,12 @@ int main(int argc, char *argv[])
 	}
 
 	if ((fd = socket(AF_UNIX, SOCK_STREAM, 0)) >= 0 &&
-	    (connect(fd, (struct sockaddr*)&sun, 2+1+strlen(sun.sun_path+1)) == 0
+	    (connect(fd, (struct sockaddr *)&sun, 2+1+strlen(sun.sun_path+1)) == 0
 	     || (strcpy(sun.sun_path+1, "nstat0"),
-		 connect(fd, (struct sockaddr*)&sun, 2+1+strlen(sun.sun_path+1)) == 0))
+		 connect(fd, (struct sockaddr *)&sun, 2+1+strlen(sun.sun_path+1)) == 0))
 	    && verify_forging(fd) == 0) {
 		FILE *sfp = fdopen(fd, "r");
+
 		load_good_table(sfp);
 		if (hist_db && source_mismatch) {
 			fprintf(stderr, "nstat: history is stale, ignoring it.\n");
@@ -683,6 +723,7 @@ int main(int argc, char *argv[])
 		load_netstat();
 		load_snmp6();
 		load_snmp();
+		load_sctp_snmp();
 		if (info_source[0] == 0)
 			strcpy(info_source, "kernel");
 	}

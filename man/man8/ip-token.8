@@ -7,23 +7,27 @@ ip-token \- tokenized interface identifier support
 .in +8
 .ti -8
 .B ip token
-.RI " { " COMMAND " | "
+.RI "{ " COMMAND " | "
 .BR help " }"
 .sp
 
 .ti -8
-.BR "ip token" " { " set " } "
+.B ip token set
 .IR TOKEN
 .B dev
 .IR DEV
 
 .ti -8
-.BR "ip token" " { " get " } "
-.B dev
+.B ip token del dev
 .IR DEV
 
 .ti -8
-.BR "ip token" " { " list " }"
+.B ip token get
+.RB "[ " dev
+.IR DEV " ]"
+
+.ti -8
+.BR "ip token" " [ " list " ]"
 
 .SH "DESCRIPTION"
 IPv6 tokenized interface identifier support is used for assigning well-known
@@ -37,11 +41,16 @@ IPv6 Identifiers are described in the draft
 [1]: <draft-chown-6man-tokenised-ipv6-identifiers-02>.
 
 .SS ip token set - set an interface token
-set the interface token to the kernel. Once a token is set, it cannot be
-removed from the interface, only overwritten.
+set the interface token to the kernel.
 .TP
 .I TOKEN
 the interface identifier token address.
+.TP
+.BI dev " DEV"
+the networking interface.
+
+.SS ip token del - delete an interface token
+delete the interface token from the kernel.
 .TP
 .BI dev " DEV"
 the networking interface.

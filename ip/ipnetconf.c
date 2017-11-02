@@ -24,8 +24,7 @@
 #include "utils.h"
 #include "ip_common.h"
 
-static struct
-{
+static struct {
 	int family;
 	int ifindex;
 } filter;
@@ -38,12 +37,21 @@ static void usage(void)
 	exit(-1);
 }
 
-#define NETCONF_RTA(r)	((struct rtattr*)(((char*)(r)) + NLMSG_ALIGN(sizeof(struct netconfmsg))))
+static void print_onoff(FILE *f, const char *flag, __u32 val)
+{
+	fprintf(f, "%s %s ", flag, val ? "on" : "off");
+}
+
+static struct rtattr *netconf_rta(struct netconfmsg *ncm)
+{
+	return (struct rtattr *)((char *)ncm
+				 + NLMSG_ALIGN(sizeof(struct netconfmsg)));
+}
 
 int print_netconf(const struct sockaddr_nl *who, struct rtnl_ctrl_data *ctrl,
 		  struct nlmsghdr *n, void *arg)
 {
-	FILE *fp = (FILE*)arg;
+	FILE *fp = (FILE *)arg;
 	struct netconfmsg *ncm = NLMSG_DATA(n);
 	int len = n->nlmsg_len;
 	struct rtattr *tb[NETCONFA_MAX+1];
@@ -65,7 +73,7 @@ int print_netconf(const struct sockaddr_nl *who, struct rtnl_ctrl_data *ctrl,
 	if (filter.family && filter.family != ncm->ncm_family)
 		return 0;
 
-	parse_rtattr(tb, NETCONFA_MAX, NETCONF_RTA(ncm),
+	parse_rtattr(tb, NETCONFA_MAX, netconf_rta(ncm),
 		     NLMSG_PAYLOAD(n, sizeof(*ncm)));
 
 	switch (ncm->ncm_family) {
@@ -81,7 +89,7 @@ int print_netconf(const struct sockaddr_nl *who, struct rtnl_ctrl_data *ctrl,
 	}
 
 	if (tb[NETCONFA_IFINDEX]) {
-		int *ifindex = (int *)RTA_DATA(tb[NETCONFA_IFINDEX]);
+		int *ifindex = (int *)rta_getattr_str(tb[NETCONFA_IFINDEX]);
 
 		switch (*ifindex) {
 		case NETCONFA_IFINDEX_ALL:
@@ -97,10 +105,10 @@ int print_netconf(const struct sockaddr_nl *who, struct rtnl_ctrl_data *ctrl,
 	}
 
 	if (tb[NETCONFA_FORWARDING])
-		fprintf(fp, "forwarding %s ",
-			*(int *)RTA_DATA(tb[NETCONFA_FORWARDING])?"on":"off");
+		print_onoff(fp, "forwarding",
+				rta_getattr_u32(tb[NETCONFA_FORWARDING]));
 	if (tb[NETCONFA_RP_FILTER]) {
-		int rp_filter = *(int *)RTA_DATA(tb[NETCONFA_RP_FILTER]);
+		__u32 rp_filter = rta_getattr_u32(tb[NETCONFA_RP_FILTER]);
 
 		if (rp_filter == 0)
 			fprintf(fp, "rp_filter off ");
@@ -112,12 +120,16 @@ int print_netconf(const struct sockaddr_nl *who, struct rtnl_ctrl_data *ctrl,
 			fprintf(fp, "rp_filter unknown mode ");
 	}
 	if (tb[NETCONFA_MC_FORWARDING])
-		fprintf(fp, "mc_forwarding %d ",
-			*(int *)RTA_DATA(tb[NETCONFA_MC_FORWARDING]));
+		print_onoff(fp, "mc_forwarding",
+				rta_getattr_u32(tb[NETCONFA_MC_FORWARDING]));
 
 	if (tb[NETCONFA_PROXY_NEIGH])
-		fprintf(fp, "proxy_neigh %s ",
-			*(int *)RTA_DATA(tb[NETCONFA_PROXY_NEIGH])?"on":"off");
+		print_onoff(fp, "proxy_neigh",
+				rta_getattr_u32(tb[NETCONFA_PROXY_NEIGH]));
+
+	if (tb[NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN])
+		print_onoff(fp, "ignore_routes_with_linkdown",
+		     rta_getattr_u32(tb[NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN]));
 
 	fprintf(fp, "\n");
 	fflush(fp);
@@ -142,7 +154,11 @@ static int do_show(int argc, char **argv)
 		struct nlmsghdr		n;
 		struct netconfmsg	ncm;
 		char			buf[1024];
-	} req;
+	} req = {
+		.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct netconfmsg)),
+		.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK,
+		.n.nlmsg_type = RTM_GETNETCONF,
+	};
 
 	ipnetconf_reset_filter(0);
 	filter.family = preferred_family;
@@ -164,10 +180,6 @@ static int do_show(int argc, char **argv)
 
 	ll_init_map(&rth);
 	if (filter.ifindex) {
-		memset(&req, 0, sizeof(req));
-		req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct netconfmsg));
-		req.n.nlmsg_flags = NLM_F_REQUEST|NLM_F_ACK;
-		req.n.nlmsg_type = RTM_GETNETCONF;
 		req.ncm.ncm_family = filter.family;
 		if (filter.ifindex)
 			addattr_l(&req.n, sizeof(req), NETCONFA_IFINDEX,

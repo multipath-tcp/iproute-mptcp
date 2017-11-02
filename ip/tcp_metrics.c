@@ -95,7 +95,6 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 	struct genlmsghdr *ghdr;
 	struct rtattr *attrs[TCP_METRICS_ATTR_MAX + 1], *a;
 	int len = n->nlmsg_len;
-	char abuf[256];
 	inet_prefix daddr, saddr;
 	int family, i, atype, stype, dlen = 0, slen = 0;
 
@@ -113,47 +112,44 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 	parse_rtattr(attrs, TCP_METRICS_ATTR_MAX, (void *) ghdr + GENL_HDRLEN,
 		     len);
 
-	a = attrs[TCP_METRICS_ATTR_ADDR_IPV4];
-	if (a) {
+	if (attrs[TCP_METRICS_ATTR_ADDR_IPV4]) {
 		if (f.daddr.family && f.daddr.family != AF_INET)
 			return 0;
+		a = attrs[TCP_METRICS_ATTR_ADDR_IPV4];
 		memcpy(&daddr.data, RTA_DATA(a), 4);
 		daddr.bytelen = 4;
 		family = AF_INET;
 		atype = TCP_METRICS_ATTR_ADDR_IPV4;
 		dlen = RTA_PAYLOAD(a);
-	} else {
-		a = attrs[TCP_METRICS_ATTR_ADDR_IPV6];
-		if (a) {
-			if (f.daddr.family && f.daddr.family != AF_INET6)
-				return 0;
-			memcpy(&daddr.data, RTA_DATA(a), 16);
-			daddr.bytelen = 16;
-			family = AF_INET6;
-			atype = TCP_METRICS_ATTR_ADDR_IPV6;
-			dlen = RTA_PAYLOAD(a);
-		} else
+	} else if (attrs[TCP_METRICS_ATTR_ADDR_IPV6]) {
+		if (f.daddr.family && f.daddr.family != AF_INET6)
 			return 0;
+		a = attrs[TCP_METRICS_ATTR_ADDR_IPV6];
+		memcpy(&daddr.data, RTA_DATA(a), 16);
+		daddr.bytelen = 16;
+		family = AF_INET6;
+		atype = TCP_METRICS_ATTR_ADDR_IPV6;
+		dlen = RTA_PAYLOAD(a);
+	} else {
+		return 0;
 	}
 
-	a = attrs[TCP_METRICS_ATTR_SADDR_IPV4];
-	if (a) {
+	if (attrs[TCP_METRICS_ATTR_SADDR_IPV4]) {
 		if (f.saddr.family && f.saddr.family != AF_INET)
 			return 0;
+		a = attrs[TCP_METRICS_ATTR_SADDR_IPV4];
 		memcpy(&saddr.data, RTA_DATA(a), 4);
 		saddr.bytelen = 4;
 		stype = TCP_METRICS_ATTR_SADDR_IPV4;
 		slen = RTA_PAYLOAD(a);
-	} else {
+	} else if (attrs[TCP_METRICS_ATTR_SADDR_IPV6]) {
+		if (f.saddr.family && f.saddr.family != AF_INET6)
+			return 0;
 		a = attrs[TCP_METRICS_ATTR_SADDR_IPV6];
-		if (a) {
-			if (f.saddr.family && f.saddr.family != AF_INET6)
-				return 0;
-			memcpy(&saddr.data, RTA_DATA(a), 16);
-			saddr.bytelen = 16;
-			stype = TCP_METRICS_ATTR_SADDR_IPV6;
-			slen = RTA_PAYLOAD(a);
-		}
+		memcpy(&saddr.data, RTA_DATA(a), 16);
+		saddr.bytelen = 16;
+		stype = TCP_METRICS_ATTR_SADDR_IPV6;
+		slen = RTA_PAYLOAD(a);
 	}
 
 	if (f.daddr.family && f.daddr.bitlen >= 0 &&
@@ -168,6 +164,7 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 
 	if (f.flushb) {
 		struct nlmsghdr *fn;
+
 		TCPM_REQUEST(req2, 128, TCP_METRICS_CMD_DEL, NLM_F_REQUEST);
 
 		addattr_l(&req2.n, sizeof(req2), atype, &daddr.data,
@@ -193,7 +190,7 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 		fprintf(fp, "Deleted ");
 
 	fprintf(fp, "%s",
-		format_host(family, dlen, &daddr.data, abuf, sizeof(abuf)));
+		format_host(family, dlen, &daddr.data));
 
 	a = attrs[TCP_METRICS_ATTR_AGE];
 	if (a) {
@@ -297,8 +294,7 @@ static int process_msg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 
 	if (slen) {
 		fprintf(fp, " source %s",
-			format_host(family, slen, &saddr.data, abuf,
-				    sizeof(abuf)));
+			format_host(family, slen, &saddr.data));
 	}
 
 	fprintf(fp, "\n");
@@ -333,6 +329,7 @@ static int tcpm_do_cmd(int cmd, int argc, char **argv)
 		if (strcmp(*argv, "src") == 0 ||
 		    strcmp(*argv, "source") == 0) {
 			char *who = *argv;
+
 			NEXT_ARG();
 			if (matches(*argv, "help") == 0)
 				usage();
@@ -354,6 +351,7 @@ static int tcpm_do_cmd(int cmd, int argc, char **argv)
 			}
 		} else {
 			char *who = "address";
+
 			if (strcmp(*argv, "addr") == 0 ||
 			    strcmp(*argv, "address") == 0) {
 				who = *argv;
@@ -400,17 +398,9 @@ static int tcpm_do_cmd(int cmd, int argc, char **argv)
 		ack = 0;
 	}
 
-	if (genl_family < 0) {
-		if (rtnl_open_byproto(&grth, 0, NETLINK_GENERIC) < 0) {
-			fprintf(stderr, "Cannot open generic netlink socket\n");
-			exit(1);
-		}
-		genl_family = genl_resolve_family(&grth,
-						  TCP_METRICS_GENL_NAME);
-		if (genl_family < 0)
-			exit(1);
-		req.n.nlmsg_type = genl_family;
-	}
+	if (genl_init_handle(&grth, TCP_METRICS_GENL_NAME, &genl_family))
+		exit(1);
+	req.n.nlmsg_type = genl_family;
 
 	if (!(cmd & CMD_FLUSH) && (atype >= 0 || (cmd & CMD_DEL))) {
 		if (ack)
@@ -504,7 +494,7 @@ int do_tcp_metrics(int argc, char **argv)
 	if (matches(argv[0], "help") == 0)
 		usage();
 
-	fprintf(stderr, "Command \"%s\" is unknown, "
-			"try \"ip tcp_metrics help\".\n", *argv);
+	fprintf(stderr, "Command \"%s\" is unknown, try \"ip tcp_metrics help\".\n",
+			*argv);
 	exit(-1);
 }

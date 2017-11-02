@@ -7,7 +7,7 @@ IPOBJ=ip.o ipaddress.o ipaddrlabel.o iproute.o iprule.o ipnetns.o \
     iplink_vxlan.o tcp_metrics.o iplink_ipoib.o ipnetconf.o link_ip6tnl.o \
     link_iptnl.o link_gre6.o iplink_bond.o iplink_bond_slave.o iplink_hsr.o \
     iplink_bridge.o iplink_bridge_slave.o ipfou.o iplink_ipvlan.o \
-    iplink_geneve.o iplink_vrf.o iproute_lwtunnel.o
+    iplink_geneve.o iplink_vrf.o iproute_lwtunnel.o ipmacsec.o ipila.o
 
 RTMONOBJ=rtmon.o
 
@@ -24,8 +24,10 @@ TARGETS=ip rtmon
 all: $(TARGETS) $(SCRIPTS)
 
 ip: $(IPOBJ) $(LIBNETLINK)
+	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
 rtmon: $(RTMONOBJ)
+	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
 install: all
 	install -m 0755 $(TARGETS) $(DESTDIR)$(SBINDIR)

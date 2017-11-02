@@ -9,20 +9,27 @@ ip-rule \- routing policy database management
 .B ip
 .RI "[ " OPTIONS " ]"
 .B rule
-.RI " { " COMMAND " | "
+.RI "{ " COMMAND " | "
 .BR help " }"
 .sp
 
 .ti -8
 .B  ip rule
-.RB " [ " list " | " add " | " del " | " flush " | " save " ]"
+.RB "[ " list
+.RI "[ " SELECTOR " ]]"
+
+.ti -8
+.B  ip rule
+.RB "{ " add " | " del " }"
 .I  SELECTOR ACTION
 
 .ti -8
-.B  ip rule  " restore "
+.B ip rule
+.RB "{ " flush " | " save " | " restore " }"
 
 .ti -8
 .IR SELECTOR " := [ "
+.BR not " ] ["
 .B  from
 .IR PREFIX " ] [ "
 .B  to
@@ -30,13 +37,14 @@ ip-rule \- routing policy database management
 .B  tos
 .IR TOS " ] [ "
 .B  fwmark
-.IR FWMARK[/MASK] " ] [ "
+.IR FWMARK\fR[\fB/\fIMASK "] ] [ "
 .B  iif
 .IR STRING " ] [ "
 .B  oif
 .IR STRING " ] [ "
 .B  pref
-.IR NUMBER " ]"
+.IR NUMBER " ] [ "
+.BR l3mdev " ]"
 
 .ti -8
 .IR ACTION " := [ "
@@ -45,8 +53,9 @@ ip-rule \- routing policy database management
 .B  nat
 .IR ADDRESS " ] [ "
 .B realms
-.RI "[" SRCREALM "/]" DSTREALM " ]"
-.I  SUPPRESSOR
+.RI "[" SRCREALM "\fB/\fR]" DSTREALM " ] ["
+.B goto
+.IR NUMBER " ] " SUPPRESSOR
 
 .ti -8
 .IR SUPPRESSOR " := [ "
@@ -111,8 +120,6 @@ The
 .B local
 table is a special routing table containing
 high priority control routes for local and broadcast addresses.
-.sp
-Rule 0 is special. It cannot be deleted or overridden.
 
 .TP
 2.
@@ -216,8 +223,10 @@ value to match.
 
 .TP
 .BI priority " PREFERENCE"
-the priority of this rule. Each rule should have an explicitly
-set
+the priority of this rule.
+.I PREFERENCE
+is an unsigned integer value, higher number means lower priority.  Each rule
+should have an explicitly set
 .I unique
 priority value.
 The options preference and order are synonyms with priority.

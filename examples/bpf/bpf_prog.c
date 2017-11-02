@@ -168,8 +168,8 @@
 
 /* Common, shared definitions with ebpf_agent.c. */
 #include "bpf_shared.h"
-/* Selection of BPF helper functions for our example. */
-#include "bpf_funcs.h"
+/* BPF helper functions for our example. */
+#include "../../include/bpf_api.h"
 
 /* Could be defined here as well, or included from the header. */
 #define TC_ACT_UNSPEC		(-1)
@@ -192,6 +192,7 @@ struct bpf_elf_map __section("maps") map_proto = {
 	.size_key	=	sizeof(uint8_t),
 	.size_value	=	sizeof(struct count_tuple),
 	.max_elem	=	256,
+	.flags		=	BPF_F_NO_PREALLOC,
 };
 
 struct bpf_elf_map __section("maps") map_queue = {
@@ -200,6 +201,7 @@ struct bpf_elf_map __section("maps") map_queue = {
 	.size_key	=	sizeof(uint32_t),
 	.size_value	=	sizeof(struct count_queue),
 	.max_elem	=	1024,
+	.flags		=	BPF_F_NO_PREALLOC,
 };
 
 struct bpf_elf_map __section("maps") map_drops = {
@@ -233,7 +235,7 @@ struct flow_keys {
 	__u8 ip_proto;
 };
 
-static inline int flow_ports_offset(__u8 ip_proto)
+static __inline__ int flow_ports_offset(__u8 ip_proto)
 {
 	switch (ip_proto) {
 	case IPPROTO_TCP:
@@ -249,14 +251,14 @@ static inline int flow_ports_offset(__u8 ip_proto)
 	}
 }
 
-static inline bool flow_is_frag(struct __sk_buff *skb, int nh_off)
+static __inline__ bool flow_is_frag(struct __sk_buff *skb, int nh_off)
 {
 	return !!(load_half(skb, nh_off + offsetof(struct iphdr, frag_off)) &
 		  (IP_MF | IP_OFFSET));
 }
 
-static inline int flow_parse_ipv4(struct __sk_buff *skb, int nh_off,
-				  __u8 *ip_proto, struct flow_keys *flow)
+static __inline__ int flow_parse_ipv4(struct __sk_buff *skb, int nh_off,
+				      __u8 *ip_proto, struct flow_keys *flow)
 {
 	__u8 ip_ver_len;
 
@@ -279,7 +281,7 @@ static inline int flow_parse_ipv4(struct __sk_buff *skb, int nh_off,
 	return nh_off;
 }
 
-static inline __u32 flow_addr_hash_ipv6(struct __sk_buff *skb, int off)
+static __inline__ __u32 flow_addr_hash_ipv6(struct __sk_buff *skb, int off)
 {
 	__u32 w0 = load_word(skb, off);
 	__u32 w1 = load_word(skb, off + sizeof(w0));
@@ -289,8 +291,8 @@ static inline __u32 flow_addr_hash_ipv6(struct __sk_buff *skb, int off)
 	return w0 ^ w1 ^ w2 ^ w3;
 }
 
-static inline int flow_parse_ipv6(struct __sk_buff *skb, int nh_off,
-				  __u8 *ip_proto, struct flow_keys *flow)
+static __inline__ int flow_parse_ipv6(struct __sk_buff *skb, int nh_off,
+				      __u8 *ip_proto, struct flow_keys *flow)
 {
 	*ip_proto = load_byte(skb, nh_off + offsetof(struct ipv6hdr, nexthdr));
 
@@ -300,8 +302,8 @@ static inline int flow_parse_ipv6(struct __sk_buff *skb, int nh_off,
 	return nh_off + sizeof(struct ipv6hdr);
 }
 
-static inline bool flow_dissector(struct __sk_buff *skb,
-				  struct flow_keys *flow)
+static __inline__ bool flow_dissector(struct __sk_buff *skb,
+				      struct flow_keys *flow)
 {
 	int poff, nh_off = BPF_LL_OFF + ETH_HLEN;
 	__be16 proto = skb->protocol;
@@ -381,16 +383,16 @@ static inline bool flow_dissector(struct __sk_buff *skb,
 	return true;
 }
 
-static inline void cls_update_proto_map(const struct __sk_buff *skb,
-					const struct flow_keys *flow)
+static __inline__ void cls_update_proto_map(const struct __sk_buff *skb,
+					    const struct flow_keys *flow)
 {
 	uint8_t proto = flow->ip_proto;
 	struct count_tuple *ct, _ct;
 
-	ct = bpf_map_lookup_elem(&map_proto, &proto);
+	ct = map_lookup_elem(&map_proto, &proto);
 	if (likely(ct)) {
-		__sync_fetch_and_add(&ct->packets, 1);
-		__sync_fetch_and_add(&ct->bytes, skb->len);
+		lock_xadd(&ct->packets, 1);
+		lock_xadd(&ct->bytes, skb->len);
 		return;
 	}
 
@@ -398,10 +400,10 @@ static inline void cls_update_proto_map(const struct __sk_buff *skb,
 	_ct.packets = 1;
 	_ct.bytes = skb->len;
 
-	bpf_map_update_elem(&map_proto, &proto, &_ct, BPF_ANY);
+	map_update_elem(&map_proto, &proto, &_ct, BPF_ANY);
 }
 
-static inline void cls_update_queue_map(const struct __sk_buff *skb)
+static __inline__ void cls_update_queue_map(const struct __sk_buff *skb)
 {
 	uint32_t queue = skb->queue_mapping;
 	struct count_queue *cq, _cq;
@@ -409,11 +411,11 @@ static inline void cls_update_queue_map(const struct __sk_buff *skb)
 
 	mismatch = skb->queue_mapping != get_smp_processor_id();
 
-	cq = bpf_map_lookup_elem(&map_queue, &queue);
+	cq = map_lookup_elem(&map_queue, &queue);
 	if (likely(cq)) {
-		__sync_fetch_and_add(&cq->total, 1);
+		lock_xadd(&cq->total, 1);
 		if (mismatch)
-			__sync_fetch_and_add(&cq->mismatch, 1);
+			lock_xadd(&cq->mismatch, 1);
 		return;
 	}
 
@@ -421,7 +423,7 @@ static inline void cls_update_queue_map(const struct __sk_buff *skb)
 	_cq.total = 1;
 	_cq.mismatch = mismatch ? 1 : 0;
 
-	bpf_map_update_elem(&map_queue, &queue, &_cq, BPF_ANY);
+	map_update_elem(&map_queue, &queue, &_cq, BPF_ANY);
 }
 
 /* eBPF program definitions, placed in various sections, which can
@@ -439,7 +441,8 @@ static inline void cls_update_queue_map(const struct __sk_buff *skb)
  * It is however not required to have multiple programs sharing
  * a file.
  */
-__section("classifier") int cls_main(struct __sk_buff *skb)
+__section("classifier")
+int cls_main(struct __sk_buff *skb)
 {
 	struct flow_keys flow;
 
@@ -452,17 +455,18 @@ __section("classifier") int cls_main(struct __sk_buff *skb)
 	return flow.ip_proto;
 }
 
-static inline void act_update_drop_map(void)
+static __inline__ void act_update_drop_map(void)
 {
 	uint32_t *count, cpu = get_smp_processor_id();
 
-	count = bpf_map_lookup_elem(&map_drops, &cpu);
+	count = map_lookup_elem(&map_drops, &cpu);
 	if (count)
 		/* Only this cpu is accessing this element. */
 		(*count)++;
 }
 
-__section("action-mark") int act_mark_main(struct __sk_buff *skb)
+__section("action-mark")
+int act_mark_main(struct __sk_buff *skb)
 {
 	/* You could also mangle skb data here with the helper function
 	 * BPF_FUNC_skb_store_bytes, etc. Or, alternatively you could
@@ -479,7 +483,8 @@ __section("action-mark") int act_mark_main(struct __sk_buff *skb)
 	return TC_ACT_UNSPEC;
 }
 
-__section("action-rand") int act_rand_main(struct __sk_buff *skb)
+__section("action-rand")
+int act_rand_main(struct __sk_buff *skb)
 {
 	/* Sorry, we're near event horizon ... */
 	if ((get_prandom_u32() & 3) == 0) {
@@ -493,4 +498,4 @@ __section("action-rand") int act_rand_main(struct __sk_buff *skb)
 /* Last but not least, the file contains a license. Some future helper
  * functions may only be available with a GPL license.
  */
-char __license[] __section("license") = "GPL";
+BPF_LICENSE("GPL");

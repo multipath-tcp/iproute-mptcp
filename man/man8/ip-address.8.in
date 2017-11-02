@@ -23,7 +23,7 @@ ip-address \- protocol address management
 .IB IFADDR " dev " IFNAME " [ " mngtmpaddr " ]"
 
 .ti -8
-.BR "ip address" " { " show " | " save " | " flush " } [ " dev
+.BR "ip address" " { " save " | " flush " } [ " dev
 .IR IFNAME " ] [ "
 .B  scope
 .IR SCOPE-ID " ] [ "
@@ -31,6 +31,23 @@ ip-address \- protocol address management
 .IR PREFIX " ] [ " FLAG-LIST " ] [ "
 .B  label
 .IR PATTERN " ] [ " up " ]"
+
+.ti -8
+.BR "ip address" " [ " show  " [ " dev
+.IR IFNAME " ] [ "
+.B  scope
+.IR SCOPE-ID " ] [ "
+.B  to
+.IR PREFIX " ] [ " FLAG-LIST " ] [ "
+.B  label
+.IR PATTERN " ] [ "
+.B  master
+.IR DEVICE " ] [ "
+.B  type
+.IR TYPE " ] [ "
+.B vrf
+.IR NAME " ] [ "
+.BR up " ] ]"
 
 .ti -8
 .BR "ip address" " { " showdump " | " restore " }"
@@ -58,27 +75,60 @@ ip-address \- protocol address management
 
 .ti -8
 .IR FLAG " := "
-.RB "[ " permanent " | " dynamic " | " secondary " | " primary " | \
-[ - ] " tentative " | [ - ] " deprecated " | [ - ] " dadfailed " | "\
-temporary " | " CONFFLAG-LIST " ]"
+.RB "[ " permanent " | " dynamic " | " secondary " | " primary " |"
+.RB [ - ] tentative " | [" - ] deprecated " | [" - ] dadfailed " |"
+.BR temporary " |"
+.IR CONFFLAG-LIST " ]"
 
 .ti -8
 .IR CONFFLAG-LIST " := [ "  CONFFLAG-LIST " ] " CONFFLAG
 
 .ti -8
 .IR CONFFLAG " := "
-.RB "[ " home " | " mngtmpaddr " | " nodad " | " noprefixroute " ]"
+.RB "[ " home " | " mngtmpaddr " | " nodad " | " noprefixroute " | " autojoin " ]"
 
 .ti -8
 .IR LIFETIME " := [ "
 .BI valid_lft " LFT"
-.RB "| " preferred_lft
+.RB "] [ " preferred_lft
 .IR  LFT " ]"
 
 .ti -8
 .IR LFT " := [ "
 .BR forever " |"
 .IR SECONDS " ]"
+
+.ti -8
+.IR TYPE " := [ "
+.BR bridge " | "
+.BR bridge_slave " |"
+.BR bond " | "
+.BR bond_slave " |"
+.BR can " | "
+.BR dummy " | "
+.BR hsr " | "
+.BR ifb " | "
+.BR ipoib " |"
+.BR macvlan  " | "
+.BR macvtap  " | "
+.BR vcan " | "
+.BR veth " | "
+.BR vlan " | "
+.BR vxlan " |"
+.BR ip6tnl " |"
+.BR ipip " |"
+.BR sit " |"
+.BR gre " |"
+.BR gretap " |"
+.BR ip6gre " |"
+.BR ip6gretap " |"
+.BR vti " |"
+.BR vrf " |"
+.BR nlmon " |"
+.BR ipvlan " |"
+.BR lowpan " |"
+.BR geneve " |"
+.BR macsec " ]"
 
 .SH "DESCRIPTION"
 The
@@ -201,6 +251,26 @@ address, and don't search for one to delete when removing the address. Changing
 an address to add this flag will remove the automatically added prefix route,
 changing it to remove this flag will create the prefix route automatically.
 
+.TP
+.B autojoin
+Joining multicast groups on Ethernet level via
+.B "ip maddr"
+command does not work if connected to an Ethernet switch that does IGMP
+snooping since the switch would not replicate multicast packets on ports that
+did not have IGMP reports for the multicast addresses.
+
+Linux VXLAN interfaces created via
+.B "ip link add vxlan"
+have the
+.B group
+option that enables them to do the required join.
+
+Using the
+.B autojoin
+flag when adding a multicast address enables similar functionality for
+Openvswitch VXLAN interfaces as well as other tunneling mechanisms that need to
+receive multicast traffic.
+
 .SS ip address delete - delete protocol address
 .B Arguments:
 coincide with the arguments of
@@ -228,6 +298,24 @@ only list addresses with labels matching the
 .IR "PATTERN" .
 .I PATTERN
 is a usual shell style pattern.
+
+.TP
+.BI master " DEVICE"
+only list interfaces enslaved to this master device.
+
+.TP
+.BI vrf " NAME "
+only list interfaces enslaved to this vrf.
+
+.TP
+.BI type " TYPE"
+only list interfaces of the given type.
+
+Note that the type name is not checked against the list of supported types -
+instead it is sent as-is to the kernel. Later it is used to filter the returned
+interface list by comparing it with the relevant attribute in case the kernel
+didn't filter already. Therefore any string is accepted, but may lead to empty
+output.
 
 .TP
 .B up
@@ -280,8 +368,8 @@ This command flushes the protocol addresses selected by some criteria.
 
 .PP
 This command has the same arguments as
-.B show.
-The difference is that it does not run when no arguments are given.
+.BR show " except that " type " and " master " selectors are not supported."
+Another difference is that it does not run when no arguments are given.
 
 .PP
 .B Warning:

@@ -36,6 +36,7 @@ static void print_usage(FILE *f, int sit)
 		fprintf(f, "          [ mode { ip6ip | ipip | any } ]\n");
 		fprintf(f, "          [ isatap ]\n");
 	}
+	fprintf(f, "          [ external ]\n");
 	fprintf(f, "\n");
 	fprintf(f, "Where: NAME := STRING\n");
 	fprintf(f, "       ADDR := { IP_ADDRESS | any }\n");
@@ -53,12 +54,18 @@ static void usage(int sit)
 static int iptunnel_parse_opt(struct link_util *lu, int argc, char **argv,
 			      struct nlmsghdr *n)
 {
+	struct ifinfomsg *ifi = (struct ifinfomsg *)(n + 1);
 	struct {
 		struct nlmsghdr n;
 		struct ifinfomsg i;
 		char buf[2048];
-	} req;
-	struct ifinfomsg *ifi = (struct ifinfomsg *)(n + 1);
+	} req = {
+		.n.nlmsg_len = NLMSG_LENGTH(sizeof(*ifi)),
+		.n.nlmsg_flags = NLM_F_REQUEST,
+		.n.nlmsg_type = RTM_GETLINK,
+		.i.ifi_family = preferred_family,
+		.i.ifi_index = ifi->ifi_index,
+	};
 	struct rtattr *tb[IFLA_MAX + 1];
 	struct rtattr *linkinfo[IFLA_INFO_MAX+1];
 	struct rtattr *iptuninfo[IFLA_IPTUN_MAX + 1];
@@ -71,7 +78,7 @@ static int iptunnel_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u8 pmtudisc = 1;
 	__u16 iflags = 0;
 	__u8 proto = 0;
-	struct in6_addr ip6rdprefix;
+	struct in6_addr ip6rdprefix = {};
 	__u16 ip6rdprefixlen = 0;
 	__u32 ip6rdrelayprefix = 0;
 	__u16 ip6rdrelayprefixlen = 0;
@@ -79,18 +86,9 @@ static int iptunnel_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u16 encapflags = 0;
 	__u16 encapsport = 0;
 	__u16 encapdport = 0;
-
-	memset(&ip6rdprefix, 0, sizeof(ip6rdprefix));
+	__u8 metadata = 0;
 
 	if (!(n->nlmsg_flags & NLM_F_CREATE)) {
-		memset(&req, 0, sizeof(req));
-
-		req.n.nlmsg_len = NLMSG_LENGTH(sizeof(*ifi));
-		req.n.nlmsg_flags = NLM_F_REQUEST;
-		req.n.nlmsg_type = RTM_GETLINK;
-		req.i.ifi_family = preferred_family;
-		req.i.ifi_index = ifi->ifi_index;
-
 		if (rtnl_talk(&rth, &req.n, &req.n, sizeof(req)) < 0) {
 get_failed:
 			fprintf(stderr,
@@ -165,6 +163,8 @@ get_failed:
 		if (iptuninfo[IFLA_IPTUN_6RD_RELAY_PREFIXLEN])
 			ip6rdrelayprefixlen =
 				rta_getattr_u16(iptuninfo[IFLA_IPTUN_6RD_RELAY_PREFIXLEN]);
+		if (iptuninfo[IFLA_IPTUN_COLLECT_METADATA])
+			metadata = 1;
 	}
 
 	while (argc > 0) {
@@ -197,6 +197,7 @@ get_failed:
 			   strcmp(*argv, "tclass") == 0 ||
 			   matches(*argv, "dsfield") == 0) {
 			__u32 uval;
+
 			NEXT_ARG();
 			if (strcmp(*argv, "inherit") != 0) {
 				if (rtnl_dsfield_a2n(&uval, *argv))
@@ -260,8 +261,11 @@ get_failed:
 			encapflags |= TUNNEL_ENCAP_FLAG_REMCSUM;
 		} else if (strcmp(*argv, "noencap-remcsum") == 0) {
 			encapflags &= ~TUNNEL_ENCAP_FLAG_REMCSUM;
+		} else if (strcmp(*argv, "external") == 0) {
+			metadata = 1;
 		} else if (strcmp(*argv, "6rd-prefix") == 0) {
 			inet_prefix prefix;
+
 			NEXT_ARG();
 			if (get_prefix(&prefix, *argv, AF_INET6))
 				invarg("invalid 6rd_prefix\n", *argv);
@@ -269,6 +273,7 @@ get_failed:
 			ip6rdprefixlen = prefix.bitlen;
 		} else if (strcmp(*argv, "6rd-relay_prefix") == 0) {
 			inet_prefix prefix;
+
 			NEXT_ARG();
 			if (get_prefix(&prefix, *argv, AF_INET))
 				invarg("invalid 6rd-relay_prefix\n", *argv);
@@ -276,6 +281,7 @@ get_failed:
 			ip6rdrelayprefixlen = prefix.bitlen;
 		} else if (strcmp(*argv, "6rd-reset") == 0) {
 			inet_prefix prefix;
+
 			get_prefix(&prefix, "2002::", AF_INET6);
 			memcpy(&ip6rdprefix, prefix.data, 16);
 			ip6rdprefixlen = 16;
@@ -289,6 +295,11 @@ get_failed:
 	if (ttl && pmtudisc == 0) {
 		fprintf(stderr, "ttl != 0 and nopmtudisc are incompatible\n");
 		exit(-1);
+	}
+
+	if (metadata) {
+		addattr_l(n, 1024, IFLA_IPTUN_COLLECT_METADATA, NULL, 0);
+		return 0;
 	}
 
 	addattr32(n, 1024, IFLA_IPTUN_LINK, link);
@@ -332,25 +343,25 @@ static void iptunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[
 		return;
 
 	if (tb[IFLA_IPTUN_REMOTE]) {
-		unsigned addr = rta_getattr_u32(tb[IFLA_IPTUN_REMOTE]);
+		unsigned int addr = rta_getattr_u32(tb[IFLA_IPTUN_REMOTE]);
 
 		if (addr)
-			remote = format_host(AF_INET, 4, &addr, s1, sizeof(s1));
+			remote = format_host(AF_INET, 4, &addr);
 	}
 
 	fprintf(f, "remote %s ", remote);
 
 	if (tb[IFLA_IPTUN_LOCAL]) {
-		unsigned addr = rta_getattr_u32(tb[IFLA_IPTUN_LOCAL]);
+		unsigned int addr = rta_getattr_u32(tb[IFLA_IPTUN_LOCAL]);
 
 		if (addr)
-			local = format_host(AF_INET, 4, &addr, s1, sizeof(s1));
+			local = format_host(AF_INET, 4, &addr);
 	}
 
 	fprintf(f, "local %s ", local);
 
 	if (tb[IFLA_IPTUN_LINK] && rta_getattr_u32(tb[IFLA_IPTUN_LINK])) {
-		unsigned link = rta_getattr_u32(tb[IFLA_IPTUN_LINK]);
+		unsigned int link = rta_getattr_u32(tb[IFLA_IPTUN_LINK]);
 		const char *n = if_indextoname(link, s2);
 
 		if (n)
@@ -400,8 +411,7 @@ static void iptunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[
 		       prefixlen);
 		if (relayprefix) {
 			printf("6rd-relay_prefix %s/%u ",
-			       format_host(AF_INET, 4, &relayprefix, s1,
-					   sizeof(s1)),
+			       format_host(AF_INET, 4, &relayprefix),
 			       relayprefixlen);
 		}
 	}

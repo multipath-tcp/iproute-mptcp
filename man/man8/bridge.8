@@ -20,8 +20,9 @@ bridge \- show / manipulate bridge addresses and devices
 .IR OPTIONS " := { "
 \fB\-V\fR[\fIersion\fR] |
 \fB\-s\fR[\fItatistics\fR] |
-\fB\-n\fR[\fIetns\fR] name }
-\fB\-b\fR[\fIatch\fR] filename }
+\fB\-n\fR[\fIetns\fR] name |
+\fB\-b\fR[\fIatch\fR] filename |
+\fB\-j\fR[\fIson\fR] }
 
 .ti -8
 .BR "bridge link set"
@@ -42,7 +43,8 @@ bridge \- show / manipulate bridge addresses and devices
 .BR learning_sync " { " on " | " off " } ] [ "
 .BR flood " { " on " | " off " } ] [ "
 .BR hwmode " { " vepa " | " veb " } ] [ "
-.BR self " ] [ " master " ] "
+.BR mcast_flood " { " on " | " off " } ] [ "
+.BR self " ] [ " master " ]"
 
 .ti -8
 .BR "bridge link" " [ " show " ] [ "
@@ -54,7 +56,7 @@ bridge \- show / manipulate bridge addresses and devices
 .I LLADDR
 .B dev
 .IR DEV " { "
-.BR local " | " temp " } [ "
+.BR local " | " static " | " dynamic " } [ "
 .BR self " ] [ " master " ] [ " router " ] [ " use " ] [ "
 .B dst
 .IR IPADDR " ] [ "
@@ -119,6 +121,10 @@ is given multiple times, the amount of information increases.
 As a rule, the information is statistics or some time values.
 
 .TP
+.BR "\-d" , " \-details"
+print detailed information about MDB router ports.
+
+.TP
 .BR "\-n" , " \-net" , " \-netns " <NETNS>
 switches
 .B bridge
@@ -148,6 +154,10 @@ First failure will cause termination of bridge command.
 Don't terminate bridge command on errors in batch mode.
 If there were any errors during execution of the commands, the application
 return code will be non zero.
+
+.TP
+.BR "\-json"
+Display results in JSON format. Currently available for vlan and fdb.
 
 .SH BRIDGE - COMMAND SYNTAX
 
@@ -230,8 +240,8 @@ error.
 .sp
 
 .B 1
-- STP LISTENING state. Only valid if STP is enabled on the brige. In this
-state the port for list for STP BPDUs and drop all other traffic.
+- STP LISTENING state. Only valid if STP is enabled on the bridge. In this
+state the port listens for STP BPDUs and drops all other traffic frames.
 .sp
 
 .B 2
@@ -252,7 +262,7 @@ STP BPDUs.
 
 .TP
 .BR "guard on " or " guard off "
-Controls whether STP BPUDs will be processed by the bridge port. By default,
+Controls whether STP BPDUs will be processed by the bridge port. By default,
 the flag is turned off allowed BPDU processing. Turning this flag on will
 cause the port to stop processing STP BPDUs.
 
@@ -301,6 +311,10 @@ switch.
 - bridging happens in hardware.
 
 .TP
+.BR "mcast_flood on " or " mcast_flood off "
+Controls whether a given port will be flooded with multicast traffic for which there is no MDB entry. By default this flag is on.
+
+.TP
 .BI self
 link setting is configured on specified physical device
 
@@ -337,6 +351,18 @@ the Ethernet MAC address.
 .TP
 .BI dev " DEV"
 the interface to which this address is associated.
+
+.B local
+- is a local permanent fdb entry
+.sp
+
+.B static
+- is a static (no arp) fdb entry
+.sp
+
+.B dynamic
+- is a dynamic reachable age-able fdb entry
+.sp
 
 .B self
 - the address is associated with the port drivers fdb. Usually hardware.
@@ -491,6 +517,11 @@ With the
 option, the command becomes verbose. It prints out the ports known to have
 a connected router.
 
+.PP
+With the
+.B -statistics
+option, the command displays timer values for mdb and router port entries.
+
 .SH bridge vlan - VLAN filter list
 
 .B vlan
@@ -530,8 +561,8 @@ device is the bridge device.
 .BI master
 the vlan is configured on the software bridge (default).
 
-.SS bridge vlan delete - delete a forwarding database entry
-This command removes an existing fdb entry.
+.SS bridge vlan delete - delete a vlan filter entry
+This command removes an existing vlan filter entry.
 
 .PP
 The arguments are the same as with
@@ -543,6 +574,11 @@ flags are ignored.
 .SS bridge vlan show - list vlan configuration.
 
 This command displays the current VLAN filter table.
+
+.PP
+With the
+.B -statistics
+option, the command displays per-vlan traffic statistics.
 
 .SH bridge monitor - state monitoring
 

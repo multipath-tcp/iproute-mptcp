@@ -32,41 +32,41 @@
 static struct m_pedit_util *pedit_list;
 static int pedit_debug;
 
-static void
-explain(void)
+static void explain(void)
 {
-	fprintf(stderr, "Usage: ... pedit munge <MUNGE>\n");
+	fprintf(stderr, "Usage: ... pedit munge <MUNGE> [CONTROL]\n");
 	fprintf(stderr,
 		"Where: MUNGE := <RAW>|<LAYERED>\n"
-		"\t<RAW>:= <OFFSETC>[ATC]<CMD>\n "
-		"\t\tOFFSETC:= offset <offval> <u8|u16|u32>\n "
-		"\t\tATC:= at <atval> offmask <maskval> shift <shiftval>\n "
-		"\t\tNOTE: offval is byte offset, must be multiple of 4\n "
-		"\t\tNOTE: maskval is a 32 bit hex number\n "
-		"\t\tNOTE: shiftval is a is a shift value\n "
-		"\t\tCMD:= clear | invert | set <setval>| retain\n "
-		"\t<LAYERED>:= ip <ipdata> | ip6 <ip6data> \n "
-		" \t\t| udp <udpdata> | tcp <tcpdata> | icmp <icmpdata> \n"
+		"\t<RAW>:= <OFFSETC>[ATC]<CMD>\n \t\tOFFSETC:= offset <offval> <u8|u16|u32>\n"
+		"\t\tATC:= at <atval> offmask <maskval> shift <shiftval>\n"
+		"\t\tNOTE: offval is byte offset, must be multiple of 4\n"
+		"\t\tNOTE: maskval is a 32 bit hex number\n \t\tNOTE: shiftval is a is a shift value\n"
+		"\t\tCMD:= clear | invert | set <setval>| retain\n"
+		"\t<LAYERED>:= ip <ipdata> | ip6 <ip6data>\n"
+		" \t\t| udp <udpdata> | tcp <tcpdata> | icmp <icmpdata>\n"
+		"\tCONTROL:= reclassify | pipe | drop | continue | pass\n"
 		"For Example usage look at the examples directory\n");
 
 }
 
-static void
-usage(void)
+static void usage(void)
 {
 	explain();
 	exit(-1);
 }
 
-static int
-pedit_parse_nopopt (int *argc_p, char ***argv_p,struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
+static int pedit_parse_nopopt(int *argc_p, char ***argv_p,
+			      struct tc_pedit_sel *sel,
+			      struct tc_pedit_key *tkey)
 {
 	int argc = *argc_p;
 	char **argv = *argv_p;
 
 	if (argc) {
-		fprintf(stderr, "Unknown action  hence option \"%s\" is unparsable\n", *argv);
-			return -1;
+		fprintf(stderr,
+			"Unknown action  hence option \"%s\" is unparsable\n",
+			*argv);
+		return -1;
 	}
 
 	return 0;
@@ -78,7 +78,7 @@ static struct m_pedit_util *get_pedit_kind(const char *str)
 	static void *pBODY;
 	void *dlh;
 	char buf[256];
-	struct  m_pedit_util *p;
+	struct m_pedit_util *p;
 
 	for (p = pedit_list; p; p = p->next) {
 		if (strcmp(p->id, str) == 0)
@@ -107,18 +107,16 @@ reg:
 	return p;
 
 noexist:
-	p = malloc(sizeof(*p));
+	p = calloc(1, sizeof(*p));
 	if (p) {
-		memset(p, 0, sizeof(*p));
-		strncpy(p->id, str, sizeof(p->id)-1);
+		strncpy(p->id, str, sizeof(p->id) - 1);
 		p->parse_peopt = pedit_parse_nopopt;
 		goto reg;
 	}
 	return p;
 }
 
-int
-pack_key(struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
+int pack_key(struct tc_pedit_sel *sel, struct tc_pedit_key *tkey)
 {
 	int hwm = sel->nkeys;
 
@@ -140,9 +138,8 @@ pack_key(struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
 	return 0;
 }
 
-
-int
-pack_key32(__u32 retain,struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
+int pack_key32(__u32 retain, struct tc_pedit_sel *sel,
+	       struct tc_pedit_key *tkey)
 {
 	if (tkey->off > (tkey->off & ~3)) {
 		fprintf(stderr,
@@ -152,16 +149,14 @@ pack_key32(__u32 retain,struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
 
 	tkey->val = htonl(tkey->val & retain);
 	tkey->mask = htonl(tkey->mask | ~retain);
-	/* jamal remove this - it is not necessary given the if check above */
-	tkey->off &= ~3;
-	return pack_key(sel,tkey);
+	return pack_key(sel, tkey);
 }
 
-int
-pack_key16(__u32 retain,struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
+int pack_key16(__u32 retain, struct tc_pedit_sel *sel,
+	       struct tc_pedit_key *tkey)
 {
 	int ind, stride;
-	__u32 m[4] = {0xFFFF0000,0xFF0000FF,0x0000FFFF};
+	__u32 m[4] = { 0x0000FFFF, 0xFF0000FF, 0xFFFF0000 };
 
 	if (tkey->val > 0xFFFF || tkey->mask > 0xFFFF) {
 		fprintf(stderr, "pack_key16 bad value\n");
@@ -171,53 +166,49 @@ pack_key16(__u32 retain,struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
 	ind = tkey->off & 3;
 
 	if (ind == 3) {
-		fprintf(stderr, "pack_key16 bad index value %d\n",ind);
+		fprintf(stderr, "pack_key16 bad index value %d\n", ind);
 		return -1;
 	}
 
-	stride = 8 * ind;
-	tkey->val = htons(tkey->val);
-	tkey->val <<= stride;
-	tkey->mask <<= stride;
-	retain <<= stride;
-	tkey->mask = retain|m[ind];
+	stride = 8 * (2 - ind);
+	tkey->val = htonl((tkey->val & retain) << stride);
+	tkey->mask = htonl(((tkey->mask | ~retain) << stride) | m[ind]);
 
 	tkey->off &= ~3;
 
 	if (pedit_debug)
-		printf("pack_key16: Final val %08x mask %08x \n",tkey->val,tkey->mask);
-	return pack_key(sel,tkey);
+		printf("pack_key16: Final val %08x mask %08x\n",
+		       tkey->val, tkey->mask);
+	return pack_key(sel, tkey);
 
 }
 
-int
-pack_key8(__u32 retain,struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
+int pack_key8(__u32 retain, struct tc_pedit_sel *sel, struct tc_pedit_key *tkey)
 {
 	int ind, stride;
-	__u32 m[4] = {0xFFFFFF00,0xFFFF00FF,0xFF00FFFF,0x00FFFFFF};
+	__u32 m[4] = { 0x00FFFFFF, 0xFF00FFFF, 0xFFFF00FF, 0xFFFFFF00 };
 
 	if (tkey->val > 0xFF || tkey->mask > 0xFF) {
-		fprintf(stderr, "pack_key8 bad value (val %x mask %x\n", tkey->val, tkey->mask);
+		fprintf(stderr, "pack_key8 bad value (val %x mask %x\n",
+			tkey->val, tkey->mask);
 		return -1;
 	}
 
 	ind = tkey->off & 3;
 
-	stride = 8 * ind;
-	tkey->val <<= stride;
-	tkey->mask <<= stride;
-	retain <<= stride;
-	tkey->mask = retain|m[ind];
+	stride = 8 * (3 - ind);
+	tkey->val = htonl((tkey->val & retain) << stride);
+	tkey->mask = htonl(((tkey->mask | ~retain) << stride) | m[ind]);
 
 	tkey->off &= ~3;
 
 	if (pedit_debug)
-		printf("pack_key8: Final word off %d  val %08x mask %08x \n",tkey->off , tkey->val,tkey->mask);
-	return pack_key(sel,tkey);
+		printf("pack_key8: Final word off %d  val %08x mask %08x\n",
+		       tkey->off, tkey->val, tkey->mask);
+	return pack_key(sel, tkey);
 }
 
-int
-parse_val(int *argc_p, char ***argv_p, __u32 * val, int type)
+int parse_val(int *argc_p, char ***argv_p, __u32 *val, int type)
 {
 	int argc = *argc_p;
 	char **argv = *argv_p;
@@ -225,30 +216,30 @@ parse_val(int *argc_p, char ***argv_p, __u32 * val, int type)
 	if (argc <= 0)
 		return -1;
 
-	if (TINT == type)
-		return get_integer((int *) val, *argv, 0);
+	if (type == TINT)
+		return get_integer((int *)val, *argv, 0);
 
-	if (TU32 == type)
+	if (type == TU32)
 		return get_u32(val, *argv, 0);
 
-	if (TIPV4 == type) {
+	if (type == TIPV4) {
 		inet_prefix addr;
-		if (get_prefix_1(&addr, *argv, AF_INET)) {
+
+		if (get_prefix_1(&addr, *argv, AF_INET))
 			return -1;
-		}
-		*val=addr.data[0];
+
+		*val = addr.data[0];
 		return 0;
 	}
-	if (TIPV6 == type) {
-		/* not implemented yet */
-		return -1;
-	}
+
+	if (type == TIPV6)
+		return -1; /* not implemented yet */
 
 	return -1;
 }
 
-int
-parse_cmd(int *argc_p, char ***argv_p, __u32 len, int type,__u32 retain,struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
+int parse_cmd(int *argc_p, char ***argv_p, __u32 len, int type, __u32 retain,
+	      struct tc_pedit_sel *sel, struct tc_pedit_key *tkey)
 {
 	__u32 mask = 0, val = 0;
 	__u32 o = 0xFF;
@@ -260,7 +251,8 @@ parse_cmd(int *argc_p, char ***argv_p, __u32 len, int type,__u32 retain,struct t
 		return -1;
 
 	if (pedit_debug)
-		printf("parse_cmd argc %d %s offset %d length %d\n",argc,*argv,tkey->off,len);
+		printf("parse_cmd argc %d %s offset %d length %d\n",
+		       argc, *argv, tkey->off, len);
 
 	if (len == 2)
 		o = 0xFFFF;
@@ -268,57 +260,61 @@ parse_cmd(int *argc_p, char ***argv_p, __u32 len, int type,__u32 retain,struct t
 		o = 0xFFFFFFFF;
 
 	if (matches(*argv, "invert") == 0) {
-		retain = val = mask = o;
+		val = mask = o;
 	} else if (matches(*argv, "set") == 0) {
 		NEXT_ARG();
 		if (parse_val(&argc, &argv, &val, type))
 			return -1;
 	} else if (matches(*argv, "preserve") == 0) {
-		retain = mask = o;
+		retain = 0;
 	} else {
 		if (matches(*argv, "clear") != 0)
 			return -1;
 	}
 
-	argc--; argv++;
+	argc--;
+	argv++;
 
 	if (argc && matches(*argv, "retain") == 0) {
 		NEXT_ARG();
 		if (parse_val(&argc, &argv, &retain, TU32))
 			return -1;
-		argc--; argv++;
+		argc--;
+		argv++;
 	}
 
 	tkey->val = val;
+	tkey->mask = mask;
+
+	if (type == TIPV4)
+		tkey->val = ntohl(tkey->val);
 
 	if (len == 1) {
-		tkey->mask = 0xFF;
-		res = pack_key8(retain,sel,tkey);
+		res = pack_key8(retain, sel, tkey);
 		goto done;
 	}
 	if (len == 2) {
-		tkey->mask = mask;
-		res = pack_key16(retain,sel,tkey);
+		res = pack_key16(retain, sel, tkey);
 		goto done;
 	}
 	if (len == 4) {
-		tkey->mask = mask;
-		res = pack_key32(retain,sel,tkey);
+		res = pack_key32(retain, sel, tkey);
 		goto done;
 	}
 
 	return -1;
 done:
 	if (pedit_debug)
-		printf("parse_cmd done argc %d %s offset %d length %d\n",argc,*argv,tkey->off,len);
+		printf("parse_cmd done argc %d %s offset %d length %d\n",
+		       argc, *argv, tkey->off, len);
 	*argc_p = argc;
 	*argv_p = argv;
 	return res;
 
 }
 
-int
-parse_offset(int *argc_p, char ***argv_p,struct tc_pedit_sel *sel,struct tc_pedit_key *tkey)
+int parse_offset(int *argc_p, char ***argv_p, struct tc_pedit_sel *sel,
+		 struct tc_pedit_key *tkey)
 {
 	int off;
 	__u32 len, retain;
@@ -339,7 +335,6 @@ parse_offset(int *argc_p, char ***argv_p,struct tc_pedit_sel *sel,struct tc_pedi
 	if (argc <= 0)
 		return -1;
 
-
 	if (matches(*argv, "u32") == 0) {
 		len = 4;
 		retain = 0xFFFFFFFF;
@@ -347,12 +342,12 @@ parse_offset(int *argc_p, char ***argv_p,struct tc_pedit_sel *sel,struct tc_pedi
 	}
 	if (matches(*argv, "u16") == 0) {
 		len = 2;
-		retain = 0x0;
+		retain = 0xffff;
 		goto done;
 	}
 	if (matches(*argv, "u8") == 0) {
 		len = 1;
-		retain = 0x0;
+		retain = 0xff;
 		goto done;
 	}
 
@@ -365,7 +360,7 @@ done:
 	/* [at <someval> offmask <maskval> shift <shiftval>] */
 	if (matches(*argv, "at") == 0) {
 
-		__u32 atv=0,offmask=0x0,shift=0;
+		__u32 atv = 0, offmask = 0x0, shift = 0;
 
 		NEXT_ARG();
 		if (get_u32(&atv, *argv, 0))
@@ -387,17 +382,16 @@ done:
 		NEXT_ARG();
 	}
 
-	res = parse_cmd(&argc, &argv, len, TU32,retain,sel,tkey);
+	res = parse_cmd(&argc, &argv, len, TU32, retain, sel, tkey);
 
 	*argc_p = argc;
 	*argv_p = argv;
 	return res;
 }
 
-static int
-parse_munge(int *argc_p, char ***argv_p,struct tc_pedit_sel *sel)
+static int parse_munge(int *argc_p, char ***argv_p, struct tc_pedit_sel *sel)
 {
-	struct tc_pedit_key tkey;
+	struct tc_pedit_key tkey = {};
 	int argc = *argc_p;
 	char **argv = *argv_p;
 	int res = -1;
@@ -405,25 +399,24 @@ parse_munge(int *argc_p, char ***argv_p,struct tc_pedit_sel *sel)
 	if (argc <= 0)
 		return -1;
 
-	memset(&tkey, 0, sizeof(tkey));
-
 	if (matches(*argv, "offset") == 0) {
 		NEXT_ARG();
-		res = parse_offset(&argc, &argv,sel,&tkey);
+		res = parse_offset(&argc, &argv, sel, &tkey);
 		goto done;
 	} else {
 		char k[16];
 		struct m_pedit_util *p = NULL;
 
-		strncpy(k, *argv, sizeof (k) - 1);
+		strncpy(k, *argv, sizeof(k) - 1);
 
-		if (argc > 0 ) {
+		if (argc > 0) {
 			p = get_pedit_kind(k);
-			if (NULL == p)
+			if (p == NULL)
 				goto bad_val;
-			res = p->parse_peopt(&argc, &argv, sel,&tkey);
+			NEXT_ARG();
+			res = p->parse_peopt(&argc, &argv, sel, &tkey);
 			if (res < 0) {
-				fprintf(stderr,"bad pedit parsing\n");
+				fprintf(stderr, "bad pedit parsing\n");
 				goto bad_val;
 			}
 			goto done;
@@ -440,24 +433,22 @@ done:
 	return res;
 }
 
-int
-parse_pedit(struct action_util *a, int *argc_p, char ***argv_p, int tca_id, struct nlmsghdr *n)
+int parse_pedit(struct action_util *a, int *argc_p, char ***argv_p, int tca_id,
+		struct nlmsghdr *n)
 {
 	struct {
 		struct tc_pedit_sel sel;
 		struct tc_pedit_key keys[MAX_OFFS];
-	} sel;
+	} sel = {};
 
 	int argc = *argc_p;
 	char **argv = *argv_p;
 	int ok = 0, iok = 0;
 	struct rtattr *tail;
 
-	memset(&sel, 0, sizeof(sel));
-
 	while (argc > 0) {
 		if (pedit_debug > 1)
-			fprintf(stderr, "while pedit (%d:%s)\n",argc, *argv);
+			fprintf(stderr, "while pedit (%d:%s)\n", argc, *argv);
 		if (matches(*argv, "pedit") == 0) {
 			NEXT_ARG();
 			ok++;
@@ -466,13 +457,15 @@ parse_pedit(struct action_util *a, int *argc_p, char ***argv_p, int tca_id, stru
 			usage();
 		} else if (matches(*argv, "munge") == 0) {
 			if (!ok) {
-				fprintf(stderr, "Illegal pedit construct (%s) \n", *argv);
+				fprintf(stderr, "Bad pedit construct (%s)\n",
+					*argv);
 				explain();
 				return -1;
 			}
 			NEXT_ARG();
-			if (parse_munge(&argc, &argv,&sel.sel)) {
-				fprintf(stderr, "Illegal pedit construct (%s) \n", *argv);
+			if (parse_munge(&argc, &argv, &sel.sel)) {
+				fprintf(stderr, "Bad pedit construct (%s)\n",
+					*argv);
 				explain();
 				return -1;
 			}
@@ -488,25 +481,8 @@ parse_pedit(struct action_util *a, int *argc_p, char ***argv_p, int tca_id, stru
 		return -1;
 	}
 
-	if (argc) {
-		if (matches(*argv, "reclassify") == 0) {
-			sel.sel.action = TC_ACT_RECLASSIFY;
-			NEXT_ARG();
-		} else if (matches(*argv, "pipe") == 0) {
-			sel.sel.action = TC_ACT_PIPE;
-			NEXT_ARG();
-		} else if (matches(*argv, "drop") == 0 ||
-			matches(*argv, "shot") == 0) {
-			sel.sel.action = TC_ACT_SHOT;
-			NEXT_ARG();
-		} else if (matches(*argv, "continue") == 0) {
-			sel.sel.action = TC_ACT_UNSPEC;
-			NEXT_ARG();
-		} else if (matches(*argv, "pass") == 0) {
-			sel.sel.action = TC_ACT_OK;
-			NEXT_ARG();
-		}
-	}
+	if (argc && !action_a2n(*argv, &sel.sel.action, false))
+		NEXT_ARG();
 
 	if (argc) {
 		if (matches(*argv, "index") == 0) {
@@ -523,20 +499,20 @@ parse_pedit(struct action_util *a, int *argc_p, char ***argv_p, int tca_id, stru
 
 	tail = NLMSG_TAIL(n);
 	addattr_l(n, MAX_MSG, tca_id, NULL, 0);
-	addattr_l(n, MAX_MSG, TCA_PEDIT_PARMS,&sel, sizeof(sel.sel)+sel.sel.nkeys*sizeof(struct tc_pedit_key));
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_l(n, MAX_MSG, TCA_PEDIT_PARMS, &sel,
+		  sizeof(sel.sel) +
+		  sel.sel.nkeys * sizeof(struct tc_pedit_key));
+	tail->rta_len = (void *)NLMSG_TAIL(n) - (void *)tail;
 
 	*argc_p = argc;
 	*argv_p = argv;
 	return 0;
 }
 
-int
-print_pedit(struct action_util *au,FILE * f, struct rtattr *arg)
+int print_pedit(struct action_util *au, FILE *f, struct rtattr *arg)
 {
 	struct tc_pedit_sel *sel;
 	struct rtattr *tb[TCA_PEDIT_MAX + 1];
-	SPRINT_BUF(b1);
 
 	if (arg == NULL)
 		return -1;
@@ -549,37 +525,39 @@ print_pedit(struct action_util *au,FILE * f, struct rtattr *arg)
 	}
 	sel = RTA_DATA(tb[TCA_PEDIT_PARMS]);
 
-	fprintf(f, " pedit action %s keys %d\n ", action_n2a(sel->action, b1, sizeof (b1)),sel->nkeys);
-	fprintf(f, "\t index %d ref %d bind %d", sel->index,sel->refcnt, sel->bindcnt);
+	fprintf(f, " pedit action %s keys %d\n ",
+		action_n2a(sel->action), sel->nkeys);
+	fprintf(f, "\t index %d ref %d bind %d", sel->index, sel->refcnt,
+		sel->bindcnt);
 
 	if (show_stats) {
 		if (tb[TCA_PEDIT_TM]) {
 			struct tcf_t *tm = RTA_DATA(tb[TCA_PEDIT_TM]);
-			print_tm(f,tm);
+
+			print_tm(f, tm);
 		}
 	}
 	if (sel->nkeys) {
 		int i;
 		struct tc_pedit_key *key = sel->keys;
 
-		for (i=0; i<sel->nkeys; i++, key++) {
-			fprintf(f, "\n\t key #%d",i);
+		for (i = 0; i < sel->nkeys; i++, key++) {
+			fprintf(f, "\n\t key #%d", i);
 			fprintf(f, "  at %d: val %08x mask %08x",
-			(unsigned int)key->off,
-			(unsigned int)ntohl(key->val),
-			(unsigned int)ntohl(key->mask));
+				(unsigned int)key->off,
+				(unsigned int)ntohl(key->val),
+				(unsigned int)ntohl(key->mask));
 		}
 	} else {
-		fprintf(f, "\npedit %x keys %d is not LEGIT", sel->index,sel->nkeys);
+		fprintf(f, "\npedit %x keys %d is not LEGIT", sel->index,
+			sel->nkeys);
 	}
-
 
 	fprintf(f, "\n ");
 	return 0;
 }
 
-int
-pedit_print_xstats(struct action_util *au, FILE *f, struct rtattr *xstats)
+int pedit_print_xstats(struct action_util *au, FILE *f, struct rtattr *xstats)
 {
 	return 0;
 }

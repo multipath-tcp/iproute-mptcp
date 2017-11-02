@@ -22,7 +22,7 @@
 
 #include "libnetlink.h"
 #include "ll_map.h"
-#include "hlist.h"
+#include "list.h"
 
 struct ll_cache {
 	struct hlist_node idx_hash;
@@ -90,7 +90,7 @@ int ll_remember_index(const struct sockaddr_nl *who,
 	if (n->nlmsg_type != RTM_NEWLINK && n->nlmsg_type != RTM_DELLINK)
 		return 0;
 
-	if (n->nlmsg_len < NLMSG_LENGTH(sizeof(ifi)))
+	if (n->nlmsg_len < NLMSG_LENGTH(sizeof(*ifi)))
 		return -1;
 
 	im = ll_get_by_index(ifi->ifi_index);
@@ -103,7 +103,6 @@ int ll_remember_index(const struct sockaddr_nl *who,
 		return 0;
 	}
 
-	memset(tb, 0, sizeof(tb));
 	parse_rtattr(tb, IFLA_MAX, IFLA_RTA(ifi), IFLA_PAYLOAD(n));
 	ifname = rta_getattr_str(tb[IFLA_IFNAME]);
 	if (ifname == NULL)

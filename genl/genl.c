@@ -54,7 +54,7 @@ static int parse_nofopt(struct genl_util *f, int argc, char **argv)
 	return 0;
 }
 
-static struct genl_util *get_genl_kind(char *str)
+static struct genl_util *get_genl_kind(const char *str)
 {
 	void *dlh;
 	char buf[256];
@@ -86,9 +86,8 @@ reg:
 	return f;
 
 noexist:
-	f = malloc(sizeof(*f));
+	f = calloc(1, sizeof(*f));
 	if (f) {
-		memset(f, 0, sizeof(*f));
 		strncpy(f->name, str, 15);
 		f->parse_genlopt = parse_nofopt;
 		f->print_genlopt = print_nofopt;

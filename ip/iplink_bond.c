@@ -166,7 +166,7 @@ static int bond_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u32 miimon, updelay, downdelay, arp_interval, arp_validate;
 	__u32 arp_all_targets, resend_igmp, min_links, lp_interval;
 	__u32 packets_per_slave;
-	unsigned ifindex;
+	unsigned int ifindex;
 
 	while (argc > 0) {
 		if (matches(*argv, "mode") == 0) {
@@ -209,7 +209,7 @@ static int bond_parse_opt(struct link_util *lu, int argc, char **argv,
 				invarg("invalid arp_interval", *argv);
 			addattr32(n, 1024, IFLA_BOND_ARP_INTERVAL, arp_interval);
 		} else if (matches(*argv, "arp_ip_target") == 0) {
-			struct rtattr * nest = addattr_nest(n, 1024,
+			struct rtattr *nest = addattr_nest(n, 1024,
 				IFLA_BOND_ARP_IP_TARGET);
 			if (NEXT_ARG_OK()) {
 				NEXT_ARG();
@@ -217,8 +217,9 @@ static int bond_parse_opt(struct link_util *lu, int argc, char **argv,
 				char *target = strtok(targets, ",");
 				int i;
 
-				for(i = 0; target && i < BOND_MAX_ARP_TARGETS; i++) {
+				for (i = 0; target && i < BOND_MAX_ARP_TARGETS; i++) {
 					__u32 addr = get_addr32(target);
+
 					addattr32(n, 1024, i, addr);
 					target = strtok(NULL, ",");
 				}
@@ -368,7 +369,7 @@ static int bond_parse_opt(struct link_util *lu, int argc, char **argv,
 
 static void bond_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 {
-	unsigned ifindex;
+	unsigned int ifindex;
 
 	if (!tb)
 		return;
@@ -410,7 +411,6 @@ static void bond_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 
 	if (tb[IFLA_BOND_ARP_IP_TARGET]) {
 		struct rtattr *iptb[BOND_MAX_ARP_TARGETS + 1];
-		char buf[INET_ADDRSTRLEN];
 		int i;
 
 		parse_rtattr_nested(iptb, BOND_MAX_ARP_TARGETS,
@@ -422,11 +422,7 @@ static void bond_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		for (i = 0; i < BOND_MAX_ARP_TARGETS; i++) {
 			if (iptb[i])
 				fprintf(f, "%s",
-					rt_addr_n2a(AF_INET,
-						    RTA_PAYLOAD(iptb[i]),
-						    RTA_DATA(iptb[i]),
-						    buf,
-						    INET_ADDRSTRLEN));
+					rt_addr_n2a_rta(AF_INET, iptb[i]));
 			if (i < BOND_MAX_ARP_TARGETS-1 && iptb[i+1])
 				fprintf(f, ",");
 		}

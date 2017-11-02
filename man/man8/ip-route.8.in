@@ -16,7 +16,7 @@ ip-route \- routing table management
 
 .ti -8
 .BR "ip route" " { "
-.BR list " | " flush " } "
+.BR show " | " flush " } "
 .I  SELECTOR
 
 .ti -8
@@ -33,7 +33,9 @@ ip-route \- routing table management
 .RB " ] [ " oif
 .IR STRING " ] [ "
 .B  tos
-.IR TOS " ]"
+.IR TOS " ] [ "
+.B  vrf
+.IR NAME " ] "
 
 .ti -8
 .BR "ip route" " { " add " | " del " | " change " | " append " | "\
@@ -50,6 +52,8 @@ replace " } "
 .IR PREFIX " ] [ "
 .B  table
 .IR TABLE_ID " ] [ "
+.B  vrf
+.IR NAME " ] [ "
 .B  proto
 .IR RTPROTO " ] [ "
 .B  type
@@ -130,9 +134,11 @@ replace " } "
 .B  quickack
 .IR BOOL " ] [ "
 .B  congctl
-.IR NAME " ]"
+.IR NAME " ] [ "
 .B  pref
-.IR PREF " ]"
+.IR PREF " ] [ "
+.B  expires
+.IR TIME " ]"
 
 .ti -8
 .IR TYPE " := [ "
@@ -365,6 +371,11 @@ table, with the exception of
 routes, which are put into the
 .B local
 table by default.
+
+.TP
+.BI vrf " NAME"
+the vrf name to add this route to. Implicitly means the table
+associated with the VRF.
 
 .TP
 .BI dev " NAME"
@@ -657,6 +668,12 @@ is a set of encapsulation attributes specific to the
 .RE
 
 .TP
+.BI expires " TIME " "(4.4+ only)"
+the route will be deleted after the expires time.
+.B Only
+support IPv6 at present.
+
+.TP
 ip route delete
 delete route
 .RS
@@ -736,6 +753,10 @@ may either be the ID of a real table or one of the special values:
 .B cache
 - dump the routing cache.
 .in -8
+
+.TP
+.BI vrf " NAME"
+show the routes for the table associated with the vrf name
 
 .TP
 .B cloned
@@ -847,6 +868,10 @@ the device from which this packet is expected to arrive.
 force the output device on which this packet will be routed.
 
 .TP
+.BI vrf " NAME"
+force the vrf device on which this packet will be routed.
+
+.TP
 .B connected
 if no source address
 .RB "(option " from ")"
@@ -898,6 +923,12 @@ in the stream (such as device indexes) must be done first. Any existing
 routes are left unchanged. Any routes specified in the data stream that
 already exist in the table will be ignored.
 .RE
+
+.SH NOTES
+Starting with Linux kernel version 3.6, there is no routing cache for IPv4
+anymore. Hence
+.B "ip route show cached"
+will never print any entries on systems with this or newer kernel versions.
 
 .SH EXAMPLES
 .PP

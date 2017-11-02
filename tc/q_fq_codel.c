@@ -51,7 +51,7 @@
 static void explain(void)
 {
 	fprintf(stderr, "Usage: ... fq_codel [ limit PACKETS ] [ flows NUMBER ]\n");
-	fprintf(stderr, "                    [ target TIME] [ interval TIME ]\n");
+	fprintf(stderr, "                    [ target TIME ] [ interval TIME ]\n");
 	fprintf(stderr, "                    [ quantum BYTES ] [ [no]ecn ]\n");
 	fprintf(stderr, "                    [ ce_threshold TIME ]\n");
 }
@@ -59,12 +59,13 @@ static void explain(void)
 static int fq_codel_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 			      struct nlmsghdr *n)
 {
-	unsigned limit = 0;
-	unsigned flows = 0;
-	unsigned target = 0;
-	unsigned interval = 0;
-	unsigned quantum = 0;
-	unsigned ce_threshold = ~0U;
+	unsigned int limit = 0;
+	unsigned int flows = 0;
+	unsigned int target = 0;
+	unsigned int interval = 0;
+	unsigned int quantum = 0;
+	unsigned int ce_threshold = ~0U;
+	unsigned int memory = ~0U;
 	int ecn = -1;
 	struct rtattr *tail;
 
@@ -97,6 +98,12 @@ static int fq_codel_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 			NEXT_ARG();
 			if (get_time(&ce_threshold, *argv)) {
 				fprintf(stderr, "Illegal \"ce_threshold\"\n");
+				return -1;
+			}
+		} else if (strcmp(*argv, "memory_limit") == 0) {
+			NEXT_ARG();
+			if (get_size(&memory, *argv)) {
+				fprintf(stderr, "Illegal \"memory_limit\"\n");
 				return -1;
 			}
 		} else if (strcmp(*argv, "interval") == 0) {
@@ -137,6 +144,10 @@ static int fq_codel_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 	if (ce_threshold != ~0U)
 		addattr_l(n, 1024, TCA_FQ_CODEL_CE_THRESHOLD,
 			  &ce_threshold, sizeof(ce_threshold));
+	if (memory != ~0U)
+		addattr_l(n, 1024, TCA_FQ_CODEL_MEMORY_LIMIT,
+			  &memory, sizeof(memory));
+
 	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
 	return 0;
 }
@@ -144,13 +155,15 @@ static int fq_codel_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 static int fq_codel_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 {
 	struct rtattr *tb[TCA_FQ_CODEL_MAX + 1];
-	unsigned limit;
-	unsigned flows;
-	unsigned interval;
-	unsigned target;
-	unsigned ecn;
-	unsigned quantum;
-	unsigned ce_threshold;
+	unsigned int limit;
+	unsigned int flows;
+	unsigned int interval;
+	unsigned int target;
+	unsigned int ecn;
+	unsigned int quantum;
+	unsigned int ce_threshold;
+	unsigned int memory_limit;
+
 	SPRINT_BUF(b1);
 
 	if (opt == NULL)
@@ -188,6 +201,12 @@ static int fq_codel_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt
 		interval = rta_getattr_u32(tb[TCA_FQ_CODEL_INTERVAL]);
 		fprintf(f, "interval %s ", sprint_time(interval, b1));
 	}
+	if (tb[TCA_FQ_CODEL_MEMORY_LIMIT] &&
+	    RTA_PAYLOAD(tb[TCA_FQ_CODEL_MEMORY_LIMIT]) >= sizeof(__u32)) {
+		memory_limit = rta_getattr_u32(tb[TCA_FQ_CODEL_MEMORY_LIMIT]);
+
+		fprintf(f, "memory_limit %s ", sprint_size(memory_limit, b1));
+	}
 	if (tb[TCA_FQ_CODEL_ECN] &&
 	    RTA_PAYLOAD(tb[TCA_FQ_CODEL_ECN]) >= sizeof(__u32)) {
 		ecn = rta_getattr_u32(tb[TCA_FQ_CODEL_ECN]);
@@ -201,7 +220,8 @@ static int fq_codel_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt
 static int fq_codel_print_xstats(struct qdisc_util *qu, FILE *f,
 				 struct rtattr *xstats)
 {
-	struct tc_fq_codel_xstats _st, *st;
+	struct tc_fq_codel_xstats _st = {}, *st;
+
 	SPRINT_BUF(b1);
 
 	if (xstats == NULL)
@@ -209,7 +229,6 @@ static int fq_codel_print_xstats(struct qdisc_util *qu, FILE *f,
 
 	st = RTA_DATA(xstats);
 	if (RTA_PAYLOAD(xstats) < sizeof(*st)) {
-		memset(&_st, 0, sizeof(_st));
 		memcpy(&_st, st, RTA_PAYLOAD(xstats));
 		st = &_st;
 	}
@@ -221,6 +240,10 @@ static int fq_codel_print_xstats(struct qdisc_util *qu, FILE *f,
 			st->qdisc_stats.ecn_mark);
 		if (st->qdisc_stats.ce_mark)
 			fprintf(f, " ce_mark %u", st->qdisc_stats.ce_mark);
+		if (st->qdisc_stats.memory_usage)
+			fprintf(f, " memory_used %u", st->qdisc_stats.memory_usage);
+		if (st->qdisc_stats.drop_overmemory)
+			fprintf(f, " drop_overmemory %u", st->qdisc_stats.drop_overmemory);
 		fprintf(f, "\n  new_flows_len %u old_flows_len %u",
 			st->qdisc_stats.new_flows_len,
 			st->qdisc_stats.old_flows_len);

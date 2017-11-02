@@ -7,7 +7,7 @@
  *		2 of the License, or (at your option) any later version.
  *
  * Authors:	Roopa Prabhu, <roopa@cumulusnetworks.com>
- * 		Thomas Graf <tgraf@suug.ch>
+ *		Thomas Graf <tgraf@suug.ch>
  *
  */
 
@@ -58,21 +58,17 @@ static const char *format_encap_type(int type)
 static void print_encap_mpls(FILE *fp, struct rtattr *encap)
 {
 	struct rtattr *tb[MPLS_IPTUNNEL_MAX+1];
-	char abuf[256];
 
 	parse_rtattr_nested(tb, MPLS_IPTUNNEL_MAX, encap);
 
 	if (tb[MPLS_IPTUNNEL_DST])
-		fprintf(fp, " %s ", format_host(AF_MPLS,
-			RTA_PAYLOAD(tb[MPLS_IPTUNNEL_DST]),
-			RTA_DATA(tb[MPLS_IPTUNNEL_DST]),
-			abuf, sizeof(abuf)));
+		fprintf(fp, " %s ",
+		        format_host_rta(AF_MPLS, tb[MPLS_IPTUNNEL_DST]));
 }
 
 static void print_encap_ip(FILE *fp, struct rtattr *encap)
 {
 	struct rtattr *tb[LWTUNNEL_IP_MAX+1];
-	char abuf[256];
 
 	parse_rtattr_nested(tb, LWTUNNEL_IP_MAX, encap);
 
@@ -81,23 +77,43 @@ static void print_encap_ip(FILE *fp, struct rtattr *encap)
 
 	if (tb[LWTUNNEL_IP_SRC])
 		fprintf(fp, "src %s ",
-			rt_addr_n2a(AF_INET,
-				    RTA_PAYLOAD(tb[LWTUNNEL_IP_SRC]),
-				    RTA_DATA(tb[LWTUNNEL_IP_SRC]),
-				    abuf, sizeof(abuf)));
+			rt_addr_n2a_rta(AF_INET, tb[LWTUNNEL_IP_SRC]));
 
 	if (tb[LWTUNNEL_IP_DST])
 		fprintf(fp, "dst %s ",
-			rt_addr_n2a(AF_INET,
-				    RTA_PAYLOAD(tb[LWTUNNEL_IP_DST]),
-				    RTA_DATA(tb[LWTUNNEL_IP_DST]),
-				    abuf, sizeof(abuf)));
+			rt_addr_n2a_rta(AF_INET, tb[LWTUNNEL_IP_DST]));
 
 	if (tb[LWTUNNEL_IP_TTL])
 		fprintf(fp, "ttl %d ", rta_getattr_u8(tb[LWTUNNEL_IP_TTL]));
 
 	if (tb[LWTUNNEL_IP_TOS])
 		fprintf(fp, "tos %d ", rta_getattr_u8(tb[LWTUNNEL_IP_TOS]));
+}
+
+static char *ila_csum_mode2name(__u8 csum_mode)
+{
+	switch (csum_mode) {
+	case ILA_CSUM_ADJUST_TRANSPORT:
+		return "adj-transport";
+	case ILA_CSUM_NEUTRAL_MAP:
+		return "neutral-map";
+	case ILA_CSUM_NO_ACTION:
+		return "no-action";
+	default:
+		return "unknown";
+	}
+}
+
+static __u8 ila_csum_name2mode(char *name)
+{
+	if (strcmp(name, "adj-transport") == 0)
+		return ILA_CSUM_ADJUST_TRANSPORT;
+	else if (strcmp(name, "neutral-map") == 0)
+		return ILA_CSUM_NEUTRAL_MAP;
+	else if (strcmp(name, "no-action") == 0)
+		return ILA_CSUM_NO_ACTION;
+	else
+		return -1;
 }
 
 static void print_encap_ila(FILE *fp, struct rtattr *encap)
@@ -113,12 +129,15 @@ static void print_encap_ila(FILE *fp, struct rtattr *encap)
 			   abuf, sizeof(abuf));
 		fprintf(fp, " %s ", abuf);
 	}
+
+	if (tb[ILA_ATTR_CSUM_MODE])
+		fprintf(fp, " csum-mode %s ",
+			ila_csum_mode2name(rta_getattr_u8(tb[ILA_ATTR_CSUM_MODE])));
 }
 
 static void print_encap_ip6(FILE *fp, struct rtattr *encap)
 {
 	struct rtattr *tb[LWTUNNEL_IP6_MAX+1];
-	char abuf[256];
 
 	parse_rtattr_nested(tb, LWTUNNEL_IP6_MAX, encap);
 
@@ -127,17 +146,11 @@ static void print_encap_ip6(FILE *fp, struct rtattr *encap)
 
 	if (tb[LWTUNNEL_IP6_SRC])
 		fprintf(fp, "src %s ",
-			rt_addr_n2a(AF_INET6,
-				    RTA_PAYLOAD(tb[LWTUNNEL_IP6_SRC]),
-				    RTA_DATA(tb[LWTUNNEL_IP6_SRC]),
-				    abuf, sizeof(abuf)));
+			rt_addr_n2a_rta(AF_INET6, tb[LWTUNNEL_IP6_SRC]));
 
 	if (tb[LWTUNNEL_IP6_DST])
 		fprintf(fp, "dst %s ",
-			rt_addr_n2a(AF_INET6,
-				    RTA_PAYLOAD(tb[LWTUNNEL_IP6_DST]),
-				    RTA_DATA(tb[LWTUNNEL_IP6_DST]),
-				    abuf, sizeof(abuf)));
+			rt_addr_n2a_rta(AF_INET6, tb[LWTUNNEL_IP6_DST]));
 
 	if (tb[LWTUNNEL_IP6_HOPLIMIT])
 		fprintf(fp, "hoplimit %d ", rta_getattr_u8(tb[LWTUNNEL_IP6_HOPLIMIT]));
@@ -203,14 +216,16 @@ static int parse_encap_ip(struct rtattr *rta, size_t len, int *argcp, char ***ar
 	while (argc > 0) {
 		if (strcmp(*argv, "id") == 0) {
 			__u64 id;
+
 			NEXT_ARG();
 			if (id_ok++)
 				duparg2("id", *argv);
-			if (get_u64(&id, *argv, 0))
+			if (get_be64(&id, *argv, 0))
 				invarg("\"id\" value is invalid\n", *argv);
-			rta_addattr64(rta, len, LWTUNNEL_IP_ID, htonll(id));
+			rta_addattr64(rta, len, LWTUNNEL_IP_ID, id);
 		} else if (strcmp(*argv, "dst") == 0) {
 			inet_prefix addr;
+
 			NEXT_ARG();
 			if (dst_ok++)
 				duparg2("dst", *argv);
@@ -218,6 +233,7 @@ static int parse_encap_ip(struct rtattr *rta, size_t len, int *argcp, char ***ar
 			rta_addattr_l(rta, len, LWTUNNEL_IP_DST, &addr.data, addr.bytelen);
 		} else if (strcmp(*argv, "tos") == 0) {
 			__u32 tos;
+
 			NEXT_ARG();
 			if (tos_ok++)
 				duparg2("tos", *argv);
@@ -226,6 +242,7 @@ static int parse_encap_ip(struct rtattr *rta, size_t len, int *argcp, char ***ar
 			rta_addattr8(rta, len, LWTUNNEL_IP_TOS, tos);
 		} else if (strcmp(*argv, "ttl") == 0) {
 			__u8 ttl;
+
 			NEXT_ARG();
 			if (ttl_ok++)
 				duparg2("ttl", *argv);
@@ -259,10 +276,34 @@ static int parse_encap_ila(struct rtattr *rta, size_t len,
 		exit(1);
 	}
 
+	argc--; argv++;
+
 	rta_addattr64(rta, 1024, ILA_ATTR_LOCATOR, locator);
 
-	*argcp = argc;
-	*argvp = argv;
+	while (argc > 0) {
+		if (strcmp(*argv, "csum-mode") == 0) {
+			__u8 csum_mode;
+
+			NEXT_ARG();
+
+			csum_mode = ila_csum_name2mode(*argv);
+			if (csum_mode < 0)
+				invarg("\"csum-mode\" value is invalid\n", *argv);
+
+			rta_addattr8(rta, 1024, ILA_ATTR_CSUM_MODE, csum_mode);
+
+			argc--; argv++;
+		} else {
+			break;
+		}
+	}
+
+	/* argv is currently the first unparsed argument,
+	 * but the lwt_parse_encap() caller will move to the next,
+	 * so step back
+	 */
+	*argcp = argc + 1;
+	*argvp = argv - 1;
 
 	return 0;
 }
@@ -276,14 +317,16 @@ static int parse_encap_ip6(struct rtattr *rta, size_t len, int *argcp, char ***a
 	while (argc > 0) {
 		if (strcmp(*argv, "id") == 0) {
 			__u64 id;
+
 			NEXT_ARG();
 			if (id_ok++)
 				duparg2("id", *argv);
-			if (get_u64(&id, *argv, 0))
+			if (get_be64(&id, *argv, 0))
 				invarg("\"id\" value is invalid\n", *argv);
-			rta_addattr64(rta, len, LWTUNNEL_IP6_ID, htonll(id));
+			rta_addattr64(rta, len, LWTUNNEL_IP6_ID, id);
 		} else if (strcmp(*argv, "dst") == 0) {
 			inet_prefix addr;
+
 			NEXT_ARG();
 			if (dst_ok++)
 				duparg2("dst", *argv);
@@ -291,6 +334,7 @@ static int parse_encap_ip6(struct rtattr *rta, size_t len, int *argcp, char ***a
 			rta_addattr_l(rta, len, LWTUNNEL_IP6_DST, &addr.data, addr.bytelen);
 		} else if (strcmp(*argv, "tc") == 0) {
 			__u32 tc;
+
 			NEXT_ARG();
 			if (tos_ok++)
 				duparg2("tc", *argv);
@@ -299,6 +343,7 @@ static int parse_encap_ip6(struct rtattr *rta, size_t len, int *argcp, char ***a
 			rta_addattr8(rta, len, LWTUNNEL_IP6_TC, tc);
 		} else if (strcmp(*argv, "hoplimit") == 0) {
 			__u8 hoplimit;
+
 			NEXT_ARG();
 			if (ttl_ok++)
 				duparg2("hoplimit", *argv);
