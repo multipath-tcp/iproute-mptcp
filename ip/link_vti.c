@@ -26,14 +26,17 @@
 
 static void print_usage(FILE *f)
 {
-	fprintf(f, "Usage: ip link { add | set | change | replace | del } NAME\n");
-	fprintf(f, "          type { vti } [ remote ADDR ] [ local ADDR ]\n");
-	fprintf(f, "          [ [i|o]key KEY ]\n");
-	fprintf(f, "          [ dev PHYS_DEV ]\n");
-	fprintf(f, "\n");
-	fprintf(f, "Where: NAME := STRING\n");
-	fprintf(f, "       ADDR := { IP_ADDRESS }\n");
-	fprintf(f, "       KEY  := { DOTTED_QUAD | NUMBER }\n");
+	fprintf(f,
+		"Usage: ... vti [ remote ADDR ]\n"
+		"               [ local ADDR ]\n"
+		"               [ [i|o]key KEY ]\n"
+		"               [ dev PHYS_DEV ]\n"
+		"               [ fwmark MARK ]\n"
+		"\n"
+		"Where: ADDR := { IP_ADDRESS }\n"
+		"       KEY  := { DOTTED_QUAD | NUMBER }\n"
+		"       MARK := { 0x0..0xffffffff }\n"
+	);
 }
 
 static void usage(void) __attribute__((noreturn));
@@ -66,6 +69,7 @@ static int vti_parse_opt(struct link_util *lu, int argc, char **argv,
 	unsigned int saddr = 0;
 	unsigned int daddr = 0;
 	unsigned int link = 0;
+	unsigned int fwmark = 0;
 	int len;
 
 	if (!(n->nlmsg_flags & NLM_F_CREATE)) {
@@ -95,19 +99,22 @@ get_failed:
 				    linkinfo[IFLA_INFO_DATA]);
 
 		if (vtiinfo[IFLA_VTI_IKEY])
-			ikey = *(__u32 *)RTA_DATA(vtiinfo[IFLA_VTI_IKEY]);
+			ikey = rta_getattr_u32(vtiinfo[IFLA_VTI_IKEY]);
 
 		if (vtiinfo[IFLA_VTI_OKEY])
-			okey = *(__u32 *)RTA_DATA(vtiinfo[IFLA_VTI_OKEY]);
+			okey = rta_getattr_u32(vtiinfo[IFLA_VTI_OKEY]);
 
 		if (vtiinfo[IFLA_VTI_LOCAL])
-			saddr = *(__u32 *)RTA_DATA(vtiinfo[IFLA_VTI_LOCAL]);
+			saddr = rta_getattr_u32(vtiinfo[IFLA_VTI_LOCAL]);
 
 		if (vtiinfo[IFLA_VTI_REMOTE])
-			daddr = *(__u32 *)RTA_DATA(vtiinfo[IFLA_VTI_REMOTE]);
+			daddr = rta_getattr_u32(vtiinfo[IFLA_VTI_REMOTE]);
 
 		if (vtiinfo[IFLA_VTI_LINK])
-			link = *(__u8 *)RTA_DATA(vtiinfo[IFLA_VTI_LINK]);
+			link = rta_getattr_u8(vtiinfo[IFLA_VTI_LINK]);
+
+		if (vtiinfo[IFLA_VTI_FWMARK])
+			fwmark = rta_getattr_u32(vtiinfo[IFLA_VTI_FWMARK]);
 	}
 
 	while (argc > 0) {
@@ -179,6 +186,10 @@ get_failed:
 					*argv);
 				exit(-1);
 			}
+		} else if (strcmp(*argv, "fwmark") == 0) {
+			NEXT_ARG();
+			if (get_u32(&fwmark, *argv, 0))
+				invarg("invalid fwmark\n", *argv);
 		} else
 			usage();
 		argc--; argv++;
@@ -188,6 +199,7 @@ get_failed:
 	addattr32(n, 1024, IFLA_VTI_OKEY, okey);
 	addattr_l(n, 1024, IFLA_VTI_LOCAL, &saddr, 4);
 	addattr_l(n, 1024, IFLA_VTI_REMOTE, &daddr, 4);
+	addattr32(n, 1024, IFLA_VTI_FWMARK, fwmark);
 	if (link)
 		addattr32(n, 1024, IFLA_VTI_LINK, link);
 
@@ -196,49 +208,61 @@ get_failed:
 
 static void vti_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 {
-	char s2[64];
 	const char *local = "any";
 	const char *remote = "any";
+	__u32 key;
+	unsigned int link;
+	char s2[IFNAMSIZ];
 
 	if (!tb)
 		return;
 
 	if (tb[IFLA_VTI_REMOTE]) {
-		unsigned int addr = *(__u32 *)RTA_DATA(tb[IFLA_VTI_REMOTE]);
+		unsigned int addr = rta_getattr_u32(tb[IFLA_VTI_REMOTE]);
 
 		if (addr)
 			remote = format_host(AF_INET, 4, &addr);
 	}
 
-	fprintf(f, "remote %s ", remote);
+	print_string(PRINT_ANY, "remote", "remote %s ", remote);
 
 	if (tb[IFLA_VTI_LOCAL]) {
-		unsigned int addr = *(__u32 *)RTA_DATA(tb[IFLA_VTI_LOCAL]);
+		unsigned int addr = rta_getattr_u32(tb[IFLA_VTI_LOCAL]);
 
 		if (addr)
 			local = format_host(AF_INET, 4, &addr);
 	}
 
-	fprintf(f, "local %s ", local);
+	print_string(PRINT_ANY, "local", "local %s ", local);
 
-	if (tb[IFLA_VTI_LINK] && *(__u32 *)RTA_DATA(tb[IFLA_VTI_LINK])) {
-		unsigned int link = *(__u32 *)RTA_DATA(tb[IFLA_VTI_LINK]);
+	if (tb[IFLA_VTI_LINK] &&
+	    (link = rta_getattr_u32(tb[IFLA_VTI_LINK]))) {
 		const char *n = if_indextoname(link, s2);
 
 		if (n)
-			fprintf(f, "dev %s ", n);
+			print_string(PRINT_ANY, "link", "dev %s ", n);
 		else
-			fprintf(f, "dev %u ", link);
+			print_uint(PRINT_ANY, "link_index", "dev %u ", link);
 	}
 
-	if (tb[IFLA_VTI_IKEY]) {
-		inet_ntop(AF_INET, RTA_DATA(tb[IFLA_VTI_IKEY]), s2, sizeof(s2));
-		fprintf(f, "ikey %s ", s2);
-	}
+	if (tb[IFLA_VTI_IKEY] &&
+	    (key = rta_getattr_u32(tb[IFLA_VTI_IKEY])))
+		print_0xhex(PRINT_ANY, "ikey", "ikey %#x ", ntohl(key));
 
-	if (tb[IFLA_VTI_OKEY]) {
-		inet_ntop(AF_INET, RTA_DATA(tb[IFLA_VTI_OKEY]), s2, sizeof(s2));
-		fprintf(f, "okey %s ", s2);
+
+	if (tb[IFLA_VTI_OKEY] &&
+	    (key = rta_getattr_u32(tb[IFLA_VTI_OKEY])))
+		print_0xhex(PRINT_ANY, "okey", "okey %#x ", ntohl(key));
+
+	if (tb[IFLA_VTI_FWMARK]) {
+		__u32 fwmark = rta_getattr_u32(tb[IFLA_VTI_FWMARK]);
+
+		if (fwmark) {
+			SPRINT_BUF(b1);
+
+			snprintf(b1, sizeof(b1), "0x%x", fwmark);
+			print_string(PRINT_ANY, "fwmark", "fwmark %s ", s2);
+		}
 	}
 }
 

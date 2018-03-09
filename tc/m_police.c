@@ -41,34 +41,14 @@ static void usage(void)
 	fprintf(stderr, "Where: CONTROL := conform-exceed <EXCEEDACT>[/NOTEXCEEDACT]\n");
 	fprintf(stderr, "                  Define how to handle packets which exceed (<EXCEEDACT>)\n");
 	fprintf(stderr, "                  or conform (<NOTEXCEEDACT>) the configured bandwidth limit.\n");
-	fprintf(stderr, "       EXCEEDACT/NOTEXCEEDACT := { pipe | ok | reclassify | drop | continue }\n");
+	fprintf(stderr, "       EXCEEDACT/NOTEXCEEDACT := { pipe | ok | reclassify | drop | continue |\n");
+	fprintf(stderr, "                                   goto chain <CHAIN_INDEX> }\n");
 	exit(-1);
 }
 
 static void explain1(char *arg)
 {
 	fprintf(stderr, "Illegal \"%s\"\n", arg);
-}
-
-static int get_police_result(int *action, int *result, char *arg)
-{
-	char *p = strchr(arg, '/');
-
-	if (p)
-		*p = 0;
-
-	if (action_a2n(arg, action, true)) {
-		if (p)
-			*p = '/';
-		return -1;
-	}
-
-	if (p) {
-		*p = '/';
-		if (action_a2n(p+1, result, true))
-			return -1;
-	}
-	return 0;
 }
 
 int act_parse_police(struct action_util *a, int *argc_p, char ***argv_p,
@@ -166,23 +146,20 @@ int act_parse_police(struct action_util *a, int *argc_p, char ***argv_p,
 				explain1("peakrate");
 				return -1;
 			}
-		} else if (matches(*argv, "reclassify") == 0) {
-			p.action = TC_POLICE_RECLASSIFY;
-		} else if (matches(*argv, "drop") == 0 ||
-			   matches(*argv, "shot") == 0) {
-			p.action = TC_POLICE_SHOT;
-		} else if (matches(*argv, "continue") == 0) {
-			p.action = TC_POLICE_UNSPEC;
-		} else if (matches(*argv, "pass") == 0) {
-			p.action = TC_POLICE_OK;
-		} else if (matches(*argv, "pipe") == 0) {
-			p.action = TC_POLICE_PIPE;
+		} else if (matches(*argv, "reclassify") == 0 ||
+			   matches(*argv, "drop") == 0 ||
+			   matches(*argv, "shot") == 0 ||
+			   matches(*argv, "continue") == 0 ||
+			   matches(*argv, "pass") == 0 ||
+			   matches(*argv, "pipe") == 0 ||
+			   matches(*argv, "goto") == 0) {
+			if (parse_action_control(&argc, &argv, &p.action, false))
+				return -1;
 		} else if (strcmp(*argv, "conform-exceed") == 0) {
 			NEXT_ARG();
-			if (get_police_result(&p.action, &presult, *argv)) {
-				fprintf(stderr, "Illegal \"action\"\n");
+			if (parse_action_control_slash(&argc, &argv, &p.action,
+						       &presult, true))
 				return -1;
-			}
 		} else if (matches(*argv, "overhead") == 0) {
 			NEXT_ARG();
 			if (get_u16(&overhead, *argv, 10)) {
@@ -318,12 +295,13 @@ int print_police(struct action_util *a, FILE *f, struct rtattr *arg)
 		fprintf(f, "avrate %s ",
 			sprint_rate(rta_getattr_u32(tb[TCA_POLICE_AVRATE]),
 				    b1));
-	fprintf(f, "action %s", action_n2a(p->action));
+
+	print_action_control(f, "action ", p->action, "");
 
 	if (tb[TCA_POLICE_RESULT]) {
 		__u32 action = rta_getattr_u32(tb[TCA_POLICE_RESULT]);
 
-		fprintf(f, "/%s ", action_n2a(action));
+		print_action_control(f, "/", action, " ");
 	} else
 		fprintf(f, " ");
 

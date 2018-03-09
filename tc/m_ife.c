@@ -57,12 +57,13 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 	int argc = *argc_p;
 	char **argv = *argv_p;
 	int ok = 0;
-	struct tc_ife p = { .action = TC_ACT_PIPE };	/* good default */
+	struct tc_ife p = { 0 };
 	struct rtattr *tail;
 	struct rtattr *tail2;
 	char dbuf[ETH_ALEN];
 	char sbuf[ETH_ALEN];
 	__u16 ife_type = 0;
+	int user_type = 0;
 	__u32 ife_prio = 0;
 	__u32 ife_prio_v = 0;
 	__u32 ife_mark = 0;
@@ -92,7 +93,7 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 			} else if (matches(*argv, "prio") == 0) {
 				ife_prio = IFE_META_PRIO;
 			} else if (matches(*argv, "tcindex") == 0) {
-				ife_prio = IFE_META_TCINDEX;
+				ife_tcindex = IFE_META_TCINDEX;
 			} else {
 				fprintf(stderr, "Illegal meta define <%s>\n",
 					*argv);
@@ -124,7 +125,8 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 			NEXT_ARG();
 			if (get_u16(&ife_type, *argv, 0))
 				invarg("ife type is invalid", *argv);
-			fprintf(stderr, "IFE type 0x%x\n", ife_type);
+			fprintf(stderr, "IFE type 0x%04X\n", ife_type);
+			user_type = 1;
 		} else if (matches(*argv, "dst") == 0) {
 			NEXT_ARG();
 			daddr = *argv;
@@ -156,8 +158,7 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 		argv++;
 	}
 
-	if (argc && !action_a2n(*argv, &p.action, false))
-		NEXT_ARG_FWD();
+	parse_action_control_dflt(&argc, &argv, &p.action, false, TC_ACT_PIPE);
 
 	if (argc) {
 		if (matches(*argv, "index") == 0) {
@@ -186,8 +187,10 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 
 	if (daddr)
 		addattr_l(n, MAX_MSG, TCA_IFE_DMAC, dbuf, ETH_ALEN);
-	if (ife_type)
+	if (user_type)
 		addattr_l(n, MAX_MSG, TCA_IFE_TYPE, &ife_type, 2);
+	else
+		fprintf(stderr, "IFE type 0x%04X\n", ETH_P_IFE);
 	if (saddr)
 		addattr_l(n, MAX_MSG, TCA_IFE_SMAC, sbuf, ETH_ALEN);
 
@@ -245,9 +248,8 @@ static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 	}
 	p = RTA_DATA(tb[TCA_IFE_PARMS]);
 
-	fprintf(f, "ife %s action %s ",
-		(p->flags & IFE_ENCODE) ? "encode" : "decode",
-		action_n2a(p->action));
+	fprintf(f, "ife %s ", p->flags & IFE_ENCODE ? "encode" : "decode");
+	print_action_control(f, "action ", p->action, " ");
 
 	if (tb[TCA_IFE_TYPE]) {
 		ife_type = rta_getattr_u16(tb[TCA_IFE_TYPE]);
@@ -312,7 +314,7 @@ static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 				    sizeof(b2)));
 	}
 
-	fprintf(f, "\n\t index %d ref %d bind %d", p->index, p->refcnt,
+	fprintf(f, "\n\t index %u ref %d bind %d", p->index, p->refcnt,
 		p->bindcnt);
 	if (show_stats) {
 		if (tb[TCA_IFE_TM]) {

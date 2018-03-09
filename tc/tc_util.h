@@ -2,6 +2,7 @@
 #define _TC_UTIL_H_ 1
 
 #define MAX_MSG 16384
+#include <limits.h>
 #include <linux/pkt_sched.h>
 #include <linux/pkt_cls.h>
 #include <linux/gen_stats.h>
@@ -99,13 +100,20 @@ char *sprint_tc_classid(__u32 h, char *buf);
 int tc_print_police(FILE *f, struct rtattr *tb);
 int parse_police(int *argc_p, char ***argv_p, int tca_id, struct nlmsghdr *n);
 
-const char *action_n2a(int action);
-int action_a2n(char *arg, int *result, bool allow_num);
+int parse_action_control(int *argc_p, char ***argv_p,
+			 int *result_p, bool allow_num);
+void parse_action_control_dflt(int *argc_p, char ***argv_p,
+			       int *result_p, bool allow_num,
+			       int default_result);
+int parse_action_control_slash(int *argc_p, char ***argv_p,
+			       int *result1_p, int *result2_p, bool allow_num);
+void print_action_control(FILE *f, const char *prefix,
+			  int action, const char *suffix);
 int act_parse_police(struct action_util *a, int *argc_p,
 		     char ***argv_p, int tca_id, struct nlmsghdr *n);
 int print_police(struct action_util *a, FILE *f, struct rtattr *tb);
 int police_print_xstats(struct action_util *a, FILE *f, struct rtattr *tb);
-int tc_print_action(FILE *f, const struct rtattr *tb);
+int tc_print_action(FILE *f, const struct rtattr *tb, unsigned short tot_acts);
 int tc_print_ipt(FILE *f, const struct rtattr *tb);
 int parse_action(int *argc_p, char ***argv_p, int tca_id, struct nlmsghdr *n);
 void print_tm(FILE *f, const struct tcf_t *tm);

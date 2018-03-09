@@ -28,6 +28,7 @@ ip-route \- routing table management
 
 .ti -8
 .B  ip route get
+.I ROUTE_GET_FLAGS
 .IR ADDRESS " [ "
 .BI from " ADDRESS " iif " STRING"
 .RB " ] [ " oif
@@ -75,7 +76,9 @@ replace " } "
 .B  scope
 .IR SCOPE " ] [ "
 .B  metric
-.IR METRIC " ]"
+.IR METRIC " ] [ "
+.B  ttl-propagate
+.RB "{ " enabled " | " disabled " } ]"
 
 .ti -8
 .IR INFO_SPEC " := " "NH OPTIONS FLAGS" " ["
@@ -174,12 +177,14 @@ throw " | " unreachable " | " prohibit " | " blackhole " | " nat " ]"
 
 .ti -8
 .IR ENCAP " := [ "
-.IR MPLS " | " IP " ]"
+.IR MPLS " | " IP " | " BPF " | " SEG6 " | " SEG6LOCAL " ] "
 
 .ti -8
 .IR ENCAP_MPLS " := "
 .BR mpls " [ "
-.IR LABEL " ]"
+.IR LABEL " ] ["
+.B  ttl
+.IR TTL " ]"
 
 .ti -8
 .IR ENCAP_IP " := "
@@ -192,6 +197,41 @@ throw " | " unreachable " | " prohibit " | " blackhole " | " nat " ]"
 .IR TOS " ] ["
 .B  ttl
 .IR TTL " ]"
+
+.ti -8
+.IR ENCAP_BPF " := "
+.BR bpf " [ "
+.B in
+.IR PROG " ] ["
+.B out
+.IR PROG " ] ["
+.B xmit
+.IR PROG " ] ["
+.B headroom
+.IR SIZE " ]"
+
+.ti -8
+.IR ENCAP_SEG6 " := "
+.B seg6
+.BR mode " [ "
+.BR encap " | " inline " | " l2encap " ] "
+.B segs
+.IR SEGMENTS " [ "
+.B hmac
+.IR KEYID " ]"
+
+.ti -8
+.IR ENCAP_SEG6LOCAL " := "
+.B seg6local
+.BR action
+.IR SEG6_ACTION " [ "
+.IR SEG6_ACTION_PARAM " ] "
+
+.ti -8
+.IR ROUTE_GET_FLAGS " := "
+.BR " [ "
+.BR fibmatch
+.BR " ] "
 
 .SH DESCRIPTION
 .B ip route
@@ -282,7 +322,7 @@ normal routing tables.
 .P
 .B Route tables:
 Linux-2.x can pack routes into several routing tables identified
-by a number in the range from 1 to 2^31 or by name from the file
+by a number in the range from 1 to 2^32-1 or by name from the file
 .B @SYSCONFDIR@/rt_tables
 By default all normal routes are inserted into the
 .B main
@@ -354,7 +394,7 @@ from
 .BI preference " NUMBER"
 the preference value of the route.
 .I NUMBER
-is an arbitrary 32bit number.
+is an arbitrary 32bit number, where routes with lower values are preferred.
 
 .TP
 .BI table " TABLEID"
@@ -636,6 +676,14 @@ is a string specifying the supported encapsulation type. Namely:
 .BI ip
 - IP encapsulation (Geneve, GRE, VXLAN, ...)
 .sp
+.BI bpf
+- Execution of BPF program
+.sp
+.BI seg6
+- encapsulation type IPv6 Segment Routing
+.sp
+.BI seg6local
+- local SRv6 segment processing
 
 .in -8
 .I ENCAPHDR
@@ -648,6 +696,11 @@ is a set of encapsulation attributes specific to the
 .I MPLSLABEL
 - mpls label stack with labels separated by
 .I "/"
+.sp
+
+.B ttl
+.I TTL
+- TTL to use for MPLS header or 0 to inherit from IP header
 .in -2
 .sp
 
@@ -664,14 +717,116 @@ is a set of encapsulation attributes specific to the
 .in -2
 .sp
 
+.B bpf
+.in +2
+.B in
+.I PROG
+- BPF program to execute for incoming packets
+.sp
+
+.B out
+.I PROG
+- BPF program to execute for outgoing packets
+.sp
+
+.B xmit
+.I PROG
+- BPF program to execute for transmitted packets
+.sp
+
+.B headroom
+.I SIZE
+- Size of header BPF program will attach (xmit)
+.in -2
+.sp
+
+.B seg6
+.in +2
+.B mode inline
+- Directly insert Segment Routing Header after IPv6 header
+.sp
+
+.B mode encap
+- Encapsulate packet in an outer IPv6 header with SRH
+.sp
+
+.B mode l2encap
+- Encapsulate ingress L2 frame within an outer IPv6 header and SRH
+.sp
+
+.I SEGMENTS
+- List of comma-separated IPv6 addresses
+.sp
+
+.I KEYID
+- Numerical value in decimal representation. See \fBip-sr\fR(8).
+.in -2
+.sp
+
+.B seg6local
+.in +2
+.IR SEG6_ACTION " [ "
+.IR SEG6_ACTION_PARAM " ] "
+- Operation to perform on matching packets.
+The following actions are currently supported (\fB4.14+ only\fR).
+.in +2
+
+.B End
+- Regular SRv6 processing as intermediate segment endpoint.
+This action only accepts packets with a non-zero Segments Left
+value. Other matching packets are dropped.
+
+.B End.X nh6
+.I NEXTHOP
+- Regular SRv6 processing as intermediate segment endpoint.
+Additionally, forward processed packets to given next-hop.
+This action only accepts packets with a non-zero Segments Left
+value. Other matching packets are dropped.
+
+.B End.DX6 nh6
+.I NEXTHOP
+- Decapsulate inner IPv6 packet and forward it to the
+specified next-hop. If the argument is set to ::, then
+the next-hop is selected according to the local selection
+rules. This action only accepts packets with either a zero Segments
+Left value or no SRH at all, and an inner IPv6 packet. Other
+matching packets are dropped.
+
+.B End.B6 srh segs
+.IR SEGMENTS " [ "
+.B hmac
+.IR KEYID " ] "
+- Insert the specified SRH immediately after the IPv6 header,
+update the DA with the first segment of the newly inserted SRH,
+then forward the resulting packet. The original SRH is not
+modified. This action only accepts packets with a non-zero
+Segments Left value. Other matching packets are dropped.
+
+.B End.B6.Encaps srh segs
+.IR SEGMENTS " [ "
+.B hmac
+.IR KEYID " ] "
+- Regular SRv6 processing as intermediate segment endpoint.
+Additionally, encapsulate the matching packet within an outer IPv6 header
+followed by the specified SRH. The destination address of the outer IPv6
+header is set to the first segment of the new SRH. The source
+address is set as described in \fBip-sr\fR(8).
+.in -4
+
 .in -8
-.RE
 
 .TP
 .BI expires " TIME " "(4.4+ only)"
 the route will be deleted after the expires time.
 .B Only
 support IPv6 at present.
+
+.TP
+.BR ttl-propagate " { " enabled " | " disabled " } "
+Control whether TTL should be propagated from any encap into the
+un-encapsulated packet, overriding any global configuration. Only
+supported for MPLS at present.
+.RE
 
 .TP
 ip route delete
@@ -846,6 +1001,11 @@ this command gets a single route to a destination and prints its
 contents exactly as the kernel sees it.
 
 .TP
+.BI fibmatch
+Return full fib lookup matched route. Default is to return the resolved
+dst entry
+
+.TP
 .BI to " ADDRESS " (default)
 the destination address.
 
@@ -946,6 +1106,11 @@ be reached on device eth0.
 ip route add 10.1.1.0/30 encap mpls 200/300 via 10.1.1.1 dev eth0
 .RS 4
 Adds an ipv4 route with mpls encapsulation attributes attached to it.
+.RE
+.PP
+ip -6 route add 2001:db8:1::/64 encap seg6 mode encap segs 2001:db8:42::1,2001:db8:ffff::2 dev eth0
+.RS 4
+Adds an IPv6 route with SRv6 encapsulation and two segments attached.
 .RE
 .SH SEE ALSO
 .br

@@ -48,7 +48,8 @@ ip \- show / manipulate routing, devices, policy routing and tunnels
 \fB\-ts\fR[\fIhort\fR] |
 \fB\-n\fR[\fIetns\fR] name |
 \fB\-a\fR[\fIll\fR] |
-\fB\-c\fR[\fIolor\fR] }
+\fB\-c\fR[\fIolor\fR]
+\fB\-br\fR[\fIief\fR] }
 
 
 .SH OPTIONS
@@ -206,6 +207,11 @@ Set the netlink socket receive buffer size, defaults to 1MB.
 .BR "\-iec"
 print human readable rates in IEC units (e.g. 1Ki = 1024).
 
+.TP
+.BR "\-br" , "\-brief"
+Print only basic information in a tabular format for better readability. This option is currently only supported by
+.BR "ip addr show " and " ip link show " commands.
+
 .SH IP - COMMAND SYNTAX
 
 .SS
@@ -318,6 +324,34 @@ or, if the objects of this class cannot be listed,
 .SH EXIT STATUS
 Exit status is 0 if command was successful, and 1 if there is a syntax error.
 If an error was reported by the kernel exit status is 2.
+
+.SH "EXAMPLES"
+.PP
+ip addr
+.RS 4
+Shows addresses assigned to all network interfaces.
+.RE
+.PP
+ip neigh
+.RS 4
+Shows the current neighbour table in kernel.
+.RE
+.PP
+ip link set x up
+.RS 4
+Bring up interface x.
+.RE
+.PP
+ip link set x down
+.RE
+.RS 4
+Bring down interface x.
+.RE
+.PP
+ip route
+.RS 4
+Show table routes.
+.RE
 
 .SH HISTORY
 .B ip

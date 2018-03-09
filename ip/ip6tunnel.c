@@ -111,16 +111,17 @@ static void print_tunnel(struct ip6_tnl_parm2 *p)
 	if (p->flags & IP6_TNL_F_RCV_DSCP_COPY)
 		printf(" dscp inherit");
 
-	if (p->proto == IPPROTO_GRE) {
-		if ((p->i_flags & GRE_KEY) && (p->o_flags & GRE_KEY) && p->o_key == p->i_key)
-			printf(" key %u", ntohl(p->i_key));
-		else if ((p->i_flags | p->o_flags) & GRE_KEY) {
-			if (p->i_flags & GRE_KEY)
-				printf(" ikey %u", ntohl(p->i_key));
-			if (p->o_flags & GRE_KEY)
-				printf(" okey %u", ntohl(p->o_key));
-		}
+	if ((p->i_flags & GRE_KEY) && (p->o_flags & GRE_KEY) &&
+	    p->o_key == p->i_key)
+		printf(" key %u", ntohl(p->i_key));
+	else {
+		if (p->i_flags & GRE_KEY)
+			printf(" ikey %u", ntohl(p->i_key));
+		if (p->o_flags & GRE_KEY)
+			printf(" okey %u", ntohl(p->o_key));
+	}
 
+	if (p->proto == IPPROTO_GRE) {
 		if (p->i_flags & GRE_SEQ)
 			printf("%s  Drop packets out of sequence.", _SL_);
 		if (p->i_flags & GRE_CSUM)
@@ -135,7 +136,7 @@ static void print_tunnel(struct ip6_tnl_parm2 *p)
 static int parse_args(int argc, char **argv, int cmd, struct ip6_tnl_parm2 *p)
 {
 	int count = 0;
-	char medium[IFNAMSIZ] = {};
+	const char *medium = NULL;
 
 	while (argc > 0) {
 		if (strcmp(*argv, "mode") == 0) {
@@ -179,7 +180,7 @@ static int parse_args(int argc, char **argv, int cmd, struct ip6_tnl_parm2 *p)
 			memcpy(&p->laddr, &laddr.data, sizeof(p->laddr));
 		} else if (strcmp(*argv, "dev") == 0) {
 			NEXT_ARG();
-			strncpy(medium, *argv, IFNAMSIZ - 1);
+			medium = *argv;
 		} else if (strcmp(*argv, "encaplimit") == 0) {
 			NEXT_ARG();
 			if (strcmp(*argv, "none") == 0) {
@@ -272,7 +273,8 @@ static int parse_args(int argc, char **argv, int cmd, struct ip6_tnl_parm2 *p)
 				usage();
 			if (p->name[0])
 				duparg2("name", *argv);
-			strncpy(p->name, *argv, IFNAMSIZ - 1);
+			if (get_ifname(p->name, *argv))
+				invarg("\"name\" not a valid ifname", *argv);
 			if (cmd == SIOCCHGTUNNEL && count == 0) {
 				struct ip6_tnl_parm2 old_p = {};
 
@@ -284,7 +286,7 @@ static int parse_args(int argc, char **argv, int cmd, struct ip6_tnl_parm2 *p)
 		count++;
 		argc--; argv++;
 	}
-	if (medium[0]) {
+	if (medium) {
 		p->link = ll_name_to_index(medium);
 		if (p->link == 0) {
 			fprintf(stderr, "Cannot find device \"%s\"\n", medium);

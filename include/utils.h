@@ -20,25 +20,13 @@ extern int show_raw;
 extern int resolve_hosts;
 extern int oneline;
 extern int brief;
+extern int json;
 extern int timestamp;
 extern int timestamp_short;
 extern const char * _SL_;
 extern int max_flush_loops;
 extern int batch_mode;
 extern bool do_all;
-
-#ifndef IPPROTO_ESP
-#define IPPROTO_ESP	50
-#endif
-#ifndef IPPROTO_AH
-#define IPPROTO_AH	51
-#endif
-#ifndef IPPROTO_COMP
-#define IPPROTO_COMP	108
-#endif
-#ifndef IPSEC_PROTO_ANY
-#define IPSEC_PROTO_ANY	255
-#endif
 
 #ifndef CONFDIR
 #define CONFDIR		"/etc/iproute2"
@@ -61,7 +49,7 @@ typedef struct
 	__s16 bitlen;
 	/* These next two fields match rtvia */
 	__u16 family;
-	__u32 data[8];
+	__u32 data[64];
 } inet_prefix;
 
 #define PREFIXLEN_SPECIFIED 1
@@ -87,9 +75,9 @@ struct ipx_addr {
 #ifndef AF_MPLS
 # define AF_MPLS 28
 #endif
-
-/* Maximum number of labels the mpls helpers support */
-#define MPLS_MAX_LABELS 8
+#ifndef IPPROTO_MPLS
+#define IPPROTO_MPLS	137
+#endif
 
 __u32 get_addr32(const char *name);
 int get_addr_1(inet_prefix *dst, const char *arg, int family);
@@ -118,6 +106,7 @@ int get_be32(__be32 *val, const char *arg, int base);
 int get_be16(__be16 *val, const char *arg, int base);
 int get_addr64(__u64 *ap, const char *cp);
 
+int hex2mem(const char *buf, uint8_t *mem, int count);
 char *hexstring_n2a(const __u8 *str, int len, char *buf, int blen);
 __u8 *hexstring_a2n(const char *str, __u8 *buf, int blen, unsigned int *len);
 #define ADDR64_BUF_SIZE sizeof("xxxx:xxxx:xxxx:xxxx")
@@ -144,6 +133,8 @@ void missarg(const char *) __attribute__((noreturn));
 void invarg(const char *, const char *) __attribute__((noreturn));
 void duparg(const char *, const char *) __attribute__((noreturn));
 void duparg2(const char *, const char *) __attribute__((noreturn));
+int check_ifname(const char *);
+int get_ifname(char *, const char *);
 int matches(const char *arg, const char *pattern);
 int inet_addr_match(const inet_prefix *a, const inet_prefix *b, int bits);
 
@@ -154,7 +145,7 @@ const char *ipx_ntop(int af, const void *addr, char *str, size_t len);
 int ipx_pton(int af, const char *src, void *addr);
 
 const char *mpls_ntop(int af, const void *addr, char *str, size_t len);
-int mpls_pton(int af, const char *src, void *addr);
+int mpls_pton(int af, const char *src, void *addr, size_t alen);
 
 extern int __iproute2_hz_internal;
 int __get_hz(void);
@@ -204,8 +195,12 @@ static inline void __jiffies_to_tv(struct timeval *tv, unsigned long jiffies)
 	tv->tv_usec = tvusec - 1000000 * tv->tv_sec;
 }
 
+void print_escape_buf(const __u8 *buf, size_t len, const char *escape);
+
 int print_timestamp(FILE *fp);
 void print_nlmsg_timestamp(FILE *fp, const struct nlmsghdr *n);
+
+#define BIT(nr)                 (1UL << (nr))
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
@@ -239,7 +234,12 @@ ssize_t getcmdline(char **line, size_t *len, FILE *in);
 int makeargs(char *line, char *argv[], int maxargs);
 int inet_get_addr(const char *src, __u32 *dst, struct in6_addr *dst6);
 
-struct iplink_req;
+struct iplink_req {
+	struct nlmsghdr		n;
+	struct ifinfomsg	i;
+	char			buf[1024];
+};
+
 int iplink_parse(int argc, char **argv, struct iplink_req *req,
 		char **name, char **type, char **link, char **dev,
 		int *group, int *index);
@@ -250,5 +250,13 @@ int do_each_netns(int (*func)(char *nsname, void *arg), void *arg,
 char *int_to_str(int val, char *buf);
 int get_guid(__u64 *guid, const char *arg);
 int get_real_family(int rtm_type, int rtm_family);
+
+int cmd_exec(const char *cmd, char **argv, bool do_fork);
+int make_path(const char *path, mode_t mode);
+char *find_cgroup2_mount(void);
+int get_command_name(const char *pid, char *comm, size_t len);
+
+size_t strlcpy(char *dst, const char *src, size_t size);
+size_t strlcat(char *dst, const char *src, size_t size);
 
 #endif /* __UTILS_H__ */

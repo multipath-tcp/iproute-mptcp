@@ -81,10 +81,10 @@
 #endif
 static void explain(void)
 {
-	fprintf(stderr, "Usage:... simple [sdata STRING] [CONTROL] [index INDEX]\n");
+	fprintf(stderr, "Usage:... simple [sdata STRING] [index INDEX] [CONTROL]\n");
 	fprintf(stderr, "\tSTRING being an arbitrary string\n"
-		"\tCONTROL := reclassify|pipe|drop|continue|ok\n"
-		"\tINDEX := optional index value used\n");
+		"\tINDEX := optional index value used\n"
+		"\tCONTROL := reclassify|pipe|drop|continue|ok\n");
 }
 
 static void usage(void)
@@ -119,9 +119,6 @@ parse_simple(struct action_util *a, int *argc_p, char ***argv_p, int tca_id,
 			break;
 		}
 	}
-
-	if (argc && !action_a2n(*argv, &sel.action, false))
-		NEXT_ARG_FWD();
 
 	if (argc) {
 		if (matches(*argv, "index") == 0) {
@@ -187,7 +184,7 @@ static int print_simple(struct action_util *au, FILE *f, struct rtattr *arg)
 	simpdata = RTA_DATA(tb[TCA_DEF_DATA]);
 
 	fprintf(f, "Simple <%s>\n", simpdata);
-	fprintf(f, "\t index %d ref %d bind %d", sel->index,
+	fprintf(f, "\t index %u ref %d bind %d", sel->index,
 		sel->refcnt, sel->bindcnt);
 
 	if (show_stats) {

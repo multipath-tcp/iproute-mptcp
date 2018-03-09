@@ -32,7 +32,8 @@ static void explain(void)
 	fprintf(stderr, "       vlan modify [ protocol VLANPROTO ] id VLANID [ priority VLANPRIO ] [CONTROL]\n");
 	fprintf(stderr, "       VLANPROTO is one of 802.1Q or 802.1AD\n");
 	fprintf(stderr, "            with default: 802.1Q\n");
-	fprintf(stderr, "       CONTROL := reclassify | pipe | drop | continue | pass\n");
+	fprintf(stderr, "       CONTROL := reclassify | pipe | drop | continue | pass |\n");
+	fprintf(stderr, "                  goto chain <CHAIN_INDEX>\n");
 }
 
 static void usage(void)
@@ -59,7 +60,7 @@ static int parse_vlan(struct action_util *a, int *argc_p, char ***argv_p,
 	int proto_set = 0;
 	__u8 prio;
 	int prio_set = 0;
-	struct tc_vlan parm = { 0 };
+	struct tc_vlan parm = {};
 
 	if (matches(*argv, "vlan") != 0)
 		return -1;
@@ -133,9 +134,8 @@ static int parse_vlan(struct action_util *a, int *argc_p, char ***argv_p,
 		argv++;
 	}
 
-	parm.action = TC_ACT_PIPE;
-	if (argc && !action_a2n(*argv, &parm.action, false))
-		NEXT_ARG_FWD();
+	parse_action_control_dflt(&argc, &argv, &parm.action,
+				  false, TC_ACT_PIPE);
 
 	if (argc) {
 		if (matches(*argv, "index") == 0) {
@@ -224,9 +224,9 @@ static int print_vlan(struct action_util *au, FILE *f, struct rtattr *arg)
 		}
 		break;
 	}
-	fprintf(f, " %s", action_n2a(parm->action));
+	print_action_control(f, " ", parm->action, "");
 
-	fprintf(f, "\n\t index %d ref %d bind %d", parm->index, parm->refcnt,
+	fprintf(f, "\n\t index %u ref %d bind %d", parm->index, parm->refcnt,
 		parm->bindcnt);
 
 	if (show_stats) {

@@ -182,7 +182,7 @@ static int create_session(struct l2tp_parm *p)
 	if (p->peer_cookie_len)
 		addattr_l(&req.n, 1024, L2TP_ATTR_PEER_COOKIE,
 			  p->peer_cookie,  p->peer_cookie_len);
-	if (p->ifname && p->ifname[0])
+	if (p->ifname)
 		addattrstrz(&req.n, 1024, L2TP_ATTR_IFNAME, p->ifname);
 
 	if (rtnl_talk(&genl_rth, &req.n, NULL, 0) < 0)
@@ -485,31 +485,6 @@ static int get_tunnel(struct l2tp_data *p)
  * Command parser
  *****************************************************************************/
 
-static int hex2mem(const char *buf, uint8_t *mem, int count)
-{
-	int i, j;
-	int c;
-
-	for (i = 0, j = 0; i < count; i++, j += 2) {
-		c = get_hex(buf[j]);
-		if (c < 0)
-			goto err;
-
-		mem[i] = c << 4;
-
-		c = get_hex(buf[j + 1]);
-		if (c < 0)
-			goto err;
-
-		mem[i] |= c;
-	}
-
-	return 0;
-
-err:
-	return -1;
-}
-
 static void usage(void) __attribute__((noreturn));
 
 static void usage(void)
@@ -570,6 +545,8 @@ static int parse_args(int argc, char **argv, int cmd, struct l2tp_parm *p)
 			}
 		} else if (strcmp(*argv, "name") == 0) {
 			NEXT_ARG();
+			if (check_ifname(*argv))
+				invarg("\"name\" not a valid ifname", *argv);
 			p->ifname = *argv;
 		} else if (strcmp(*argv, "remote") == 0) {
 			NEXT_ARG();

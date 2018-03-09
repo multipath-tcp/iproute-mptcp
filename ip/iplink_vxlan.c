@@ -21,23 +21,39 @@
 #include "utils.h"
 #include "ip_common.h"
 
+#define VXLAN_ATTRSET(attrs, type) (((attrs) & (1L << (type))) != 0)
+
 static void print_explain(FILE *f)
 {
-	fprintf(f, "Usage: ... vxlan id VNI [ { group | remote } IP_ADDRESS ] [ local ADDR ]\n");
-	fprintf(f, "                 [ ttl TTL ] [ tos TOS ] [ flowlabel LABEL ] [ dev PHYS_DEV ]\n");
-	fprintf(f, "                 [ dstport PORT ] [ srcport MIN MAX ]\n");
-	fprintf(f, "                 [ [no]learning ] [ [no]proxy ] [ [no]rsc ]\n");
-	fprintf(f, "                 [ [no]l2miss ] [ [no]l3miss ]\n");
-	fprintf(f, "                 [ ageing SECONDS ] [ maxaddress NUMBER ]\n");
-	fprintf(f, "                 [ [no]udpcsum ] [ [no]udp6zerocsumtx ] [ [no]udp6zerocsumrx ]\n");
-	fprintf(f, "                 [ [no]remcsumtx ] [ [no]remcsumrx ]\n");
-	fprintf(f, "                 [ [no]external ] [ gbp ] [ gpe ]\n");
-	fprintf(f, "\n");
-	fprintf(f, "Where: VNI   := 0-16777215\n");
-	fprintf(f, "       ADDR  := { IP_ADDRESS | any }\n");
-	fprintf(f, "       TOS   := { NUMBER | inherit }\n");
-	fprintf(f, "       TTL   := { 1..255 | inherit }\n");
-	fprintf(f, "       LABEL := 0-1048575\n");
+	fprintf(f,
+		"Usage: ... vxlan id VNI\n"
+		"                 [ { group | remote } IP_ADDRESS ]\n"
+		"                 [ local ADDR ]\n"
+		"                 [ ttl TTL ]\n"
+		"                 [ tos TOS ]\n"
+		"                 [ flowlabel LABEL ]\n"
+		"                 [ dev PHYS_DEV ]\n"
+		"                 [ dstport PORT ]\n"
+		"                 [ srcport MIN MAX ]\n"
+		"                 [ [no]learning ]\n"
+		"                 [ [no]proxy ]\n"
+		"                 [ [no]rsc ]\n"
+		"                 [ [no]l2miss ]\n"
+		"                 [ [no]l3miss ]\n"
+		"                 [ ageing SECONDS ]\n"
+		"                 [ maxaddress NUMBER ]\n"
+		"                 [ [no]udpcsum ]\n"
+		"                 [ [no]udp6zerocsumtx ]\n"
+		"                 [ [no]udp6zerocsumrx ]\n"
+		"                 [ [no]remcsumtx ] [ [no]remcsumrx ]\n"
+		"                 [ [no]external ] [ gbp ] [ gpe ]\n"
+		"\n"
+		"Where: VNI   := 0-16777215\n"
+		"       ADDR  := { IP_ADDRESS | any }\n"
+		"       TOS   := { NUMBER | inherit }\n"
+		"       TTL   := { 1..255 | inherit }\n"
+		"       LABEL := 0-1048575\n"
+	);
 }
 
 static void explain(void)
@@ -45,54 +61,50 @@ static void explain(void)
 	print_explain(stderr);
 }
 
+static void check_duparg(__u64 *attrs, int type, const char *key,
+			 const char *argv)
+{
+	if (!VXLAN_ATTRSET(*attrs, type)) {
+		*attrs |= (1L << type);
+		return;
+	}
+	duparg2(key, argv);
+}
+
 static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			  struct nlmsghdr *n)
 {
 	__u32 vni = 0;
-	int vni_set = 0;
-	__u32 saddr = 0;
 	__u32 gaddr = 0;
 	__u32 daddr = 0;
-	struct in6_addr saddr6 = IN6ADDR_ANY_INIT;
 	struct in6_addr gaddr6 = IN6ADDR_ANY_INIT;
 	struct in6_addr daddr6 = IN6ADDR_ANY_INIT;
-	unsigned int link = 0;
-	__u8 tos = 0;
-	__u8 ttl = 0;
-	__u32 label = 0;
 	__u8 learning = 1;
-	__u8 proxy = 0;
-	__u8 rsc = 0;
-	__u8 l2miss = 0;
-	__u8 l3miss = 0;
-	__u8 noage = 0;
-	__u32 age = 0;
-	__u32 maxaddr = 0;
 	__u16 dstport = 0;
-	__u8 udpcsum = 0;
-	bool udpcsum_set = false;
-	__u8 udp6zerocsumtx = 0;
-	bool udp6zerocsumtx_set = false;
-	__u8 udp6zerocsumrx = 0;
-	bool udp6zerocsumrx_set = false;
-	__u8 remcsumtx = 0;
-	__u8 remcsumrx = 0;
 	__u8 metadata = 0;
-	__u8 gbp = 0;
-	__u8 gpe = 0;
-	int dst_port_set = 0;
-	struct ifla_vxlan_port_range range = { 0, 0 };
+	__u64 attrs = 0;
+	bool set_op = (n->nlmsg_type == RTM_NEWLINK &&
+		       !(n->nlmsg_flags & NLM_F_CREATE));
 
 	while (argc > 0) {
 		if (!matches(*argv, "id") ||
 		    !matches(*argv, "vni")) {
+			/* We will add ID attribute outside of the loop since we
+			 * need to consider metadata information as well.
+			 */
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_ID, "id", *argv);
 			if (get_u32(&vni, *argv, 0) ||
 			    vni >= 1u << 24)
 				invarg("invalid id", *argv);
-			vni_set = 1;
 		} else if (!matches(*argv, "group")) {
+			if (daddr || !IN6_IS_ADDR_UNSPECIFIED(&daddr6)) {
+				fprintf(stderr, "vxlan: both group and remote");
+				fprintf(stderr, " cannot be specified\n");
+				return -1;
+			}
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_GROUP, "group", *argv);
 			if (!inet_get_addr(*argv, &gaddr, &gaddr6)) {
 				fprintf(stderr, "Invalid address \"%s\"\n", *argv);
 				return -1;
@@ -100,7 +112,13 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			if (!IN6_IS_ADDR_MULTICAST(&gaddr6) && !IN_MULTICAST(ntohl(gaddr)))
 				invarg("invalid group address", *argv);
 		} else if (!matches(*argv, "remote")) {
+			if (gaddr || !IN6_IS_ADDR_UNSPECIFIED(&gaddr6)) {
+				fprintf(stderr, "vxlan: both group and remote");
+				fprintf(stderr, " cannot be specified\n");
+				return -1;
+			}
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_GROUP, "remote", *argv);
 			if (!inet_get_addr(*argv, &daddr, &daddr6)) {
 				fprintf(stderr, "Invalid address \"%s\"\n", *argv);
 				return -1;
@@ -108,7 +126,11 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			if (IN6_IS_ADDR_MULTICAST(&daddr6) || IN_MULTICAST(ntohl(daddr)))
 				invarg("invalid remote address", *argv);
 		} else if (!matches(*argv, "local")) {
+			__u32 saddr = 0;
+			struct in6_addr saddr6 = IN6ADDR_ANY_INIT;
+
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_LOCAL, "local", *argv);
 			if (strcmp(*argv, "any")) {
 				if (!inet_get_addr(*argv, &saddr, &saddr6)) {
 					fprintf(stderr, "Invalid address \"%s\"\n", *argv);
@@ -118,19 +140,31 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 
 			if (IN_MULTICAST(ntohl(saddr)) || IN6_IS_ADDR_MULTICAST(&saddr6))
 				invarg("invalid local address", *argv);
+
+			if (saddr)
+				addattr_l(n, 1024, IFLA_VXLAN_LOCAL, &saddr, 4);
+			else if (!IN6_IS_ADDR_UNSPECIFIED(&saddr6))
+				addattr_l(n, 1024, IFLA_VXLAN_LOCAL6, &saddr6,
+					  sizeof(struct in6_addr));
 		} else if (!matches(*argv, "dev")) {
+			unsigned int link;
+
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_LINK, "dev", *argv);
 			link = if_nametoindex(*argv);
 			if (link == 0) {
 				fprintf(stderr, "Cannot find device \"%s\"\n",
 					*argv);
 				exit(-1);
 			}
+			addattr32(n, 1024, IFLA_VXLAN_LINK, link);
 		} else if (!matches(*argv, "ttl") ||
 			   !matches(*argv, "hoplimit")) {
 			unsigned int uval;
+			__u8 ttl = 0;
 
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_TTL, "ttl", *argv);
 			if (strcmp(*argv, "inherit") != 0) {
 				if (get_unsigned(&uval, *argv, 0))
 					invarg("invalid TTL", *argv);
@@ -138,106 +172,163 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 					invarg("TTL must be <= 255", *argv);
 				ttl = uval;
 			}
+			addattr8(n, 1024, IFLA_VXLAN_TTL, ttl);
 		} else if (!matches(*argv, "tos") ||
 			   !matches(*argv, "dsfield")) {
 			__u32 uval;
+			__u8 tos;
 
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_TOS, "tos", *argv);
 			if (strcmp(*argv, "inherit") != 0) {
 				if (rtnl_dsfield_a2n(&uval, *argv))
 					invarg("bad TOS value", *argv);
 				tos = uval;
 			} else
 				tos = 1;
+			addattr8(n, 1024, IFLA_VXLAN_TOS, tos);
 		} else if (!matches(*argv, "label") ||
 			   !matches(*argv, "flowlabel")) {
 			__u32 uval;
 
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_LABEL, "flowlabel",
+				     *argv);
 			if (get_u32(&uval, *argv, 0) ||
 			    (uval & ~LABEL_MAX_MASK))
 				invarg("invalid flowlabel", *argv);
-			label = htonl(uval);
+			addattr32(n, 1024, IFLA_VXLAN_LABEL, htonl(uval));
 		} else if (!matches(*argv, "ageing")) {
+			__u32 age;
+
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_AGEING, "ageing",
+				     *argv);
 			if (strcmp(*argv, "none") == 0)
-				noage = 1;
+				age = 0;
 			else if (get_u32(&age, *argv, 0))
 				invarg("ageing timer", *argv);
+			addattr32(n, 1024, IFLA_VXLAN_AGEING, age);
 		} else if (!matches(*argv, "maxaddress")) {
+			__u32 maxaddr;
+
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_LIMIT,
+				     "maxaddress", *argv);
 			if (strcmp(*argv, "unlimited") == 0)
 				maxaddr = 0;
 			else if (get_u32(&maxaddr, *argv, 0))
 				invarg("max addresses", *argv);
+			addattr32(n, 1024, IFLA_VXLAN_LIMIT, maxaddr);
 		} else if (!matches(*argv, "port") ||
 			   !matches(*argv, "srcport")) {
+			struct ifla_vxlan_port_range range = { 0, 0 };
+
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_PORT_RANGE, "srcport",
+				     *argv);
 			if (get_be16(&range.low, *argv, 0))
 				invarg("min port", *argv);
 			NEXT_ARG();
 			if (get_be16(&range.high, *argv, 0))
 				invarg("max port", *argv);
+			if (range.low || range.high) {
+				addattr_l(n, 1024, IFLA_VXLAN_PORT_RANGE,
+					  &range, sizeof(range));
+			}
 		} else if (!matches(*argv, "dstport")) {
 			NEXT_ARG();
+			check_duparg(&attrs, IFLA_VXLAN_PORT, "dstport", *argv);
 			if (get_u16(&dstport, *argv, 0))
 				invarg("dst port", *argv);
-			dst_port_set = 1;
 		} else if (!matches(*argv, "nolearning")) {
+			check_duparg(&attrs, IFLA_VXLAN_LEARNING, *argv, *argv);
 			learning = 0;
 		} else if (!matches(*argv, "learning")) {
+			check_duparg(&attrs, IFLA_VXLAN_LEARNING, *argv, *argv);
 			learning = 1;
 		} else if (!matches(*argv, "noproxy")) {
-			proxy = 0;
+			check_duparg(&attrs, IFLA_VXLAN_PROXY, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_PROXY, 0);
 		} else if (!matches(*argv, "proxy")) {
-			proxy = 1;
+			check_duparg(&attrs, IFLA_VXLAN_PROXY, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_PROXY, 1);
 		} else if (!matches(*argv, "norsc")) {
-			rsc = 0;
+			check_duparg(&attrs, IFLA_VXLAN_RSC, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_RSC, 0);
 		} else if (!matches(*argv, "rsc")) {
-			rsc = 1;
+			check_duparg(&attrs, IFLA_VXLAN_RSC, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_RSC, 1);
 		} else if (!matches(*argv, "nol2miss")) {
-			l2miss = 0;
+			check_duparg(&attrs, IFLA_VXLAN_L2MISS, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_L2MISS, 0);
 		} else if (!matches(*argv, "l2miss")) {
-			l2miss = 1;
+			check_duparg(&attrs, IFLA_VXLAN_L2MISS, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_L2MISS, 1);
 		} else if (!matches(*argv, "nol3miss")) {
-			l3miss = 0;
+			check_duparg(&attrs, IFLA_VXLAN_L3MISS, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_L3MISS, 0);
 		} else if (!matches(*argv, "l3miss")) {
-			l3miss = 1;
+			check_duparg(&attrs, IFLA_VXLAN_L3MISS, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_L3MISS, 1);
 		} else if (!matches(*argv, "udpcsum")) {
-			udpcsum = 1;
-			udpcsum_set = true;
+			check_duparg(&attrs, IFLA_VXLAN_UDP_CSUM, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_UDP_CSUM, 1);
 		} else if (!matches(*argv, "noudpcsum")) {
-			udpcsum = 0;
-			udpcsum_set = true;
+			check_duparg(&attrs, IFLA_VXLAN_UDP_CSUM, *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_UDP_CSUM, 0);
 		} else if (!matches(*argv, "udp6zerocsumtx")) {
-			udp6zerocsumtx = 1;
-			udp6zerocsumtx_set = true;
+			check_duparg(&attrs, IFLA_VXLAN_UDP_ZERO_CSUM6_TX,
+				     *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_UDP_ZERO_CSUM6_TX, 1);
 		} else if (!matches(*argv, "noudp6zerocsumtx")) {
-			udp6zerocsumtx = 0;
-			udp6zerocsumtx_set = true;
+			check_duparg(&attrs, IFLA_VXLAN_UDP_ZERO_CSUM6_TX,
+				     *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_UDP_ZERO_CSUM6_TX, 0);
 		} else if (!matches(*argv, "udp6zerocsumrx")) {
-			udp6zerocsumrx = 1;
-			udp6zerocsumrx_set = true;
+			check_duparg(&attrs, IFLA_VXLAN_UDP_ZERO_CSUM6_RX,
+				     *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_UDP_ZERO_CSUM6_RX, 1);
 		} else if (!matches(*argv, "noudp6zerocsumrx")) {
-			udp6zerocsumrx = 0;
-			udp6zerocsumrx_set = true;
+			check_duparg(&attrs, IFLA_VXLAN_UDP_ZERO_CSUM6_RX,
+				     *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_UDP_ZERO_CSUM6_RX, 0);
 		} else if (!matches(*argv, "remcsumtx")) {
-			remcsumtx = 1;
+			check_duparg(&attrs, IFLA_VXLAN_REMCSUM_TX,
+				     *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_REMCSUM_TX, 1);
 		} else if (!matches(*argv, "noremcsumtx")) {
-			remcsumtx = 0;
+			check_duparg(&attrs, IFLA_VXLAN_REMCSUM_TX,
+				     *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_REMCSUM_TX, 0);
 		} else if (!matches(*argv, "remcsumrx")) {
-			remcsumrx = 1;
+			check_duparg(&attrs, IFLA_VXLAN_REMCSUM_RX,
+				     *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_REMCSUM_RX, 1);
 		} else if (!matches(*argv, "noremcsumrx")) {
-			remcsumrx = 0;
+			check_duparg(&attrs, IFLA_VXLAN_REMCSUM_RX,
+				     *argv, *argv);
+			addattr8(n, 1024, IFLA_VXLAN_REMCSUM_RX, 0);
 		} else if (!matches(*argv, "external")) {
+			check_duparg(&attrs, IFLA_VXLAN_COLLECT_METADATA,
+				     *argv, *argv);
 			metadata = 1;
 			learning = 0;
+			/* we will add LEARNING attribute outside of the loop */
+			addattr8(n, 1024, IFLA_VXLAN_COLLECT_METADATA,
+				 metadata);
 		} else if (!matches(*argv, "noexternal")) {
+			check_duparg(&attrs, IFLA_VXLAN_COLLECT_METADATA,
+				     *argv, *argv);
 			metadata = 0;
+			addattr8(n, 1024, IFLA_VXLAN_COLLECT_METADATA,
+				 metadata);
 		} else if (!matches(*argv, "gbp")) {
-			gbp = 1;
+			check_duparg(&attrs, IFLA_VXLAN_GBP, *argv, *argv);
+			addattr_l(n, 1024, IFLA_VXLAN_GBP, NULL, 0);
 		} else if (!matches(*argv, "gpe")) {
-			gpe = 1;
+			check_duparg(&attrs, IFLA_VXLAN_GPE, *argv, *argv);
+			addattr_l(n, 1024, IFLA_VXLAN_GPE, NULL, 0);
 		} else if (matches(*argv, "help") == 0) {
 			explain();
 			return -1;
@@ -249,31 +340,26 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 		argc--, argv++;
 	}
 
-	if (metadata && vni_set) {
+	if (metadata && VXLAN_ATTRSET(attrs, IFLA_VXLAN_ID)) {
 		fprintf(stderr, "vxlan: both 'external' and vni cannot be specified\n");
 		return -1;
 	}
 
-	if (!metadata && !vni_set) {
+	if (!metadata && !VXLAN_ATTRSET(attrs, IFLA_VXLAN_ID)) {
 		fprintf(stderr, "vxlan: missing virtual network identifier\n");
 		return -1;
 	}
 
-	if ((gaddr && daddr) ||
-	    (!IN6_IS_ADDR_UNSPECIFIED(&gaddr6) &&
-	     !IN6_IS_ADDR_UNSPECIFIED(&daddr6))) {
-		fprintf(stderr, "vxlan: both group and remote cannot be specified\n");
-		return -1;
-	}
-
-	if ((gaddr || !IN6_IS_ADDR_UNSPECIFIED(&gaddr6)) && !link) {
+	if ((gaddr || !IN6_IS_ADDR_UNSPECIFIED(&gaddr6)) &&
+	    !VXLAN_ATTRSET(attrs, IFLA_VXLAN_LINK)) {
 		fprintf(stderr, "vxlan: 'group' requires 'dev' to be specified\n");
 		return -1;
 	}
 
-	if (!dst_port_set && gpe) {
+	if (!VXLAN_ATTRSET(attrs, IFLA_VXLAN_PORT) &&
+	    VXLAN_ATTRSET(attrs, IFLA_VXLAN_GPE)) {
 		dstport = 4790;
-	} else if (!dst_port_set) {
+	} else if (!VXLAN_ATTRSET(attrs, IFLA_VXLAN_PORT) && !set_op) {
 		fprintf(stderr, "vxlan: destination port not specified\n"
 			"Will use Linux kernel default (non-standard value)\n");
 		fprintf(stderr,
@@ -286,53 +372,20 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 		addattr_l(n, 1024, IFLA_VXLAN_GROUP, &gaddr, 4);
 	else if (daddr)
 		addattr_l(n, 1024, IFLA_VXLAN_GROUP, &daddr, 4);
-	if (!IN6_IS_ADDR_UNSPECIFIED(&gaddr6))
+	else if (!IN6_IS_ADDR_UNSPECIFIED(&gaddr6))
 		addattr_l(n, 1024, IFLA_VXLAN_GROUP6, &gaddr6, sizeof(struct in6_addr));
 	else if (!IN6_IS_ADDR_UNSPECIFIED(&daddr6))
 		addattr_l(n, 1024, IFLA_VXLAN_GROUP6, &daddr6, sizeof(struct in6_addr));
+	else if (preferred_family == AF_INET)
+		addattr_l(n, 1024, IFLA_VXLAN_GROUP, &daddr, 4);
+	else if (preferred_family == AF_INET6)
+		addattr_l(n, 1024, IFLA_VXLAN_GROUP6, &daddr6, sizeof(struct in6_addr));
 
-	if (saddr)
-		addattr_l(n, 1024, IFLA_VXLAN_LOCAL, &saddr, 4);
-	else if (!IN6_IS_ADDR_UNSPECIFIED(&saddr6))
-		addattr_l(n, 1024, IFLA_VXLAN_LOCAL6, &saddr6, sizeof(struct in6_addr));
+	if (!set_op || VXLAN_ATTRSET(attrs, IFLA_VXLAN_LEARNING))
+		addattr8(n, 1024, IFLA_VXLAN_LEARNING, learning);
 
-	if (link)
-		addattr32(n, 1024, IFLA_VXLAN_LINK, link);
-	addattr32(n, 1024, IFLA_VXLAN_LABEL, label);
-	addattr8(n, 1024, IFLA_VXLAN_TTL, ttl);
-	addattr8(n, 1024, IFLA_VXLAN_TOS, tos);
-	addattr8(n, 1024, IFLA_VXLAN_LEARNING, learning);
-	addattr8(n, 1024, IFLA_VXLAN_PROXY, proxy);
-	addattr8(n, 1024, IFLA_VXLAN_RSC, rsc);
-	addattr8(n, 1024, IFLA_VXLAN_L2MISS, l2miss);
-	addattr8(n, 1024, IFLA_VXLAN_L3MISS, l3miss);
-	addattr8(n, 1024, IFLA_VXLAN_REMCSUM_TX, remcsumtx);
-	addattr8(n, 1024, IFLA_VXLAN_REMCSUM_RX, remcsumrx);
-	addattr8(n, 1024, IFLA_VXLAN_COLLECT_METADATA, metadata);
-
-	if (udpcsum_set)
-		addattr8(n, 1024, IFLA_VXLAN_UDP_CSUM, udpcsum);
-	if (udp6zerocsumtx_set)
-		addattr8(n, 1024, IFLA_VXLAN_UDP_ZERO_CSUM6_TX, udp6zerocsumtx);
-	if (udp6zerocsumrx_set)
-		addattr8(n, 1024, IFLA_VXLAN_UDP_ZERO_CSUM6_RX, udp6zerocsumrx);
-	if (noage)
-		addattr32(n, 1024, IFLA_VXLAN_AGEING, 0);
-	else if (age)
-		addattr32(n, 1024, IFLA_VXLAN_AGEING, age);
-	if (maxaddr)
-		addattr32(n, 1024, IFLA_VXLAN_LIMIT, maxaddr);
-	if (range.low || range.high)
-		addattr_l(n, 1024, IFLA_VXLAN_PORT_RANGE,
-			  &range, sizeof(range));
 	if (dstport)
 		addattr16(n, 1024, IFLA_VXLAN_PORT, htons(dstport));
-
-	if (gbp)
-		addattr_l(n, 1024, IFLA_VXLAN_GBP, NULL, 0);
-	if (gpe)
-		addattr_l(n, 1024, IFLA_VXLAN_GPE, NULL, 0);
-
 
 	return 0;
 }
@@ -353,18 +406,22 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		return;
 
 	vni = rta_getattr_u32(tb[IFLA_VXLAN_ID]);
-	fprintf(f, "id %u ", vni);
+	print_uint(PRINT_ANY, "id", "id %u ", vni);
 
 	if (tb[IFLA_VXLAN_GROUP]) {
 		__be32 addr = rta_getattr_u32(tb[IFLA_VXLAN_GROUP]);
 
 		if (addr) {
 			if (IN_MULTICAST(ntohl(addr)))
-				fprintf(f, "group %s ",
-					format_host(AF_INET, 4, &addr));
+				print_string(PRINT_ANY,
+					     "group",
+					     "group %s ",
+					     format_host(AF_INET, 4, &addr));
 			else
-				fprintf(f, "remote %s ",
-					format_host(AF_INET, 4, &addr));
+				print_string(PRINT_ANY,
+					     "remote",
+					     "remote %s ",
+					     format_host(AF_INET, 4, &addr));
 		}
 	} else if (tb[IFLA_VXLAN_GROUP6]) {
 		struct in6_addr addr;
@@ -372,11 +429,19 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		memcpy(&addr, RTA_DATA(tb[IFLA_VXLAN_GROUP6]), sizeof(struct in6_addr));
 		if (!IN6_IS_ADDR_UNSPECIFIED(&addr)) {
 			if (IN6_IS_ADDR_MULTICAST(&addr))
-				fprintf(f, "group %s ",
-					format_host(AF_INET6, sizeof(struct in6_addr), &addr));
+				print_string(PRINT_ANY,
+					     "group6",
+					     "group %s ",
+					     format_host(AF_INET6,
+							 sizeof(struct in6_addr),
+							 &addr));
 			else
-				fprintf(f, "remote %s ",
-					format_host(AF_INET6, sizeof(struct in6_addr), &addr));
+				print_string(PRINT_ANY,
+					     "remote6",
+					     "remote %s ",
+					     format_host(AF_INET6,
+							 sizeof(struct in6_addr),
+							 &addr));
 		}
 	}
 
@@ -384,15 +449,21 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		__be32 addr = rta_getattr_u32(tb[IFLA_VXLAN_LOCAL]);
 
 		if (addr)
-			fprintf(f, "local %s ",
-				format_host(AF_INET, 4, &addr));
+			print_string(PRINT_ANY,
+				     "local",
+				     "local %s ",
+				     format_host(AF_INET, 4, &addr));
 	} else if (tb[IFLA_VXLAN_LOCAL6]) {
 		struct in6_addr addr;
 
 		memcpy(&addr, RTA_DATA(tb[IFLA_VXLAN_LOCAL6]), sizeof(struct in6_addr));
 		if (!IN6_IS_ADDR_UNSPECIFIED(&addr))
-			fprintf(f, "local %s ",
-				format_host(AF_INET6, sizeof(struct in6_addr), &addr));
+			print_string(PRINT_ANY,
+				     "local6",
+				     "local %s ",
+				     format_host(AF_INET6,
+						 sizeof(struct in6_addr),
+						 &addr));
 	}
 
 	if (tb[IFLA_VXLAN_LINK] &&
@@ -400,110 +471,155 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		const char *n = if_indextoname(link, s2);
 
 		if (n)
-			fprintf(f, "dev %s ", n);
+			print_string(PRINT_ANY, "link", "dev %s ", n);
 		else
-			fprintf(f, "dev %u ", link);
+			print_uint(PRINT_ANY, "link_index", "dev %u ", link);
 	}
 
 	if (tb[IFLA_VXLAN_PORT_RANGE]) {
 		const struct ifla_vxlan_port_range *r
 			= RTA_DATA(tb[IFLA_VXLAN_PORT_RANGE]);
-		fprintf(f, "srcport %u %u ", ntohs(r->low), ntohs(r->high));
+		if (is_json_context()) {
+			open_json_object("port_range");
+			print_uint(PRINT_JSON, "low", NULL, ntohs(r->low));
+			print_uint(PRINT_JSON, "high", NULL, ntohs(r->high));
+			close_json_object();
+		} else {
+			fprintf(f, "srcport %u %u ",
+				ntohs(r->low), ntohs(r->high));
+		}
 	}
 
 	if (tb[IFLA_VXLAN_PORT])
-		fprintf(f, "dstport %u ",
-			ntohs(rta_getattr_u16(tb[IFLA_VXLAN_PORT])));
+		print_uint(PRINT_ANY,
+			   "port",
+			   "dstport %u ",
+			   rta_getattr_be16(tb[IFLA_VXLAN_PORT]));
 
-	if (tb[IFLA_VXLAN_LEARNING] &&
-	    !rta_getattr_u8(tb[IFLA_VXLAN_LEARNING]))
-		fputs("nolearning ", f);
+	if (tb[IFLA_VXLAN_LEARNING]) {
+		__u8 learning = rta_getattr_u8(tb[IFLA_VXLAN_LEARNING]);
+
+		print_bool(PRINT_JSON, "learning", NULL, learning);
+		if (!learning)
+			print_bool(PRINT_FP, NULL, "nolearning ", true);
+	}
 
 	if (tb[IFLA_VXLAN_PROXY] && rta_getattr_u8(tb[IFLA_VXLAN_PROXY]))
-		fputs("proxy ", f);
+		print_bool(PRINT_ANY, "proxy", "proxy ", true);
 
 	if (tb[IFLA_VXLAN_RSC] && rta_getattr_u8(tb[IFLA_VXLAN_RSC]))
-		fputs("rsc ", f);
+		print_bool(PRINT_ANY, "rsc", "rsc ", true);
 
 	if (tb[IFLA_VXLAN_L2MISS] && rta_getattr_u8(tb[IFLA_VXLAN_L2MISS]))
-		fputs("l2miss ", f);
+		print_bool(PRINT_ANY, "l2miss", "l2miss ", true);
 
 	if (tb[IFLA_VXLAN_L3MISS] && rta_getattr_u8(tb[IFLA_VXLAN_L3MISS]))
-		fputs("l3miss ", f);
+		print_bool(PRINT_ANY, "l3miss", "l3miss ", true);
 
 	if (tb[IFLA_VXLAN_TOS] &&
 	    (tos = rta_getattr_u8(tb[IFLA_VXLAN_TOS]))) {
-		if (tos == 1)
-			fprintf(f, "tos inherit ");
-		else
-			fprintf(f, "tos %#x ", tos);
+		if (is_json_context()) {
+			print_0xhex(PRINT_JSON, "tos", "%#x", tos);
+		} else {
+			if (tos == 1)
+				fprintf(f, "tos %s ", "inherit");
+			else
+				fprintf(f, "tos %#x ", tos);
+		}
 	}
 
 	if (tb[IFLA_VXLAN_TTL]) {
 		__u8 ttl = rta_getattr_u8(tb[IFLA_VXLAN_TTL]);
 
 		if (ttl)
-			fprintf(f, "ttl %d ", ttl);
+			print_int(PRINT_ANY, "ttl", "ttl %d ", ttl);
+		else
+			print_int(PRINT_JSON, "ttl", NULL, ttl);
 	}
 
 	if (tb[IFLA_VXLAN_LABEL]) {
 		__u32 label = rta_getattr_u32(tb[IFLA_VXLAN_LABEL]);
 
 		if (label)
-			fprintf(f, "flowlabel %#x ", ntohl(label));
+			print_0xhex(PRINT_ANY,
+				    "label",
+				    "flowlabel %#x ",
+				    ntohl(label));
 	}
 
 	if (tb[IFLA_VXLAN_AGEING]) {
 		__u32 age = rta_getattr_u32(tb[IFLA_VXLAN_AGEING]);
 
 		if (age == 0)
-			fprintf(f, "ageing none ");
+			print_uint(PRINT_ANY, "ageing", "ageing none ", 0);
 		else
-			fprintf(f, "ageing %u ", age);
+			print_uint(PRINT_ANY, "ageing", "ageing %u ", age);
 	}
 
 	if (tb[IFLA_VXLAN_LIMIT] &&
 	    ((maxaddr = rta_getattr_u32(tb[IFLA_VXLAN_LIMIT])) != 0))
-		    fprintf(f, "maxaddr %u ", maxaddr);
+		print_uint(PRINT_ANY, "limit", "maxaddr %u ", maxaddr);
 
 	if (tb[IFLA_VXLAN_UDP_CSUM]) {
-		if (!rta_getattr_u8(tb[IFLA_VXLAN_UDP_CSUM]))
-			fputs("no", f);
-		fputs("udpcsum ", f);
+		__u8 udp_csum = rta_getattr_u8(tb[IFLA_VXLAN_UDP_CSUM]);
+
+		if (is_json_context()) {
+			print_bool(PRINT_ANY, "udp_csum", NULL, udp_csum);
+		} else {
+			if (!udp_csum)
+				fputs("no", f);
+			fputs("udpcsum ", f);
+		}
 	}
 
 	if (tb[IFLA_VXLAN_UDP_ZERO_CSUM6_TX]) {
-		if (!rta_getattr_u8(tb[IFLA_VXLAN_UDP_ZERO_CSUM6_TX]))
-			fputs("no", f);
-		fputs("udp6zerocsumtx ", f);
+		__u8 csum6 = rta_getattr_u8(tb[IFLA_VXLAN_UDP_ZERO_CSUM6_TX]);
+
+		if (is_json_context()) {
+			print_bool(PRINT_ANY,
+				   "udp_zero_csum6_tx", NULL, csum6);
+		} else {
+			if (!csum6)
+				fputs("no", f);
+			fputs("udp6zerocsumtx ", f);
+		}
 	}
 
 	if (tb[IFLA_VXLAN_UDP_ZERO_CSUM6_RX]) {
-		if (!rta_getattr_u8(tb[IFLA_VXLAN_UDP_ZERO_CSUM6_RX]))
-			fputs("no", f);
-		fputs("udp6zerocsumrx ", f);
+		__u8 csum6 = rta_getattr_u8(tb[IFLA_VXLAN_UDP_ZERO_CSUM6_RX]);
+
+		if (is_json_context()) {
+			print_bool(PRINT_ANY,
+				   "udp_zero_csum6_rx",
+				   NULL,
+				   csum6);
+		} else {
+			if (!csum6)
+				fputs("no", f);
+			fputs("udp6zerocsumrx ", f);
+		}
 	}
 
 	if (tb[IFLA_VXLAN_REMCSUM_TX] &&
 	    rta_getattr_u8(tb[IFLA_VXLAN_REMCSUM_TX]))
-		fputs("remcsumtx ", f);
+		print_bool(PRINT_ANY, "remcsum_tx", "remcsumtx ", true);
 
 	if (tb[IFLA_VXLAN_REMCSUM_RX] &&
 	    rta_getattr_u8(tb[IFLA_VXLAN_REMCSUM_RX]))
-		fputs("remcsumrx ", f);
+		print_bool(PRINT_ANY, "remcsum_rx", "remcsumrx ", true);
 
 	if (tb[IFLA_VXLAN_COLLECT_METADATA] &&
 	    rta_getattr_u8(tb[IFLA_VXLAN_COLLECT_METADATA]))
-		fputs("external ", f);
+		print_bool(PRINT_ANY, "collect_metadata", "external ", true);
 
 	if (tb[IFLA_VXLAN_GBP])
-		fputs("gbp ", f);
+		print_bool(PRINT_ANY, "gbp", "gbp ", true);
 	if (tb[IFLA_VXLAN_GPE])
-		fputs("gpe ", f);
+		print_bool(PRINT_ANY, "gpe", "gpe ", true);
 }
 
 static void vxlan_print_help(struct link_util *lu, int argc, char **argv,
-	FILE *f)
+			     FILE *f)
 {
 	print_explain(f);
 }

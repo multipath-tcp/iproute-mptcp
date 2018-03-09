@@ -24,8 +24,8 @@ readdoubles(FILE *fp, int *number)
 	int limit;
 	int n=0, i;
 
-	fstat(fileno(fp), &info);
-	if (info.st_size > 0) {
+	if (!fstat(fileno(fp), &info) &&
+	    info.st_size > 0) {
 		limit = 2*info.st_size/sizeof(double);	/* @@ approximate */
 	} else {
 		limit = 10000;
@@ -38,8 +38,8 @@ readdoubles(FILE *fp, int *number)
 	}
 
 	for (i=0; i<limit; ++i){
-		fscanf(fp, "%lf", &x[i]);
-		if (feof(fp))
+		if (fscanf(fp, "%lf", &x[i]) != 1 ||
+		    feof(fp))
 			break;
 		++n;
 	}
@@ -149,6 +149,8 @@ inverttable(int *table, int inversesize, int tablesize, int cumulative)
 		inversevalue = (int)rint(findex*TABLEFACTOR);
 		if (inversevalue <= MINSHORT) inversevalue = MINSHORT+1;
 		if (inversevalue > MAXSHORT) inversevalue = MAXSHORT;
+		if (inverseindex >= inversesize) inverseindex = inversesize- 1;
+
 		inverse[inverseindex] = inversevalue;
 	}
 	return inverse;

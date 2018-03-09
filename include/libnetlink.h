@@ -10,6 +10,7 @@
 #include <linux/if_addr.h>
 #include <linux/neighbour.h>
 #include <linux/netconf.h>
+#include <arpa/inet.h>
 
 struct rtnl_handle {
 	int			fd;
@@ -20,7 +21,18 @@ struct rtnl_handle {
 	int			proto;
 	FILE		       *dump_fp;
 #define RTNL_HANDLE_F_LISTEN_ALL_NSID		0x01
+#define RTNL_HANDLE_F_SUPPRESS_NLERR		0x02
 	int			flags;
+};
+
+struct nlmsg_list {
+	struct nlmsg_list *next;
+	struct nlmsghdr   h;
+};
+
+struct nlmsg_chain {
+	struct nlmsg_list *head;
+	struct nlmsg_list *tail;
 };
 
 extern int rcvbuf;
@@ -64,6 +76,9 @@ typedef int (*rtnl_listen_filter_t)(const struct sockaddr_nl *,
 				    struct rtnl_ctrl_data *,
 				    struct nlmsghdr *n, void *);
 
+typedef int (*nl_ext_ack_fn_t)(const char *errmsg, uint32_t off,
+			       const struct nlmsghdr *inner_nlh);
+
 struct rtnl_dump_filter_arg {
 	rtnl_filter_t filter;
 	void *arg1;
@@ -79,6 +94,12 @@ int rtnl_dump_filter_nc(struct rtnl_handle *rth,
 	rtnl_dump_filter_nc(rth, filter, arg, 0)
 int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 	      struct nlmsghdr *answer, size_t len)
+	__attribute__((warn_unused_result));
+int rtnl_talk_extack(struct rtnl_handle *rtnl, struct nlmsghdr *n,
+	      struct nlmsghdr *answer, size_t len, nl_ext_ack_fn_t errfn)
+	__attribute__((warn_unused_result));
+int rtnl_talk_suppress_rtnl_errmsg(struct rtnl_handle *rtnl, struct nlmsghdr *n,
+				   struct nlmsghdr *answer, size_t len)
 	__attribute__((warn_unused_result));
 int rtnl_send(struct rtnl_handle *rth, const void *buf, int)
 	__attribute__((warn_unused_result));
@@ -140,9 +161,17 @@ static inline __u16 rta_getattr_u16(const struct rtattr *rta)
 {
 	return *(__u16 *)RTA_DATA(rta);
 }
+static inline __be16 rta_getattr_be16(const struct rtattr *rta)
+{
+	return ntohs(rta_getattr_u16(rta));
+}
 static inline __u32 rta_getattr_u32(const struct rtattr *rta)
 {
 	return *(__u32 *)RTA_DATA(rta);
+}
+static inline __be32 rta_getattr_be32(const struct rtattr *rta)
+{
+	return ntohl(rta_getattr_u32(rta));
 }
 static inline __u64 rta_getattr_u64(const struct rtattr *rta)
 {

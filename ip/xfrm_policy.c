@@ -58,7 +58,7 @@ static void usage(void)
 	fprintf(stderr, "        [ LIMIT-LIST ] [ TMPL-LIST ]\n");
 	fprintf(stderr, "Usage: ip xfrm policy { delete | get } { SELECTOR | index INDEX } dir DIR\n");
 	fprintf(stderr, "        [ ctx CTX ] [ mark MARK [ mask MASK ] ] [ ptype PTYPE ]\n");
-	fprintf(stderr, "Usage: ip xfrm policy { deleteall | list } [ SELECTOR ] [ dir DIR ]\n");
+	fprintf(stderr, "Usage: ip xfrm policy { deleteall | list } [ nosock ] [ SELECTOR ] [ dir DIR ]\n");
 	fprintf(stderr, "        [ index INDEX ] [ ptype PTYPE ] [ action ACTION ] [ priority PRIORITY ]\n");
 	fprintf(stderr, "        [ flag FLAG-LIST ]\n");
 	fprintf(stderr, "Usage: ip xfrm policy flush [ ptype PTYPE ]\n");
@@ -403,6 +403,9 @@ static int xfrm_policy_filter_match(struct xfrm_userpolicy_info *xpinfo,
 	if ((xpinfo->dir^filter.xpinfo.dir)&filter.dir_mask)
 		return 0;
 
+	if (filter.filter_socket && (xpinfo->dir >= XFRM_POLICY_MAX))
+		return 0;
+
 	if ((ptype^filter.ptype)&filter.ptype_mask)
 		return 0;
 
@@ -505,7 +508,7 @@ int xfrm_policy_print(const struct sockaddr_nl *who, struct nlmsghdr *n,
 			fprintf(stderr, "too short XFRMA_POLICY_TYPE len\n");
 			return -1;
 		}
-		upt = (struct xfrm_userpolicy_type *)RTA_DATA(tb[XFRMA_POLICY_TYPE]);
+		upt = RTA_DATA(tb[XFRMA_POLICY_TYPE]);
 		ptype = upt->type;
 	}
 
@@ -529,7 +532,7 @@ int xfrm_policy_print(const struct sockaddr_nl *who, struct nlmsghdr *n,
 			fprintf(stderr, "Buggy XFRM_MSG_DELPOLICY: too short XFRMA_POLICY len\n");
 			return -1;
 		}
-		xpinfo = (struct xfrm_userpolicy_info *)RTA_DATA(tb[XFRMA_POLICY]);
+		xpinfo = RTA_DATA(tb[XFRMA_POLICY]);
 	}
 
 	xfrm_policy_info_print(xpinfo, tb, fp, NULL, NULL);
@@ -725,17 +728,19 @@ static int xfrm_policy_keep(const struct sockaddr_nl *who,
 			fprintf(stderr, "too short XFRMA_POLICY_TYPE len\n");
 			return -1;
 		}
-		upt = (struct xfrm_userpolicy_type *)RTA_DATA(tb[XFRMA_POLICY_TYPE]);
+		upt = RTA_DATA(tb[XFRMA_POLICY_TYPE]);
 		ptype = upt->type;
 	}
 
 	if (!xfrm_policy_filter_match(xpinfo, ptype))
 		return 0;
 
-	if (xb->offset > xb->size) {
-		fprintf(stderr, "Policy buffer overflow\n");
-		return -1;
-	}
+	/* can't delete socket policies */
+	if (xpinfo->dir >= XFRM_POLICY_MAX)
+		return 0;
+
+	if (xb->offset + NLMSG_LENGTH(sizeof(*xpid)) > xb->size)
+		return 0;
 
 	new_n = (struct nlmsghdr *)(xb->buf + xb->offset);
 	new_n->nlmsg_len = NLMSG_LENGTH(sizeof(*xpid));
@@ -747,6 +752,15 @@ static int xfrm_policy_keep(const struct sockaddr_nl *who,
 	memcpy(&xpid->sel, &xpinfo->sel, sizeof(xpid->sel));
 	xpid->dir = xpinfo->dir;
 	xpid->index = xpinfo->index;
+
+	if (tb[XFRMA_MARK]) {
+		int r = addattr_l(new_n, xb->size, XFRMA_MARK,
+				(void *)RTA_DATA(tb[XFRMA_MARK]), tb[XFRMA_MARK]->rta_len);
+		if (r < 0) {
+			fprintf(stderr, "%s: XFRMA_MARK failed\n", __func__);
+			exit(1);
+		}
+	}
 
 	xb->offset += new_n->nlmsg_len;
 	xb->nlmsg_count++;
@@ -808,6 +822,9 @@ static int xfrm_policy_list_or_deleteall(int argc, char **argv, int deleteall)
 
 			filter.policy_flags_mask = XFRM_FILTER_MASK_FULL;
 
+		} else if (strcmp(*argv, "nosock") == 0) {
+			/* filter all socket-based policies */
+			filter.filter_socket = 1;
 		} else {
 			if (selp)
 				invarg("unknown", *argv);

@@ -77,6 +77,9 @@ static struct xtables_globals tcipt_globals = {
 	.orig_opts = original_opts,
 	.opts = original_opts,
 	.exit_err = NULL,
+#if XTABLES_VERSION_CODE >= 11
+	.compat_rev = xtables_compatible_revision,
+#endif
 };
 
 /*
@@ -92,7 +95,8 @@ build_st(struct xtables_target *target, struct xt_entry_target *t)
 	if (t == NULL) {
 		target->t = xtables_calloc(1, size);
 		target->t->u.target_size = size;
-		strcpy(target->t->u.user.name, target->name);
+		strncpy(target->t->u.user.name, target->name,
+			sizeof(target->t->u.user.name) - 1);
 		target->t->u.user.revision = target->revision;
 
 		if (target->init != NULL)
@@ -123,7 +127,7 @@ static int get_xtables_target_opts(struct xtables_globals *globals,
 {
 	struct option *opts;
 
-#if (XTABLES_VERSION_CODE >= 6)
+#if XTABLES_VERSION_CODE >= 6
 	opts = xtables_options_xfrm(globals->orig_opts,
 				    globals->opts,
 				    m->x6_options,
@@ -143,6 +147,9 @@ static int parse_ipt(struct action_util *a, int *argc_p,
 		     char ***argv_p, int tca_id, struct nlmsghdr *n)
 {
 	struct xtables_target *m = NULL;
+#if XTABLES_VERSION_CODE >= 6
+	struct ipt_entry fw = {};
+#endif
 	struct rtattr *tail;
 
 	int c;
@@ -201,9 +208,9 @@ static int parse_ipt(struct action_util *a, int *argc_p,
 			break;
 
 		default:
-#if (XTABLES_VERSION_CODE >= 6)
+#if XTABLES_VERSION_CODE >= 6
 			if (m != NULL && m->x6_parse != NULL) {
-				xtables_option_tpcall(c, argv, 0, m, NULL);
+				xtables_option_tpcall(c, argv, 0, m, &fw);
 #else
 			if (m != NULL && m->parse != NULL) {
 				m->parse(c - m->option_offset, argv, 0,
@@ -239,7 +246,7 @@ static int parse_ipt(struct action_util *a, int *argc_p,
 	}
 
 	/* check that we passed the correct parameters to the target */
-#if (XTABLES_VERSION_CODE >= 6)
+#if XTABLES_VERSION_CODE >= 6
 	if (m)
 		xtables_option_tfcall(m);
 #else
@@ -271,8 +278,8 @@ static int parse_ipt(struct action_util *a, int *argc_p,
 	}
 	fprintf(stdout, " index %d\n", index);
 
-	if (strlen(tname) > 16) {
-		size = 16;
+	if (strlen(tname) >= 16) {
+		size = 15;
 		k[15] = 0;
 	} else {
 		size = 1 + strlen(tname);
@@ -372,7 +379,7 @@ print_ipt(struct action_util *au, FILE *f, struct rtattr *arg)
 		__u32 index;
 
 		index = rta_getattr_u32(tb[TCA_IPT_INDEX]);
-		fprintf(f, "\n\tindex %d", index);
+		fprintf(f, "\n\tindex %u", index);
 	}
 
 	if (tb[TCA_IPT_CNT]) {

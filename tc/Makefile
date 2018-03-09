@@ -1,12 +1,8 @@
 TCOBJ= tc.o tc_qdisc.o tc_class.o tc_filter.o tc_util.o tc_monitor.o \
-       tc_exec.o tc_bpf.o m_police.o m_estimator.o m_action.o m_ematch.o \
+       tc_exec.o m_police.o m_estimator.o m_action.o m_ematch.o \
        emp_ematch.yacc.o emp_ematch.lex.o
 
-include ../Config
-
-ifeq ($(IP_CONFIG_SETNS),y)
-	CFLAGS += -DHAVE_SETNS
-endif
+include ../config.mk
 
 SHARED_LIBS ?= y
 
@@ -45,13 +41,18 @@ TCMODULES += m_nat.o
 TCMODULES += m_pedit.o
 TCMODULES += m_ife.o
 TCMODULES += m_skbedit.o
+TCMODULES += m_skbmod.o
 TCMODULES += m_csum.o
 TCMODULES += m_simple.o
 TCMODULES += m_vlan.o
 TCMODULES += m_connmark.o
 TCMODULES += m_bpf.o
+TCMODULES += m_tunnel_key.o
+TCMODULES += m_sample.o
 TCMODULES += p_ip.o
+TCMODULES += p_ip6.o
 TCMODULES += p_icmp.o
+TCMODULES += p_eth.o
 TCMODULES += p_tcp.o
 TCMODULES += p_udp.o
 TCMODULES += em_nbyte.o
@@ -94,13 +95,8 @@ ifneq ($(TC_CONFIG_NO_XT),y)
   endif
 endif
 
-ifeq ($(TC_CONFIG_ELF),y)
-  CFLAGS += -DHAVE_ELF
-  LDLIBS += -lelf
-endif
-
 TCOBJ += $(TCMODULES)
-LDLIBS += -L. -ltc -lm
+LDLIBS += -L. -lm
 
 ifeq ($(SHARED_LIBS),y)
 LDLIBS += -ldl
@@ -128,13 +124,13 @@ MODDESTDIR := $(DESTDIR)$(LIBDIR)/tc
 	$(QUIET_CC)$(CC) $(CFLAGS) $(LDFLAGS) -shared -fpic $< -o $@
 
 
-all: libtc.a tc $(TCSO)
+all: tc $(TCSO)
 
-tc: $(TCOBJ) $(TCLIB)
+tc: $(TCOBJ) $(LIBNETLINK) libtc.a
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
 libtc.a: $(TCLIB)
-	$(QUIET_AR)$(AR) rcs $@ $(TCLIB)
+	$(QUIET_AR)$(AR) rcs $@ $^
 
 install: all
 	mkdir -p $(MODDESTDIR)

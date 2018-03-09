@@ -1,4 +1,5 @@
-include ../Config
+include ../config.mk
+
 ifeq ($(HAVE_MNL),y)
 
 TIPCOBJ=bearer.o \
@@ -8,11 +9,7 @@ TIPCOBJ=bearer.o \
     node.o socket.o \
     peer.o tipc.o
 
-include ../Config
-
 TARGETS=tipc
-CFLAGS += $(shell $(PKG_CONFIG) libmnl --cflags)
-LDLIBS += $(shell $(PKG_CONFIG) libmnl --libs)
 
 endif
 

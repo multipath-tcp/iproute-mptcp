@@ -89,7 +89,7 @@ int print_mroute(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		return 0;
 
 	if (tb[RTA_IIF])
-		iif = *(int *)RTA_DATA(tb[RTA_IIF]);
+		iif = rta_getattr_u32(tb[RTA_IIF]);
 	if (filter.iif && filter.iif != iif)
 		return 0;
 
@@ -159,6 +159,8 @@ int print_mroute(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			nh = RTNH_NEXT(nh);
 		}
 	}
+	fprintf(fp, " State: %s",
+		r->rtm_flags & RTNH_F_UNRESOLVED ? "unresolved" : "resolved");
 	if (show_stats && tb[RTA_MFC_STATS]) {
 		struct rta_mfc_stats *mfcs = RTA_DATA(tb[RTA_MFC_STATS]);
 
@@ -176,6 +178,11 @@ int print_mroute(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		fprintf(fp, ", Age %4i.%.2i", (int)tv.tv_sec,
 			(int)tv.tv_usec/10000);
 	}
+
+	if (table && (table != RT_TABLE_MAIN || show_details > 0) && !filter.tb)
+		fprintf(fp, " Table: %s",
+			rtnl_rttable_n2a(table, b1, sizeof(b1)));
+
 	fprintf(fp, "\n");
 	fflush(fp);
 	return 0;

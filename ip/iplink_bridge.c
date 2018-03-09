@@ -12,17 +12,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <linux/if_link.h>
+#include <netinet/in.h>
 #include <netinet/ether.h>
+#include <linux/if_link.h>
+#include <linux/if_bridge.h>
+#include <net/if.h>
 
 #include "rt_names.h"
 #include "utils.h"
 #include "ip_common.h"
 
+static unsigned int xstats_print_attr;
+static int filter_index;
+
 static void print_explain(FILE *f)
 {
 	fprintf(f,
-		"Usage: ... bridge [ forward_delay FORWARD_DELAY ]\n"
+		"Usage: ... bridge [ fdb_flush ]\n"
+		"                  [ forward_delay FORWARD_DELAY ]\n"
 		"                  [ hello_time HELLO_TIME ]\n"
 		"                  [ max_age MAX_AGE ]\n"
 		"                  [ ageing_time AGEING_TIME ]\n"
@@ -33,6 +40,7 @@ static void print_explain(FILE *f)
 		"                  [ vlan_filtering VLAN_FILTERING ]\n"
 		"                  [ vlan_protocol VLAN_PROTOCOL ]\n"
 		"                  [ vlan_default_pvid VLAN_DEFAULT_PVID ]\n"
+		"                  [ vlan_stats_enabled VLAN_STATS_ENABLED ]\n"
 		"                  [ mcast_snooping MULTICAST_SNOOPING ]\n"
 		"                  [ mcast_router MULTICAST_ROUTER ]\n"
 		"                  [ mcast_query_use_ifaddr MCAST_QUERY_USE_IFADDR ]\n"
@@ -47,6 +55,9 @@ static void print_explain(FILE *f)
 		"                  [ mcast_query_interval QUERY_INTERVAL ]\n"
 		"                  [ mcast_query_response_interval QUERY_RESPONSE_INTERVAL ]\n"
 		"                  [ mcast_startup_query_interval STARTUP_QUERY_INTERVAL ]\n"
+		"                  [ mcast_stats_enabled MCAST_STATS_ENABLED ]\n"
+		"                  [ mcast_igmp_version IGMP_VERSION ]\n"
+		"                  [ mcast_mld_version MLD_VERSION ]\n"
 		"                  [ nf_call_iptables NF_CALL_IPTABLES ]\n"
 		"                  [ nf_call_ip6tables NF_CALL_IP6TABLES ]\n"
 		"                  [ nf_call_arptables NF_CALL_ARPTABLES ]\n"
@@ -145,6 +156,8 @@ static int bridge_parse_opt(struct link_util *lu, int argc, char **argv,
 			if (len < 0)
 				return -1;
 			addattr_l(n, 1024, IFLA_BR_GROUP_ADDR, llabuf, len);
+		} else if (matches(*argv, "fdb_flush") == 0) {
+			addattr(n, 1024, IFLA_BR_FDB_FLUSH);
 		} else if (matches(*argv, "vlan_default_pvid") == 0) {
 			__u16 default_pvid;
 
@@ -154,6 +167,14 @@ static int bridge_parse_opt(struct link_util *lu, int argc, char **argv,
 
 			addattr16(n, 1024, IFLA_BR_VLAN_DEFAULT_PVID,
 				  default_pvid);
+		} else if (matches(*argv, "vlan_stats_enabled") == 0) {
+			__u8 vlan_stats_enabled;
+
+			NEXT_ARG();
+			if (get_u8(&vlan_stats_enabled, *argv, 0))
+				invarg("invalid vlan_stats_enabled", *argv);
+			addattr8(n, 1024, IFLA_BR_VLAN_STATS_ENABLED,
+				  vlan_stats_enabled);
 		} else if (matches(*argv, "mcast_router") == 0) {
 			__u8 mcast_router;
 
@@ -287,6 +308,30 @@ static int bridge_parse_opt(struct link_util *lu, int argc, char **argv,
 
 			addattr64(n, 1024, IFLA_BR_MCAST_STARTUP_QUERY_INTVL,
 				  mcast_startup_query_intvl);
+		} else if (matches(*argv, "mcast_stats_enabled") == 0) {
+			__u8 mcast_stats_enabled;
+
+			NEXT_ARG();
+			if (get_u8(&mcast_stats_enabled, *argv, 0))
+				invarg("invalid mcast_stats_enabled", *argv);
+			addattr8(n, 1024, IFLA_BR_MCAST_STATS_ENABLED,
+				  mcast_stats_enabled);
+		} else if (matches(*argv, "mcast_igmp_version") == 0) {
+			__u8 igmp_version;
+
+			NEXT_ARG();
+			if (get_u8(&igmp_version, *argv, 0))
+				invarg("invalid mcast_igmp_version", *argv);
+			addattr8(n, 1024, IFLA_BR_MCAST_IGMP_VERSION,
+				  igmp_version);
+		} else if (matches(*argv, "mcast_mld_version") == 0) {
+			__u8 mld_version;
+
+			NEXT_ARG();
+			if (get_u8(&mld_version, *argv, 0))
+				invarg("invalid mcast_mld_version", *argv);
+			addattr8(n, 1024, IFLA_BR_MCAST_MLD_VERSION,
+				  mld_version);
 		} else if (matches(*argv, "nf_call_iptables") == 0) {
 			__u8 nf_call_ipt;
 
@@ -328,45 +373,81 @@ static int bridge_parse_opt(struct link_util *lu, int argc, char **argv,
 	return 0;
 }
 
+static void _bridge_print_timer(FILE *f,
+				const char *attr,
+				struct rtattr *timer)
+{
+	struct timeval tv;
+
+	__jiffies_to_tv(&tv, rta_getattr_u64(timer));
+	if (is_json_context()) {
+		json_writer_t *jw = get_json_writer();
+
+		jsonw_name(jw, attr);
+		jsonw_printf(jw, "%i.%.2i",
+			     (int)tv.tv_sec,
+			     (int)tv.tv_usec / 10000);
+	} else {
+		fprintf(f, "%s %4i.%.2i ", attr, (int)tv.tv_sec,
+			(int)tv.tv_usec / 10000);
+	}
+}
+
 static void bridge_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 {
 	if (!tb)
 		return;
 
 	if (tb[IFLA_BR_FORWARD_DELAY])
-		fprintf(f, "forward_delay %u ",
-			rta_getattr_u32(tb[IFLA_BR_FORWARD_DELAY]));
+		print_uint(PRINT_ANY,
+			   "forward_delay",
+			   "forward_delay %u ",
+			   rta_getattr_u32(tb[IFLA_BR_FORWARD_DELAY]));
 
 	if (tb[IFLA_BR_HELLO_TIME])
-		fprintf(f, "hello_time %u ",
-			rta_getattr_u32(tb[IFLA_BR_HELLO_TIME]));
+		print_uint(PRINT_ANY,
+			   "hello_time",
+			   "hello_time %u ",
+			   rta_getattr_u32(tb[IFLA_BR_HELLO_TIME]));
 
 	if (tb[IFLA_BR_MAX_AGE])
-		fprintf(f, "max_age %u ",
-			rta_getattr_u32(tb[IFLA_BR_MAX_AGE]));
+		print_uint(PRINT_ANY,
+			   "max_age",
+			   "max_age %u ",
+			   rta_getattr_u32(tb[IFLA_BR_MAX_AGE]));
 
 	if (tb[IFLA_BR_AGEING_TIME])
-		fprintf(f, "ageing_time %u ",
-			rta_getattr_u32(tb[IFLA_BR_AGEING_TIME]));
+		print_uint(PRINT_ANY,
+			   "ageing_time",
+			   "ageing_time %u ",
+			   rta_getattr_u32(tb[IFLA_BR_AGEING_TIME]));
 
 	if (tb[IFLA_BR_STP_STATE])
-		fprintf(f, "stp_state %u ",
-			rta_getattr_u32(tb[IFLA_BR_STP_STATE]));
+		print_uint(PRINT_ANY,
+			   "stp_state",
+			   "stp_state %u ",
+			   rta_getattr_u32(tb[IFLA_BR_STP_STATE]));
 
 	if (tb[IFLA_BR_PRIORITY])
-		fprintf(f, "priority %u ",
-			rta_getattr_u16(tb[IFLA_BR_PRIORITY]));
+		print_uint(PRINT_ANY,
+			   "priority",
+			   "priority %u ",
+			   rta_getattr_u16(tb[IFLA_BR_PRIORITY]));
 
 	if (tb[IFLA_BR_VLAN_FILTERING])
-		fprintf(f, "vlan_filtering %u ",
-			rta_getattr_u8(tb[IFLA_BR_VLAN_FILTERING]));
+		print_uint(PRINT_ANY,
+			   "vlan_filtering",
+			   "vlan_filtering %u ",
+			   rta_getattr_u8(tb[IFLA_BR_VLAN_FILTERING]));
 
 	if (tb[IFLA_BR_VLAN_PROTOCOL]) {
 		SPRINT_BUF(b1);
 
-		fprintf(f, "vlan_protocol %s ",
-			ll_proto_n2a(rta_getattr_u16(tb[IFLA_BR_VLAN_PROTOCOL]),
-				     b1, sizeof(b1)));
+		print_string(PRINT_ANY,
+			     "vlan_protocol",
+			     "vlan_protocol %s ",
+			     ll_proto_n2a(rta_getattr_u16(tb[IFLA_BR_VLAN_PROTOCOL]),
+					  b1, sizeof(b1)));
 	}
 
 	if (tb[IFLA_BR_BRIDGE_ID]) {
@@ -374,7 +455,10 @@ static void bridge_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 
 		br_dump_bridge_id(RTA_DATA(tb[IFLA_BR_BRIDGE_ID]), bridge_id,
 				  sizeof(bridge_id));
-		fprintf(f, "bridge_id %s ", bridge_id);
+		print_string(PRINT_ANY,
+			     "bridge_id",
+			     "bridge_id %s ",
+			     bridge_id);
 	}
 
 	if (tb[IFLA_BR_ROOT_ID]) {
@@ -382,149 +466,348 @@ static void bridge_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 
 		br_dump_bridge_id(RTA_DATA(tb[IFLA_BR_BRIDGE_ID]), root_id,
 				  sizeof(root_id));
-		fprintf(f, "designated_root %s ", root_id);
+		print_string(PRINT_ANY,
+			     "root_id",
+			     "designated_root %s ",
+			     root_id);
 	}
 
 	if (tb[IFLA_BR_ROOT_PORT])
-		fprintf(f, "root_port %u ",
-			rta_getattr_u16(tb[IFLA_BR_ROOT_PORT]));
+		print_uint(PRINT_ANY,
+			   "root_port",
+			   "root_port %u ",
+			   rta_getattr_u16(tb[IFLA_BR_ROOT_PORT]));
 
 	if (tb[IFLA_BR_ROOT_PATH_COST])
-		fprintf(f, "root_path_cost %u ",
-			rta_getattr_u32(tb[IFLA_BR_ROOT_PATH_COST]));
+		print_uint(PRINT_ANY,
+			   "root_path_cost",
+			   "root_path_cost %u ",
+			   rta_getattr_u32(tb[IFLA_BR_ROOT_PATH_COST]));
 
 	if (tb[IFLA_BR_TOPOLOGY_CHANGE])
-		fprintf(f, "topology_change %u ",
-			rta_getattr_u8(tb[IFLA_BR_TOPOLOGY_CHANGE]));
+		print_uint(PRINT_ANY,
+			   "topology_change",
+			   "topology_change %u ",
+			   rta_getattr_u8(tb[IFLA_BR_TOPOLOGY_CHANGE]));
 
 	if (tb[IFLA_BR_TOPOLOGY_CHANGE_DETECTED])
-		fprintf(f, "topology_change_detected %u ",
-			rta_getattr_u8(tb[IFLA_BR_TOPOLOGY_CHANGE_DETECTED]));
+		print_uint(PRINT_ANY,
+			   "topology_change_detected",
+			   "topology_change_detected %u ",
+			   rta_getattr_u8(tb[IFLA_BR_TOPOLOGY_CHANGE_DETECTED]));
 
-	if (tb[IFLA_BR_HELLO_TIMER]) {
-		struct timeval tv;
+	if (tb[IFLA_BR_HELLO_TIMER])
+		_bridge_print_timer(f, "hello_timer", tb[IFLA_BR_HELLO_TIMER]);
 
-		__jiffies_to_tv(&tv, rta_getattr_u64(tb[IFLA_BR_HELLO_TIMER]));
-		fprintf(f, "hello_timer %4i.%.2i ", (int)tv.tv_sec,
-			(int)tv.tv_usec/10000);
-	}
+	if (tb[IFLA_BR_TCN_TIMER])
+		_bridge_print_timer(f, "tcn_timer", tb[IFLA_BR_TCN_TIMER]);
 
-	if (tb[IFLA_BR_TCN_TIMER]) {
-		struct timeval tv;
+	if (tb[IFLA_BR_TOPOLOGY_CHANGE_TIMER])
+		_bridge_print_timer(f, "topology_change_timer",
+				    tb[IFLA_BR_TOPOLOGY_CHANGE_TIMER]);
 
-		__jiffies_to_tv(&tv, rta_getattr_u64(tb[IFLA_BR_TCN_TIMER]));
-		fprintf(f, "tcn_timer %4i.%.2i ", (int)tv.tv_sec,
-			(int)tv.tv_usec/10000);
-	}
-
-	if (tb[IFLA_BR_TOPOLOGY_CHANGE_TIMER]) {
-		unsigned long jiffies;
-		struct timeval tv;
-
-		jiffies = rta_getattr_u64(tb[IFLA_BR_TOPOLOGY_CHANGE_TIMER]);
-		__jiffies_to_tv(&tv, jiffies);
-		fprintf(f, "topology_change_timer %4i.%.2i ", (int)tv.tv_sec,
-			(int)tv.tv_usec/10000);
-	}
-
-	if (tb[IFLA_BR_GC_TIMER]) {
-		struct timeval tv;
-
-		__jiffies_to_tv(&tv, rta_getattr_u64(tb[IFLA_BR_GC_TIMER]));
-		fprintf(f, "gc_timer %4i.%.2i ", (int)tv.tv_sec,
-			(int)tv.tv_usec/10000);
-	}
+	if (tb[IFLA_BR_GC_TIMER])
+		_bridge_print_timer(f, "gc_timer", tb[IFLA_BR_GC_TIMER]);
 
 	if (tb[IFLA_BR_VLAN_DEFAULT_PVID])
-		fprintf(f, "vlan_default_pvid %u ",
-			rta_getattr_u16(tb[IFLA_BR_VLAN_DEFAULT_PVID]));
+		print_uint(PRINT_ANY,
+			   "vlan_default_pvid",
+			   "vlan_default_pvid %u ",
+			   rta_getattr_u16(tb[IFLA_BR_VLAN_DEFAULT_PVID]));
+
+	if (tb[IFLA_BR_VLAN_STATS_ENABLED])
+		print_uint(PRINT_ANY,
+			   "vlan_stats_enabled",
+			   "vlan_stats_enabled %u ",
+			   rta_getattr_u8(tb[IFLA_BR_VLAN_STATS_ENABLED]));
 
 	if (tb[IFLA_BR_GROUP_FWD_MASK])
-		fprintf(f, "group_fwd_mask %#x ",
-			rta_getattr_u16(tb[IFLA_BR_GROUP_FWD_MASK]));
+		print_0xhex(PRINT_ANY,
+			    "group_fwd_mask",
+			    "group_fwd_mask %#x ",
+			    rta_getattr_u16(tb[IFLA_BR_GROUP_FWD_MASK]));
 
 	if (tb[IFLA_BR_GROUP_ADDR]) {
 		SPRINT_BUF(mac);
 
-		fprintf(f, "group_address %s ",
-			ll_addr_n2a(RTA_DATA(tb[IFLA_BR_GROUP_ADDR]),
-				    RTA_PAYLOAD(tb[IFLA_BR_GROUP_ADDR]),
-				    1 /*ARPHDR_ETHER*/, mac, sizeof(mac)));
+		print_string(PRINT_ANY,
+			     "group_addr",
+			     "group_address %s ",
+			     ll_addr_n2a(RTA_DATA(tb[IFLA_BR_GROUP_ADDR]),
+					 RTA_PAYLOAD(tb[IFLA_BR_GROUP_ADDR]),
+					 1 /*ARPHDR_ETHER*/, mac, sizeof(mac)));
 	}
 
 	if (tb[IFLA_BR_MCAST_SNOOPING])
-		fprintf(f, "mcast_snooping %u ",
-			rta_getattr_u8(tb[IFLA_BR_MCAST_SNOOPING]));
+		print_uint(PRINT_ANY,
+			   "mcast_snooping",
+			   "mcast_snooping %u ",
+			   rta_getattr_u8(tb[IFLA_BR_MCAST_SNOOPING]));
 
 	if (tb[IFLA_BR_MCAST_ROUTER])
-		fprintf(f, "mcast_router %u ",
-			rta_getattr_u8(tb[IFLA_BR_MCAST_ROUTER]));
+		print_uint(PRINT_ANY,
+			   "mcast_router",
+			   "mcast_router %u ",
+			   rta_getattr_u8(tb[IFLA_BR_MCAST_ROUTER]));
 
 	if (tb[IFLA_BR_MCAST_QUERY_USE_IFADDR])
-		fprintf(f, "mcast_query_use_ifaddr %u ",
-			rta_getattr_u8(tb[IFLA_BR_MCAST_QUERY_USE_IFADDR]));
+		print_uint(PRINT_ANY,
+			   "mcast_query_use_ifaddr",
+			   "mcast_query_use_ifaddr %u ",
+			   rta_getattr_u8(tb[IFLA_BR_MCAST_QUERY_USE_IFADDR]));
 
 	if (tb[IFLA_BR_MCAST_QUERIER])
-		fprintf(f, "mcast_querier %u ",
-			rta_getattr_u8(tb[IFLA_BR_MCAST_QUERIER]));
+		print_uint(PRINT_ANY,
+			   "mcast_querier",
+			   "mcast_querier %u ",
+			   rta_getattr_u8(tb[IFLA_BR_MCAST_QUERIER]));
 
 	if (tb[IFLA_BR_MCAST_HASH_ELASTICITY])
-		fprintf(f, "mcast_hash_elasticity %u ",
-			rta_getattr_u32(tb[IFLA_BR_MCAST_HASH_ELASTICITY]));
+		print_uint(PRINT_ANY,
+			   "mcast_hash_elasticity",
+			   "mcast_hash_elasticity %u ",
+			   rta_getattr_u32(tb[IFLA_BR_MCAST_HASH_ELASTICITY]));
 
 	if (tb[IFLA_BR_MCAST_HASH_MAX])
-		fprintf(f, "mcast_hash_max %u ",
-			rta_getattr_u32(tb[IFLA_BR_MCAST_HASH_MAX]));
+		print_uint(PRINT_ANY,
+			   "mcast_hash_max",
+			   "mcast_hash_max %u ",
+			   rta_getattr_u32(tb[IFLA_BR_MCAST_HASH_MAX]));
 
 	if (tb[IFLA_BR_MCAST_LAST_MEMBER_CNT])
-		fprintf(f, "mcast_last_member_count %u ",
-			rta_getattr_u32(tb[IFLA_BR_MCAST_LAST_MEMBER_CNT]));
+		print_uint(PRINT_ANY,
+			   "mcast_last_member_cnt",
+			   "mcast_last_member_count %u ",
+			   rta_getattr_u32(tb[IFLA_BR_MCAST_LAST_MEMBER_CNT]));
 
 	if (tb[IFLA_BR_MCAST_STARTUP_QUERY_CNT])
-		fprintf(f, "mcast_startup_query_count %u ",
-			rta_getattr_u32(tb[IFLA_BR_MCAST_STARTUP_QUERY_CNT]));
+		print_uint(PRINT_ANY,
+			   "mcast_startup_query_cnt",
+			   "mcast_startup_query_count %u ",
+			   rta_getattr_u32(tb[IFLA_BR_MCAST_STARTUP_QUERY_CNT]));
 
 	if (tb[IFLA_BR_MCAST_LAST_MEMBER_INTVL])
-		fprintf(f, "mcast_last_member_interval %llu ",
-			rta_getattr_u64(tb[IFLA_BR_MCAST_LAST_MEMBER_INTVL]));
+		print_lluint(PRINT_ANY,
+			     "mcast_last_member_intvl",
+			     "mcast_last_member_interval %llu ",
+			     rta_getattr_u64(tb[IFLA_BR_MCAST_LAST_MEMBER_INTVL]));
 
 	if (tb[IFLA_BR_MCAST_MEMBERSHIP_INTVL])
-		fprintf(f, "mcast_membership_interval %llu ",
-			rta_getattr_u64(tb[IFLA_BR_MCAST_MEMBERSHIP_INTVL]));
+		print_lluint(PRINT_ANY,
+			     "mcast_membership_intvl",
+			     "mcast_membership_interval %llu ",
+			     rta_getattr_u64(tb[IFLA_BR_MCAST_MEMBERSHIP_INTVL]));
 
 	if (tb[IFLA_BR_MCAST_QUERIER_INTVL])
-		fprintf(f, "mcast_querier_interval %llu ",
-			rta_getattr_u64(tb[IFLA_BR_MCAST_QUERIER_INTVL]));
+		print_lluint(PRINT_ANY,
+			     "mcast_querier_intvl",
+			     "mcast_querier_interval %llu ",
+			     rta_getattr_u64(tb[IFLA_BR_MCAST_QUERIER_INTVL]));
 
 	if (tb[IFLA_BR_MCAST_QUERY_INTVL])
-		fprintf(f, "mcast_query_interval %llu ",
-			rta_getattr_u64(tb[IFLA_BR_MCAST_QUERY_INTVL]));
+		print_lluint(PRINT_ANY,
+			     "mcast_query_intvl",
+			     "mcast_query_interval %llu ",
+			     rta_getattr_u64(tb[IFLA_BR_MCAST_QUERY_INTVL]));
 
 	if (tb[IFLA_BR_MCAST_QUERY_RESPONSE_INTVL])
-		fprintf(f, "mcast_query_response_interval %llu ",
-			rta_getattr_u64(tb[IFLA_BR_MCAST_QUERY_RESPONSE_INTVL]));
+		print_lluint(PRINT_ANY,
+			     "mcast_query_response_intvl",
+			     "mcast_query_response_interval %llu ",
+			     rta_getattr_u64(tb[IFLA_BR_MCAST_QUERY_RESPONSE_INTVL]));
 
 	if (tb[IFLA_BR_MCAST_STARTUP_QUERY_INTVL])
-		fprintf(f, "mcast_startup_query_interval %llu ",
-			rta_getattr_u64(tb[IFLA_BR_MCAST_STARTUP_QUERY_INTVL]));
+		print_lluint(PRINT_ANY,
+			     "mcast_startup_query_intvl",
+			     "mcast_startup_query_interval %llu ",
+			     rta_getattr_u64(tb[IFLA_BR_MCAST_STARTUP_QUERY_INTVL]));
+
+	if (tb[IFLA_BR_MCAST_STATS_ENABLED])
+		print_uint(PRINT_ANY,
+			   "mcast_stats_enabled",
+			   "mcast_stats_enabled %u ",
+			   rta_getattr_u8(tb[IFLA_BR_MCAST_STATS_ENABLED]));
+
+	if (tb[IFLA_BR_MCAST_IGMP_VERSION])
+		print_uint(PRINT_ANY,
+			   "mcast_igmp_version",
+			   "mcast_igmp_version %u ",
+			   rta_getattr_u8(tb[IFLA_BR_MCAST_IGMP_VERSION]));
+
+	if (tb[IFLA_BR_MCAST_MLD_VERSION])
+		print_uint(PRINT_ANY,
+			   "mcast_mld_version",
+			   "mcast_mld_version %u ",
+			   rta_getattr_u8(tb[IFLA_BR_MCAST_MLD_VERSION]));
 
 	if (tb[IFLA_BR_NF_CALL_IPTABLES])
-		fprintf(f, "nf_call_iptables %u ",
-			rta_getattr_u8(tb[IFLA_BR_NF_CALL_IPTABLES]));
+		print_uint(PRINT_ANY,
+			   "nf_call_iptables",
+			   "nf_call_iptables %u ",
+			   rta_getattr_u8(tb[IFLA_BR_NF_CALL_IPTABLES]));
 
 	if (tb[IFLA_BR_NF_CALL_IP6TABLES])
-		fprintf(f, "nf_call_ip6tables %u ",
-			rta_getattr_u8(tb[IFLA_BR_NF_CALL_IP6TABLES]));
+		print_uint(PRINT_ANY,
+			   "nf_call_ip6tables",
+			   "nf_call_ip6tables %u ",
+			   rta_getattr_u8(tb[IFLA_BR_NF_CALL_IP6TABLES]));
 
 	if (tb[IFLA_BR_NF_CALL_ARPTABLES])
-		fprintf(f, "nf_call_arptables %u ",
-			rta_getattr_u8(tb[IFLA_BR_NF_CALL_ARPTABLES]));
+		print_uint(PRINT_ANY,
+			   "nf_call_arptables",
+			   "nf_call_arptables %u ",
+			   rta_getattr_u8(tb[IFLA_BR_NF_CALL_ARPTABLES]));
 }
 
 static void bridge_print_help(struct link_util *lu, int argc, char **argv,
-		FILE *f)
+			      FILE *f)
 {
 	print_explain(f);
+}
+
+static void bridge_print_xstats_help(struct link_util *lu, FILE *f)
+{
+	fprintf(f, "Usage: ... %s [ igmp ] [ dev DEVICE ]\n", lu->id);
+}
+
+static void bridge_print_stats_attr(FILE *f, struct rtattr *attr, int ifindex)
+{
+	struct rtattr *brtb[LINK_XSTATS_TYPE_MAX+1];
+	struct br_mcast_stats *mstats;
+	struct rtattr *i, *list;
+	const char *ifname = "";
+	int rem;
+
+	parse_rtattr(brtb, LINK_XSTATS_TYPE_MAX, RTA_DATA(attr),
+	RTA_PAYLOAD(attr));
+	if (!brtb[LINK_XSTATS_TYPE_BRIDGE])
+		return;
+
+	list = brtb[LINK_XSTATS_TYPE_BRIDGE];
+	rem = RTA_PAYLOAD(list);
+	for (i = RTA_DATA(list); RTA_OK(i, rem); i = RTA_NEXT(i, rem)) {
+		if (xstats_print_attr && i->rta_type != xstats_print_attr)
+			continue;
+		switch (i->rta_type) {
+		case BRIDGE_XSTATS_MCAST:
+			mstats = RTA_DATA(i);
+			ifname = ll_index_to_name(ifindex);
+			fprintf(f, "%-16s\n", ifname);
+			fprintf(f, "%-16s    IGMP queries:\n", "");
+			fprintf(f, "%-16s      RX: v1 %llu v2 %llu v3 %llu\n",
+				"",
+				mstats->igmp_v1queries[BR_MCAST_DIR_RX],
+				mstats->igmp_v2queries[BR_MCAST_DIR_RX],
+				mstats->igmp_v3queries[BR_MCAST_DIR_RX]);
+			fprintf(f, "%-16s      TX: v1 %llu v2 %llu v3 %llu\n",
+				"",
+				mstats->igmp_v1queries[BR_MCAST_DIR_TX],
+				mstats->igmp_v2queries[BR_MCAST_DIR_TX],
+				mstats->igmp_v3queries[BR_MCAST_DIR_TX]);
+
+			fprintf(f, "%-16s    IGMP reports:\n", "");
+			fprintf(f, "%-16s      RX: v1 %llu v2 %llu v3 %llu\n",
+				"",
+				mstats->igmp_v1reports[BR_MCAST_DIR_RX],
+				mstats->igmp_v2reports[BR_MCAST_DIR_RX],
+				mstats->igmp_v3reports[BR_MCAST_DIR_RX]);
+			fprintf(f, "%-16s      TX: v1 %llu v2 %llu v3 %llu\n",
+				"",
+				mstats->igmp_v1reports[BR_MCAST_DIR_TX],
+				mstats->igmp_v2reports[BR_MCAST_DIR_TX],
+				mstats->igmp_v3reports[BR_MCAST_DIR_TX]);
+
+			fprintf(f, "%-16s    IGMP leaves: RX: %llu TX: %llu\n",
+				"",
+				mstats->igmp_leaves[BR_MCAST_DIR_RX],
+				mstats->igmp_leaves[BR_MCAST_DIR_TX]);
+
+			fprintf(f, "%-16s    IGMP parse errors: %llu\n",
+				"", mstats->igmp_parse_errors);
+
+			fprintf(f, "%-16s    MLD queries:\n", "");
+			fprintf(f, "%-16s      RX: v1 %llu v2 %llu\n",
+				"",
+				mstats->mld_v1queries[BR_MCAST_DIR_RX],
+				mstats->mld_v2queries[BR_MCAST_DIR_RX]);
+			fprintf(f, "%-16s      TX: v1 %llu v2 %llu\n",
+				"",
+				mstats->mld_v1queries[BR_MCAST_DIR_TX],
+				mstats->mld_v2queries[BR_MCAST_DIR_TX]);
+
+			fprintf(f, "%-16s    MLD reports:\n", "");
+			fprintf(f, "%-16s      RX: v1 %llu v2 %llu\n",
+				"",
+				mstats->mld_v1reports[BR_MCAST_DIR_RX],
+				mstats->mld_v2reports[BR_MCAST_DIR_RX]);
+			fprintf(f, "%-16s      TX: v1 %llu v2 %llu\n",
+				"",
+				mstats->mld_v1reports[BR_MCAST_DIR_TX],
+				mstats->mld_v2reports[BR_MCAST_DIR_TX]);
+
+			fprintf(f, "%-16s    MLD leaves: RX: %llu TX: %llu\n",
+				"",
+				mstats->mld_leaves[BR_MCAST_DIR_RX],
+				mstats->mld_leaves[BR_MCAST_DIR_TX]);
+
+			fprintf(f, "%-16s    MLD parse errors: %llu\n",
+				"", mstats->mld_parse_errors);
+			break;
+		}
+	}
+}
+
+int bridge_print_xstats(const struct sockaddr_nl *who,
+			struct nlmsghdr *n, void *arg)
+{
+	struct if_stats_msg *ifsm = NLMSG_DATA(n);
+	struct rtattr *tb[IFLA_STATS_MAX+1];
+	int len = n->nlmsg_len;
+	FILE *fp = arg;
+
+	len -= NLMSG_LENGTH(sizeof(*ifsm));
+	if (len < 0) {
+		fprintf(stderr, "BUG: wrong nlmsg len %d\n", len);
+		return -1;
+	}
+	if (filter_index && filter_index != ifsm->ifindex)
+		return 0;
+
+	parse_rtattr(tb, IFLA_STATS_MAX, IFLA_STATS_RTA(ifsm), len);
+	if (tb[IFLA_STATS_LINK_XSTATS])
+		bridge_print_stats_attr(fp, tb[IFLA_STATS_LINK_XSTATS],
+					ifsm->ifindex);
+
+	if (tb[IFLA_STATS_LINK_XSTATS_SLAVE])
+		bridge_print_stats_attr(fp, tb[IFLA_STATS_LINK_XSTATS_SLAVE],
+					ifsm->ifindex);
+
+	return 0;
+}
+
+int bridge_parse_xstats(struct link_util *lu, int argc, char **argv)
+{
+	while (argc > 0) {
+		if (strcmp(*argv, "igmp") == 0 || strcmp(*argv, "mcast") == 0) {
+			xstats_print_attr = BRIDGE_XSTATS_MCAST;
+		} else if (strcmp(*argv, "dev") == 0) {
+			NEXT_ARG();
+			filter_index = if_nametoindex(*argv);
+			if (filter_index == 0) {
+				fprintf(stderr, "Cannot find device \"%s\"\n",
+					*argv);
+				return -1;
+			}
+		} else if (strcmp(*argv, "help") == 0) {
+			bridge_print_xstats_help(lu, stdout);
+			exit(0);
+		} else {
+			invarg("unknown attribute", *argv);
+		}
+		argc--; argv++;
+	}
+
+	return 0;
 }
 
 struct link_util bridge_link_util = {
@@ -533,4 +816,6 @@ struct link_util bridge_link_util = {
 	.parse_opt	= bridge_parse_opt,
 	.print_opt	= bridge_print_opt,
 	.print_help     = bridge_print_help,
+	.parse_ifla_xstats = bridge_parse_xstats,
+	.print_ifla_xstats = bridge_print_xstats,
 };

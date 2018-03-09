@@ -30,7 +30,8 @@ explain(void)
 	fprintf(stderr, "Usage: ... connmark [zone ZONE] [CONTROL] [index <INDEX>]\n");
 	fprintf(stderr, "where :\n"
 		"\tZONE is the conntrack zone\n"
-		"\tCONTROL := reclassify|pipe|drop|continue|ok\n");
+		"\tCONTROL := reclassify | pipe | drop | continue | ok |\n"
+		"\t           goto chain <CHAIN_INDEX>\n");
 }
 
 static void
@@ -80,9 +81,7 @@ parse_connmark(struct action_util *a, int *argc_p, char ***argv_p, int tca_id,
 		}
 	}
 
-	sel.action = TC_ACT_PIPE;
-	if (argc && !action_a2n(*argv, &sel.action, false))
-		NEXT_ARG_FWD();
+	parse_action_control_dflt(&argc, &argv, &sel.action, false, TC_ACT_PIPE);
 
 	if (argc) {
 		if (matches(*argv, "index") == 0) {
@@ -123,7 +122,7 @@ static int print_connmark(struct action_util *au, FILE *f, struct rtattr *arg)
 	ci = RTA_DATA(tb[TCA_CONNMARK_PARMS]);
 
 	fprintf(f, " connmark zone %d\n", ci->zone);
-	fprintf(f, "\t index %d ref %d bind %d", ci->index,
+	fprintf(f, "\t index %u ref %d bind %d", ci->index,
 		ci->refcnt, ci->bindcnt);
 
 	if (show_stats) {

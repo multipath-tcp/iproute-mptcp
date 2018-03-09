@@ -34,7 +34,7 @@ static void explain(void)
 		"Usage: ... u32 [ match SELECTOR ... ] [ link HTID ] [ classid CLASSID ]\n"
 		"               [ action ACTION_SPEC ] [ offset OFFSET_SPEC ]\n"
 		"               [ ht HTID ] [ hashkey HASHKEY_SPEC ]\n"
-		"               [ sample SAMPLE ] [skip-hw | skip-sw]\n"
+		"               [ sample SAMPLE ] [skip_hw | skip_sw]\n"
 		"or         u32 divisor DIVISOR\n"
 		"\n"
 		"Where: SELECTOR := SAMPLE SAMPLE ...\n"
@@ -385,8 +385,7 @@ static int parse_ip6_addr(int *argc_p, char ***argv_p,
 
 	plen = addr.bitlen;
 	for (i = 0; i < plen; i += 32) {
-		/* if (((i + 31) & ~0x1F) <= plen) { */
-		if (i + 31 <= plen) {
+		if (i + 31 < plen) {
 			res = pack_key(sel, addr.data[i / 32],
 				       0xFFFFFFFF, off + 4 * (i / 32), offmask);
 			if (res < 0)
@@ -1264,6 +1263,11 @@ static int u32_print_opt(struct filter_util *qu, FILE *f, struct rtattr *opt,
 			fprintf(f, "skip_hw ");
 		if (flags & TCA_CLS_FLAGS_SKIP_SW)
 			fprintf(f, "skip_sw ");
+
+		if (flags & TCA_CLS_FLAGS_IN_HW)
+			fprintf(f, "in_hw ");
+		else if (flags & TCA_CLS_FLAGS_NOT_IN_HW)
+			fprintf(f, "not_in_hw ");
 	}
 
 	if (tb[TCA_U32_PCNT]) {
@@ -1332,7 +1336,7 @@ static int u32_print_opt(struct filter_util *qu, FILE *f, struct rtattr *opt,
 	}
 
 	if (tb[TCA_U32_ACT])
-		tc_print_action(f, tb[TCA_U32_ACT]);
+		tc_print_action(f, tb[TCA_U32_ACT], 0);
 
 	return 0;
 }

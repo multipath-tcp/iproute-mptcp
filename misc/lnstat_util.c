@@ -150,7 +150,8 @@ static int lnstat_scan_compat_rtstat_fields(struct lnstat_file *lf)
 {
 	char buf[FGETS_BUF_SIZE];
 
-	strncpy(buf, RTSTAT_COMPAT_LINE, sizeof(buf)-1);
+	strncpy(buf, RTSTAT_COMPAT_LINE, sizeof(buf) - 1);
+	buf[sizeof(buf) - 1] = '\0';
 
 	return __lnstat_scan_fields(lf, buf);
 }
@@ -180,11 +181,8 @@ static struct lnstat_file *alloc_and_open(const char *path, const char *file)
 	}
 
 	/* initialize */
-	/* de->d_name is guaranteed to be <= NAME_MAX */
-	strcpy(lf->basename, file);
-	strcpy(lf->path, path);
-	strcat(lf->path, "/");
-	strcat(lf->path, lf->basename);
+	snprintf(lf->basename, sizeof(lf->basename), "%s", file);
+	snprintf(lf->path, sizeof(lf->path), "%s/%s", path, file);
 
 	/* initialize to default */
 	lf->interval.tv_sec = 1;

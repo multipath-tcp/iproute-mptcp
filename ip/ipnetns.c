@@ -357,40 +357,6 @@ static int netns_list(int argc, char **argv)
 	return 0;
 }
 
-static int cmd_exec(const char *cmd, char **argv, bool do_fork)
-{
-	fflush(stdout);
-	if (do_fork) {
-		int status;
-		pid_t pid;
-
-		pid = fork();
-		if (pid < 0) {
-			perror("fork");
-			exit(1);
-		}
-
-		if (pid != 0) {
-			/* Parent  */
-			if (waitpid(pid, &status, 0) < 0) {
-				perror("waitpid");
-				exit(1);
-			}
-
-			if (WIFEXITED(status)) {
-				return WEXITSTATUS(status);
-			}
-
-			exit(1);
-		}
-	}
-
-	if (execvp(cmd, argv)  < 0)
-		fprintf(stderr, "exec of \"%s\" failed: %s\n",
-				cmd, strerror(errno));
-	_exit(1);
-}
-
 static int on_netns_exec(char *nsname, void *arg)
 {
 	char **argv = arg;
@@ -420,6 +386,11 @@ static int netns_exec(int argc, char **argv)
 
 	if (netns_switch(argv[0]))
 		return -1;
+
+	/* we just changed namespaces. clear any vrf association
+	 * with prior namespace before exec'ing command
+	 */
+	vrf_reset();
 
 	/* ip must return the status of the child,
 	 * but do_cmd() will add a minus to this,
@@ -497,28 +468,15 @@ static int netns_pids(int argc, char **argv)
 
 }
 
-static int netns_identify(int argc, char **argv)
+int netns_identify_pid(const char *pidstr, char *name, int len)
 {
-	const char *pidstr;
 	char net_path[PATH_MAX];
 	int netns;
 	struct stat netst;
 	DIR *dir;
 	struct dirent *entry;
 
-	if (argc < 1) {
-		pidstr = "self";
-	} else if (argc > 1) {
-		fprintf(stderr, "extra arguments specified\n");
-		return -1;
-	} else {
-		pidstr = argv[0];
-		if (!is_pid(pidstr)) {
-			fprintf(stderr, "Specified string '%s' is not a pid\n",
-					pidstr);
-			return -1;
-		}
-	}
+	name[0] = '\0';
 
 	snprintf(net_path, sizeof(net_path), "/proc/%s/ns/net", pidstr);
 	netns = open(net_path, O_RDONLY);
@@ -560,12 +518,39 @@ static int netns_identify(int argc, char **argv)
 
 		if ((st.st_dev == netst.st_dev) &&
 		    (st.st_ino == netst.st_ino)) {
-			printf("%s\n", entry->d_name);
+			strlcpy(name, entry->d_name, len);
 		}
 	}
 	closedir(dir);
 	return 0;
 
+}
+
+static int netns_identify(int argc, char **argv)
+{
+	const char *pidstr;
+	char name[256];
+	int rc;
+
+	if (argc < 1) {
+		pidstr = "self";
+	} else if (argc > 1) {
+		fprintf(stderr, "extra arguments specified\n");
+		return -1;
+	} else {
+		pidstr = argv[0];
+		if (!is_pid(pidstr)) {
+			fprintf(stderr, "Specified string '%s' is not a pid\n",
+					pidstr);
+			return -1;
+		}
+	}
+
+	rc = netns_identify_pid(pidstr, name, sizeof(name));
+	if (!rc)
+		printf("%s\n", name);
+
+	return rc;
 }
 
 static int on_netns_del(char *nsname, void *arg)
@@ -650,7 +635,7 @@ static int netns_add(int argc, char **argv)
 		}
 
 		/* Upgrade NETNS_RUN_DIR to a mount point */
-		if (mount(NETNS_RUN_DIR, NETNS_RUN_DIR, "none", MS_BIND, NULL)) {
+		if (mount(NETNS_RUN_DIR, NETNS_RUN_DIR, "none", MS_BIND | MS_REC, NULL)) {
 			fprintf(stderr, "mount --bind %s %s failed: %s\n",
 				NETNS_RUN_DIR, NETNS_RUN_DIR, strerror(errno));
 			return -1;
@@ -715,7 +700,8 @@ static int netns_set(int argc, char **argv)
 {
 	char netns_path[PATH_MAX];
 	const char *name;
-	int netns, nsid;
+	unsigned int nsid;
+	int netns;
 
 	if (argc < 1) {
 		fprintf(stderr, "No netns name specified\n");
@@ -726,7 +712,8 @@ static int netns_set(int argc, char **argv)
 		return -1;
 	}
 	name = argv[0];
-	nsid = atoi(argv[1]);
+	if (get_unsigned(&nsid, argv[1], 0))
+		invarg("Invalid \"netnsid\" value\n", argv[1]);
 
 	snprintf(netns_path, sizeof(netns_path), "%s/%s", NETNS_RUN_DIR, name);
 	netns = open(netns_path, O_RDONLY | O_CLOEXEC);
@@ -780,6 +767,12 @@ static int netns_monitor(int argc, char **argv)
 	return 0;
 }
 
+static int invalid_name(const char *name)
+{
+	return !*name || strlen(name) > NAME_MAX ||
+		strchr(name, '/') || !strcmp(name, ".") || !strcmp(name, "..");
+}
+
 int do_netns(int argc, char **argv)
 {
 	netns_nsid_socket_init();
@@ -787,6 +780,11 @@ int do_netns(int argc, char **argv)
 	if (argc < 1) {
 		netns_map_init();
 		return netns_list(0, NULL);
+	}
+
+	if (argc > 1 && invalid_name(argv[1])) {
+		fprintf(stderr, "Invalid netns name \"%s\"\n", argv[1]);
+		exit(-1);
 	}
 
 	if ((matches(*argv, "list") == 0) || (matches(*argv, "show") == 0) ||

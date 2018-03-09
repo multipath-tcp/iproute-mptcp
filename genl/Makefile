@@ -1,6 +1,6 @@
 GENLOBJ=genl.o
 
-include ../Config
+include ../config.mk
 SHARED_LIBS ?= y
 
 CFLAGS += -fno-strict-aliasing
