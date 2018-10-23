@@ -29,6 +29,7 @@ rtmon: $(RTMONOBJ)
 
 install: all
 	install -m 0755 $(TARGETS) $(DESTDIR)$(SBINDIR)
+	install -m 0755 ip $(DESTDIR)$(BINDIR)
 	install -m 0755 $(SCRIPTS) $(DESTDIR)$(SBINDIR)
 
 clean:

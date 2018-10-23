@@ -34,6 +34,7 @@ lnstat: $(LNSTATOBJ)
 
 install: all
 	install -m 0755 $(TARGETS) $(DESTDIR)$(SBINDIR)
+	install -m 0755 ss $(DESTDIR)$(BINDIR)
 	ln -sf lnstat $(DESTDIR)$(SBINDIR)/rtstat
 	ln -sf lnstat $(DESTDIR)$(SBINDIR)/ctstat
 

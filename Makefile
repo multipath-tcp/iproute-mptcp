@@ -7,6 +7,7 @@ endif
 PREFIX?=/usr
 LIBDIR?=$(PREFIX)/lib
 SBINDIR?=/sbin
+BINDIR?=/bin
 CONFDIR?=/etc/iproute2
 DATADIR?=$(PREFIX)/share
 HDRDIR?=$(PREFIX)/include/iproute2
@@ -64,6 +65,7 @@ config.mk:
 
 install: all
 	install -m 0755 -d $(DESTDIR)$(SBINDIR)
+	install -m 0755 -d $(DESTDIR)$(BINDIR)
 	install -m 0755 -d $(DESTDIR)$(CONFDIR)
 	install -m 0755 -d $(DESTDIR)$(ARPDDIR)
 	install -m 0755 -d $(DESTDIR)$(HDRDIR)
