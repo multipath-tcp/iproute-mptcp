@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * q_atm.c		ATM.
  *
@@ -9,7 +10,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <ctype.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -27,7 +27,8 @@
 #define MAX_HDR_LEN 64
 
 
-static int atm_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
+static int atm_parse_opt(struct qdisc_util *qu, int argc, char **argv,
+			 struct nlmsghdr *n, const char *dev)
 {
 	if (argc) {
 		fprintf(stderr, "Usage: atm\n");
@@ -45,7 +46,7 @@ static void explain(void)
 
 
 static int atm_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
-   struct nlmsghdr *n)
+	struct nlmsghdr *n, const char *dev)
 {
 	struct sockaddr_atmsvc addr = {};
 	struct atm_qos qos;
@@ -166,12 +167,13 @@ static int atm_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
 			perror("ioctl ATMARP_MKIP");
 			return -1;
 		}
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 1024, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 1024, TCA_OPTIONS);
 	addattr_l(n, 1024, TCA_ATM_FD, &s, sizeof(s));
-	if (excess) addattr_l(n, 1024, TCA_ATM_EXCESS, &excess, sizeof(excess));
-	if (hdr_len != -1) addattr_l(n, 1024, TCA_ATM_HDR, hdr, hdr_len);
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	if (excess)
+		addattr_l(n, 1024, TCA_ATM_EXCESS, &excess, sizeof(excess));
+	if (hdr_len != -1)
+		addattr_l(n, 1024, TCA_ATM_HDR, hdr, hdr_len);
+	addattr_nest_end(n, tail);
 	return 0;
 }
 

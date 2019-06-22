@@ -59,6 +59,8 @@ ip-xfrm \- transform configuration
 .IR CTX " ]"
 .RB "[ " extra-flag
 .IR EXTRA-FLAG-LIST " ]"
+.RB "[ " output-mark
+.IR OUTPUT-MARK " ]"
 
 .ti -8
 .B "ip xfrm state allocspi"
@@ -245,6 +247,7 @@ ip-xfrm \- transform configuration
 
 .ti -8
 .BR "ip xfrm policy" " { " deleteall " | " list " }"
+.RB "[ " nosock " ]"
 .RI "[ " SELECTOR " ]"
 .RB "[ " dir
 .IR DIR " ]"
@@ -536,6 +539,15 @@ encapsulates packets with protocol
 .RI "using source port " SPORT ", destination port "  DPORT
 .RI ", and original address " OADDR "."
 
+.TP
+.I MARK
+used to match xfrm policies and states
+
+.TP
+.I OUTPUT-MARK
+used to set the output mark to influence the routing
+of the packets emitted by the state
+
 .sp
 .PP
 .TS
@@ -548,6 +560,10 @@ ip xfrm policy deleteall	delete all existing xfrm policies
 ip xfrm policy list	print out the list of xfrm policies
 ip xfrm policy flush	flush policies
 .TE
+
+.TP
+.BR nosock
+filter (remove) all socket policies from the output.
 
 .TP
 .IR SELECTOR

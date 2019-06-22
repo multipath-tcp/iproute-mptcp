@@ -26,7 +26,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -39,6 +38,7 @@
 #include "rt_names.h"
 #include "utils.h"
 #include "ip_common.h"
+#include "json_print.h"
 
 #define IFAL_RTA(r)	((struct rtattr *)(((char *)(r)) + NLMSG_ALIGN(sizeof(struct ifaddrlblmsg))))
 #define IFAL_PAYLOAD(n)	NLMSG_PAYLOAD(n, sizeof(struct ifaddrlblmsg))
@@ -56,7 +56,6 @@ static void usage(void)
 
 int print_addrlabel(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 {
-	FILE *fp = (FILE *)arg;
 	struct ifaddrlblmsg *ifal = NLMSG_DATA(n);
 	int len = n->nlmsg_len;
 	struct rtattr *tb[IFAL_MAX+1];
@@ -70,28 +69,40 @@ int print_addrlabel(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg
 
 	parse_rtattr(tb, IFAL_MAX, IFAL_RTA(ifal), len);
 
+	open_json_object(NULL);
 	if (n->nlmsg_type == RTM_DELADDRLABEL)
-		fprintf(fp, "Deleted ");
+		print_bool(PRINT_ANY, "deleted", "Deleted ", true);
 
 	if (tb[IFAL_ADDRESS]) {
-		fprintf(fp, "prefix %s/%u ",
-			format_host_rta(ifal->ifal_family,
-		                        tb[IFAL_ADDRESS]),
-			ifal->ifal_prefixlen);
+		const char *host
+			= format_host_rta(ifal->ifal_family,
+					  tb[IFAL_ADDRESS]);
+
+		print_string(PRINT_FP, NULL, "prefix ", NULL);
+		print_color_string(PRINT_ANY,
+				   ifa_family_color(ifal->ifal_family),
+				   "address", "%s", host);
+
+		print_uint(PRINT_ANY, "prefixlen", "/%u ",
+			   ifal->ifal_prefixlen);
 	}
 
-	if (ifal->ifal_index)
-		fprintf(fp, "dev %s ", ll_index_to_name(ifal->ifal_index));
+	if (ifal->ifal_index) {
+		print_string(PRINT_FP, NULL, "dev ", NULL);
+		print_color_string(PRINT_ANY, COLOR_IFNAME,
+				   "ifname", "%s ",
+				   ll_index_to_name(ifal->ifal_index));
+	}
 
 	if (tb[IFAL_LABEL] && RTA_PAYLOAD(tb[IFAL_LABEL]) == sizeof(uint32_t)) {
-		uint32_t label;
+		uint32_t label = rta_getattr_u32(tb[IFAL_LABEL]);
 
-		memcpy(&label, RTA_DATA(tb[IFAL_LABEL]), sizeof(label));
-		fprintf(fp, "label %u ", label);
+		print_uint(PRINT_ANY,
+			   "label", "label %u ", label);
 	}
+	print_string(PRINT_FP, NULL, "\n", "");
+	close_json_object();
 
-	fprintf(fp, "\n");
-	fflush(fp);
 	return 0;
 }
 
@@ -112,10 +123,12 @@ static int ipaddrlabel_list(int argc, char **argv)
 		return 1;
 	}
 
+	new_json_obj(json);
 	if (rtnl_dump_filter(&rth, print_addrlabel, stdout) < 0) {
 		fprintf(stderr, "Dump terminated\n");
 		return 1;
 	}
+	delete_json_obj();
 
 	return 0;
 }
@@ -176,7 +189,7 @@ static int ipaddrlabel_modify(int cmd, int argc, char **argv)
 	if (req.ifal.ifal_family == AF_UNSPEC)
 		req.ifal.ifal_family = AF_INET6;
 
-	if (rtnl_talk(&rth, &req.n, NULL, 0) < 0)
+	if (rtnl_talk(&rth, &req.n, NULL) < 0)
 		return -2;
 
 	return 0;
@@ -203,7 +216,7 @@ static int flush_addrlabel(const struct sockaddr_nl *who, struct nlmsghdr *n, vo
 		if (rtnl_open(&rth2, 0) < 0)
 			return -1;
 
-		if (rtnl_talk(&rth2, n, NULL, 0) < 0)
+		if (rtnl_talk(&rth2, n, NULL) < 0)
 			return -2;
 
 		rtnl_close(&rth2);

@@ -1,4 +1,5 @@
 #! /bin/bash
+# SPDX-License-Identifier: GPL-2.0
 # This is not an autoconf generated configure
 #
 INCLUDE=${1:-"$PWD/include"}
@@ -14,18 +15,6 @@ check_prog()
 {
     echo -n "$2"
     command -v $1 >/dev/null 2>&1 && (echo "$3:=y" >> $CONFIG; echo "yes") || (echo "no"; return 1)
-}
-
-check_docs()
-{
-    if check_prog latex " latex: " HAVE_LATEX; then
-        check_prog pdflatex " pdflatex: " HAVE_PDFLATEX || echo " WARNING: no PDF docs can be built from LaTeX files"
-        check_prog sgml2latex " sgml2latex: " HAVE_SGML2LATEX || echo " WARNING: no LaTeX files can be build from SGML files"
-    else
-        echo " WARNING: no docs can be built from LaTeX files"
-    fi
-
-    check_prog sgml2html " sgml2html: " HAVE_SGML2HTML || echo " WARNING: no HTML docs can be built from SGML"
 }
 
 check_toolchain()
@@ -101,13 +90,13 @@ EOF
 
 check_xt_old()
 {
-    # bail if previous XT checks has already succeded.
+    # bail if previous XT checks has already succeeded.
     if grep -q TC_CONFIG_XT $CONFIG
     then
 	return
     fi
 
-    #check if we dont need our internal header ..
+    #check if we don't need our internal header ..
     cat >$TMPDIR/ipttest.c <<EOF
 #include <xtables.h>
 char *lib_dir;
@@ -140,7 +129,7 @@ EOF
 
 check_xt_old_internal_h()
 {
-    # bail if previous XT checks has already succeded.
+    # bail if previous XT checks has already succeeded.
     if grep -q TC_CONFIG_XT $CONFIG
     then
 	return
@@ -347,6 +336,20 @@ EOF
     rm -f $TMPDIR/strtest.c $TMPDIR/strtest
 }
 
+check_cap()
+{
+	if ${PKG_CONFIG} libcap --exists
+	then
+		echo "HAVE_CAP:=y" >>$CONFIG
+		echo "yes"
+
+		echo 'CFLAGS += -DHAVE_LIBCAP' `${PKG_CONFIG} libcap --cflags` >>$CONFIG
+		echo 'LDLIBS +=' `${PKG_CONFIG} libcap --libs` >> $CONFIG
+	else
+		echo "no"
+	fi
+}
+
 quiet_config()
 {
 	cat <<EOF
@@ -421,10 +424,8 @@ check_berkeley_db
 echo -n "need for strlcpy: "
 check_strlcpy
 
-echo
-echo -n "docs:"
-check_docs
-echo
+echo -n "libcap support: "
+check_cap
 
 echo >> $CONFIG
 echo "%.o: %.c" >> $CONFIG

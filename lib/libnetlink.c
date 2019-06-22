@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <net/if_arp.h>
 #include <sys/socket.h>
@@ -66,13 +65,13 @@ static int err_attr_cb(const struct nlattr *attr, void *data)
 }
 
 /* dump netlink extended ack error message */
-static int nl_dump_ext_err(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
+int nl_dump_ext_ack(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
 {
 	struct nlattr *tb[NLMSGERR_ATTR_MAX + 1] = {};
 	const struct nlmsgerr *err = mnl_nlmsg_get_payload(nlh);
 	const struct nlmsghdr *err_nlh = NULL;
 	unsigned int hlen = sizeof(*err);
-	const char *errmsg = NULL;
+	const char *msg = NULL;
 	uint32_t off = 0;
 
 	/* no TLVs, nothing to do here */
@@ -87,7 +86,7 @@ static int nl_dump_ext_err(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
 		return 0;
 
 	if (tb[NLMSGERR_ATTR_MSG])
-		errmsg = mnl_attr_get_str(tb[NLMSGERR_ATTR_MSG]);
+		msg = mnl_attr_get_str(tb[NLMSGERR_ATTR_MSG]);
 
 	if (tb[NLMSGERR_ATTR_OFFS]) {
 		off = mnl_attr_get_u32(tb[NLMSGERR_ATTR_OFFS]);
@@ -101,15 +100,18 @@ static int nl_dump_ext_err(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
 	}
 
 	if (errfn)
-		return errfn(errmsg, off, err_nlh);
+		return errfn(msg, off, err_nlh);
 
-	if (errmsg && *errmsg != '\0') {
-		fprintf(stderr, "Error: %s", errmsg);
-		if (errmsg[strlen(errmsg) - 1] != '.')
+	if (msg && *msg != '\0') {
+		bool is_err = !!err->error;
+
+		fprintf(stderr, "%s: %s",
+			is_err ? "Error" : "Warning", msg);
+		if (msg[strlen(msg) - 1] != '.')
 			fprintf(stderr, ".");
 		fprintf(stderr, "\n");
 
-		return 1;
+		return is_err ? 1 : 0;
 	}
 
 	return 0;
@@ -118,7 +120,7 @@ static int nl_dump_ext_err(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
 #warning "libmnl required for error support"
 
 /* No extended error ack without libmnl */
-static int nl_dump_ext_err(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
+int nl_dump_ext_ack(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
 {
 	return 0;
 }
@@ -379,6 +381,9 @@ static int rtnl_dump_done(struct nlmsghdr *h)
 		return len;
 	}
 
+	/* check for any messages returned from kernel */
+	nl_dump_ext_ack(h, NULL);
+
 	return 0;
 }
 
@@ -402,6 +407,64 @@ static void rtnl_dump_error(const struct rtnl_handle *rth,
 	}
 }
 
+static int __rtnl_recvmsg(int fd, struct msghdr *msg, int flags)
+{
+	int len;
+
+	do {
+		len = recvmsg(fd, msg, flags);
+	} while (len < 0 && (errno == EINTR || errno == EAGAIN));
+
+	if (len < 0) {
+		fprintf(stderr, "netlink receive error %s (%d)\n",
+			strerror(errno), errno);
+		return -errno;
+	}
+
+	if (len == 0) {
+		fprintf(stderr, "EOF on netlink\n");
+		return -ENODATA;
+	}
+
+	return len;
+}
+
+static int rtnl_recvmsg(int fd, struct msghdr *msg, char **answer)
+{
+	struct iovec *iov = msg->msg_iov;
+	char *buf;
+	int len;
+
+	iov->iov_base = NULL;
+	iov->iov_len = 0;
+
+	len = __rtnl_recvmsg(fd, msg, MSG_PEEK | MSG_TRUNC);
+	if (len < 0)
+		return len;
+
+	buf = malloc(len);
+	if (!buf) {
+		fprintf(stderr, "malloc error: not enough buffer\n");
+		return -ENOMEM;
+	}
+
+	iov->iov_base = buf;
+	iov->iov_len = len;
+
+	len = __rtnl_recvmsg(fd, msg, 0);
+	if (len < 0) {
+		free(buf);
+		return len;
+	}
+
+	if (answer)
+		*answer = buf;
+	else
+		free(buf);
+
+	return len;
+}
+
 int rtnl_dump_filter_l(struct rtnl_handle *rth,
 		       const struct rtnl_dump_filter_arg *arg)
 {
@@ -413,31 +476,18 @@ int rtnl_dump_filter_l(struct rtnl_handle *rth,
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
-	char buf[32768];
+	char *buf;
 	int dump_intr = 0;
 
-	iov.iov_base = buf;
 	while (1) {
 		int status;
 		const struct rtnl_dump_filter_arg *a;
 		int found_done = 0;
 		int msglen = 0;
 
-		iov.iov_len = sizeof(buf);
-		status = recvmsg(rth->fd, &msg, 0);
-
-		if (status < 0) {
-			if (errno == EINTR || errno == EAGAIN)
-				continue;
-			fprintf(stderr, "netlink receive error %s (%d)\n",
-				strerror(errno), errno);
-			return -1;
-		}
-
-		if (status == 0) {
-			fprintf(stderr, "EOF on netlink\n");
-			return -1;
-		}
+		status = rtnl_recvmsg(rth->fd, &msg, &buf);
+		if (status < 0)
+			return status;
 
 		if (rth->dump_fp)
 			fwrite(buf, 1, NLMSG_ALIGN(status), rth->dump_fp);
@@ -462,8 +512,10 @@ int rtnl_dump_filter_l(struct rtnl_handle *rth,
 
 				if (h->nlmsg_type == NLMSG_DONE) {
 					err = rtnl_dump_done(h);
-					if (err < 0)
+					if (err < 0) {
+						free(buf);
 						return -1;
+					}
 
 					found_done = 1;
 					break; /* process next filter */
@@ -471,19 +523,23 @@ int rtnl_dump_filter_l(struct rtnl_handle *rth,
 
 				if (h->nlmsg_type == NLMSG_ERROR) {
 					rtnl_dump_error(rth, h);
+					free(buf);
 					return -1;
 				}
 
 				if (!rth->dump_fp) {
 					err = a->filter(&nladdr, h, a->arg1);
-					if (err < 0)
+					if (err < 0) {
+						free(buf);
 						return err;
+					}
 				}
 
 skip_it:
 				h = NLMSG_NEXT(h, msglen);
 			}
 		}
+		free(buf);
 
 		if (found_done) {
 			if (dump_intr)
@@ -518,37 +574,37 @@ int rtnl_dump_filter_nc(struct rtnl_handle *rth,
 static void rtnl_talk_error(struct nlmsghdr *h, struct nlmsgerr *err,
 			    nl_ext_ack_fn_t errfn)
 {
-	if (nl_dump_ext_err(h, errfn))
+	if (nl_dump_ext_ack(h, errfn))
 		return;
 
 	fprintf(stderr, "RTNETLINK answers: %s\n",
 		strerror(-err->error));
 }
 
-static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
-		       struct nlmsghdr *answer, size_t maxlen,
-		       bool show_rtnl_err, nl_ext_ack_fn_t errfn)
+
+static int __rtnl_talk_iov(struct rtnl_handle *rtnl, struct iovec *iov,
+			   size_t iovlen, struct nlmsghdr **answer,
+			   bool show_rtnl_err, nl_ext_ack_fn_t errfn)
 {
-	int status;
-	unsigned int seq;
-	struct nlmsghdr *h;
 	struct sockaddr_nl nladdr = { .nl_family = AF_NETLINK };
-	struct iovec iov = {
-		.iov_base = n,
-		.iov_len = n->nlmsg_len
-	};
+	struct iovec riov;
 	struct msghdr msg = {
 		.msg_name = &nladdr,
 		.msg_namelen = sizeof(nladdr),
-		.msg_iov = &iov,
-		.msg_iovlen = 1,
+		.msg_iov = iov,
+		.msg_iovlen = iovlen,
 	};
-	char   buf[32768] = {};
+	unsigned int seq = 0;
+	struct nlmsghdr *h;
+	int i, status;
+	char *buf;
 
-	n->nlmsg_seq = seq = ++rtnl->seq;
-
-	if (answer == NULL)
-		n->nlmsg_flags |= NLM_F_ACK;
+	for (i = 0; i < iovlen; i++) {
+		h = iov[i].iov_base;
+		h->nlmsg_seq = seq = ++rtnl->seq;
+		if (answer == NULL)
+			h->nlmsg_flags |= NLM_F_ACK;
+	}
 
 	status = sendmsg(rtnl->fd, &msg, 0);
 	if (status < 0) {
@@ -556,22 +612,17 @@ static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 		return -1;
 	}
 
-	iov.iov_base = buf;
+	/* change msg to use the response iov */
+	msg.msg_iov = &riov;
+	msg.msg_iovlen = 1;
+	i = 0;
 	while (1) {
-		iov.iov_len = sizeof(buf);
-		status = recvmsg(rtnl->fd, &msg, 0);
+		status = rtnl_recvmsg(rtnl->fd, &msg, &buf);
+		++i;
 
-		if (status < 0) {
-			if (errno == EINTR || errno == EAGAIN)
-				continue;
-			fprintf(stderr, "netlink receive error %s (%d)\n",
-				strerror(errno), errno);
-			return -1;
-		}
-		if (status == 0) {
-			fprintf(stderr, "EOF on netlink\n");
-			return -1;
-		}
+		if (status < 0)
+			return status;
+
 		if (msg.msg_namelen != sizeof(nladdr)) {
 			fprintf(stderr,
 				"sender address length == %d\n",
@@ -585,6 +636,7 @@ static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 			if (l < 0 || len > status) {
 				if (msg.msg_flags & MSG_TRUNC) {
 					fprintf(stderr, "Truncated message\n");
+					free(buf);
 					return -1;
 				}
 				fprintf(stderr,
@@ -595,7 +647,7 @@ static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 
 			if (nladdr.nl_pid != 0 ||
 			    h->nlmsg_pid != rtnl->local.nl_pid ||
-			    h->nlmsg_seq != seq) {
+			    h->nlmsg_seq > seq || h->nlmsg_seq < seq - iovlen) {
 				/* Don't forget to skip that message. */
 				status -= NLMSG_ALIGN(len);
 				h = (struct nlmsghdr *)((char *)h + NLMSG_ALIGN(len));
@@ -604,27 +656,35 @@ static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 
 			if (h->nlmsg_type == NLMSG_ERROR) {
 				struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(h);
+				int error = err->error;
 
 				if (l < sizeof(struct nlmsgerr)) {
 					fprintf(stderr, "ERROR truncated\n");
-				} else if (!err->error) {
-					if (answer)
-						memcpy(answer, h,
-						       MIN(maxlen, h->nlmsg_len));
-					return 0;
+					free(buf);
+					return -1;
 				}
 
-				if (rtnl->proto != NETLINK_SOCK_DIAG &&
-				    show_rtnl_err)
-					rtnl_talk_error(h, err, errfn);
+				if (!error) {
+					/* check messages from kernel */
+					nl_dump_ext_ack(h, errfn);
+				} else {
+					errno = -error;
 
-				errno = -err->error;
-				return -1;
+					if (rtnl->proto != NETLINK_SOCK_DIAG &&
+					    show_rtnl_err)
+						rtnl_talk_error(h, err, errfn);
+				}
+
+				if (answer)
+					*answer = (struct nlmsghdr *)buf;
+				else
+					free(buf);
+
+				return error ? -i : 0;
 			}
 
 			if (answer) {
-				memcpy(answer, h,
-				       MIN(maxlen, h->nlmsg_len));
+				*answer = (struct nlmsghdr *)buf;
 				return 0;
 			}
 
@@ -633,6 +693,7 @@ static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 			status -= NLMSG_ALIGN(len);
 			h = (struct nlmsghdr *)((char *)h + NLMSG_ALIGN(len));
 		}
+		free(buf);
 
 		if (msg.msg_flags & MSG_TRUNC) {
 			fprintf(stderr, "Message truncated\n");
@@ -646,23 +707,41 @@ static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 	}
 }
 
-int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
-	      struct nlmsghdr *answer, size_t maxlen)
+static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
+		       struct nlmsghdr **answer,
+		       bool show_rtnl_err, nl_ext_ack_fn_t errfn)
 {
-	return __rtnl_talk(rtnl, n, answer, maxlen, true, NULL);
+	struct iovec iov = {
+		.iov_base = n,
+		.iov_len = n->nlmsg_len
+	};
+
+	return __rtnl_talk_iov(rtnl, &iov, 1, answer, show_rtnl_err, errfn);
+}
+
+int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
+	      struct nlmsghdr **answer)
+{
+	return __rtnl_talk(rtnl, n, answer, true, NULL);
+}
+
+int rtnl_talk_iov(struct rtnl_handle *rtnl, struct iovec *iovec, size_t iovlen,
+		  struct nlmsghdr **answer)
+{
+	return __rtnl_talk_iov(rtnl, iovec, iovlen, answer, true, NULL);
 }
 
 int rtnl_talk_extack(struct rtnl_handle *rtnl, struct nlmsghdr *n,
-		     struct nlmsghdr *answer, size_t maxlen,
+		     struct nlmsghdr **answer,
 		     nl_ext_ack_fn_t errfn)
 {
-	return __rtnl_talk(rtnl, n, answer, maxlen, true, errfn);
+	return __rtnl_talk(rtnl, n, answer, true, errfn);
 }
 
 int rtnl_talk_suppress_rtnl_errmsg(struct rtnl_handle *rtnl, struct nlmsghdr *n,
-				   struct nlmsghdr *answer, size_t maxlen)
+				   struct nlmsghdr **answer)
 {
-	return __rtnl_talk(rtnl, n, answer, maxlen, false, NULL);
+	return __rtnl_talk(rtnl, n, answer, false, NULL);
 }
 
 int rtnl_listen_all_nsid(struct rtnl_handle *rth)

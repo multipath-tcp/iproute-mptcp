@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -170,7 +169,8 @@ done:
 }
 
 
-static int rsvp_parse_opt(struct filter_util *qu, char *handle, int argc, char **argv, struct nlmsghdr *n)
+static int rsvp_parse_opt(struct filter_util *qu, char *handle, int argc,
+			  char **argv, struct nlmsghdr *n)
 {
 	int family = strcmp(qu->id, "rsvp") == 0 ? AF_INET : AF_INET6;
 	struct tc_rsvp_pinfo pinfo = {};
@@ -188,8 +188,7 @@ static int rsvp_parse_opt(struct filter_util *qu, char *handle, int argc, char *
 	if (argc == 0)
 		return 0;
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 4096, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 4096, TCA_OPTIONS);
 
 	while (argc > 0) {
 		if (matches(*argv, "session") == 0) {
@@ -294,7 +293,7 @@ static int rsvp_parse_opt(struct filter_util *qu, char *handle, int argc, char *
 
 	if (pinfo_ok)
 		addattr_l(n, 4096, TCA_RSVP_PINFO, &pinfo, sizeof(pinfo));
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_nest_end(n, tail);
 	return 0;
 }
 

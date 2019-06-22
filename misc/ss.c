@@ -12,11 +12,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/sysmacros.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <errno.h>
@@ -27,6 +27,7 @@
 #include <getopt.h>
 #include <stdbool.h>
 #include <limits.h>
+#include <stdarg.h>
 
 #include "utils.h"
 #include "rt_names.h"
@@ -44,8 +45,15 @@
 #include <linux/packet_diag.h>
 #include <linux/netlink_diag.h>
 #include <linux/sctp.h>
+#include <linux/vm_sockets_diag.h>
+#include <linux/net.h>
+#include <linux/tipc.h>
+#include <linux/tipc_netlink.h>
+#include <linux/tipc_sockets_diag.h>
 
 #define MAGIC_SEQ 123456
+#define BUF_CHUNK (1024 * 1024)
+#define LEN_ALIGN(x) (((x) + 1) & ~1)
 
 #define DIAG_REQUEST(_req, _r)						    \
 	struct {							    \
@@ -101,12 +109,73 @@ int show_sock_ctx;
 int show_header = 1;
 int follow_events;
 int sctp_ino;
+int show_tipcinfo;
 
-int netid_width;
-int state_width;
-int addr_width;
-int serv_width;
-char *odd_width_pad = "";
+enum col_id {
+	COL_NETID,
+	COL_STATE,
+	COL_RECVQ,
+	COL_SENDQ,
+	COL_ADDR,
+	COL_SERV,
+	COL_RADDR,
+	COL_RSERV,
+	COL_EXT,
+	COL_MAX
+};
+
+enum col_align {
+	ALIGN_LEFT,
+	ALIGN_CENTER,
+	ALIGN_RIGHT
+};
+
+struct column {
+	const enum col_align align;
+	const char *header;
+	const char *ldelim;
+	int disabled;
+	int width;	/* Calculated, including additional layout spacing */
+	int max_len;	/* Measured maximum field length in this column */
+};
+
+static struct column columns[] = {
+	{ ALIGN_LEFT,	"Netid",		"",	0, 0, 0 },
+	{ ALIGN_LEFT,	"State",		" ",	0, 0, 0 },
+	{ ALIGN_LEFT,	"Recv-Q",		" ",	0, 0, 0 },
+	{ ALIGN_LEFT,	"Send-Q",		" ",	0, 0, 0 },
+	{ ALIGN_RIGHT,	"Local Address:",	" ",	0, 0, 0 },
+	{ ALIGN_LEFT,	"Port",			"",	0, 0, 0 },
+	{ ALIGN_RIGHT,	"Peer Address:",	" ",	0, 0, 0 },
+	{ ALIGN_LEFT,	"Port",			"",	0, 0, 0 },
+	{ ALIGN_LEFT,	"",			"",	0, 0, 0 },
+};
+
+static struct column *current_field = columns;
+
+/* Output buffer: chained chunks of BUF_CHUNK bytes. Each field is written to
+ * the buffer as a variable size token. A token consists of a 16 bits length
+ * field, followed by a string which is not NULL-terminated.
+ *
+ * A new chunk is allocated and linked when the current chunk doesn't have
+ * enough room to store the current token as a whole.
+ */
+struct buf_chunk {
+	struct buf_chunk *next;	/* Next chained chunk */
+	char *end;		/* Current end of content */
+	char data[0];
+};
+
+struct buf_token {
+	uint16_t len;		/* Data length, excluding length descriptor */
+	char data[0];
+};
+
+static struct {
+	struct buf_token *cur;	/* Position of current token in chunk */
+	struct buf_chunk *head;	/* First chunk */
+	struct buf_chunk *tail;	/* Current chunk */
+} buffer;
 
 static const char *TCP_PROTO = "tcp";
 static const char *SCTP_PROTO = "sctp";
@@ -126,6 +195,9 @@ enum {
 	PACKET_R_DB,
 	NETLINK_DB,
 	SCTP_DB,
+	VSOCK_ST_DB,
+	VSOCK_DG_DB,
+	TIPC_DB,
 	MAX_DB
 };
 
@@ -134,6 +206,7 @@ enum {
 #define ALL_DB ((1<<MAX_DB)-1)
 #define INET_L4_DBM ((1<<TCP_DB)|(1<<UDP_DB)|(1<<DCCP_DB)|(1<<SCTP_DB))
 #define INET_DBM (INET_L4_DBM | (1<<RAW_DB))
+#define VSOCK_DBM ((1<<VSOCK_ST_DB)|(1<<VSOCK_DG_DB))
 
 enum {
 	SS_UNKNOWN,
@@ -164,61 +237,77 @@ enum {
 
 #define SS_ALL ((1 << SS_MAX) - 1)
 #define SS_CONN (SS_ALL & ~((1<<SS_LISTEN)|(1<<SS_CLOSE)|(1<<SS_TIME_WAIT)|(1<<SS_SYN_RECV)))
+#define TIPC_SS_CONN ((1<<SS_ESTABLISHED)|(1<<SS_LISTEN)|(1<<SS_CLOSE))
 
 #include "ssfilter.h"
 
 struct filter {
 	int dbs;
 	int states;
-	int families;
+	uint64_t families;
 	struct ssfilter *f;
 	bool kill;
+	struct rtnl_handle *rth_for_killing;
 };
+
+#define FAMILY_MASK(family) ((uint64_t)1 << (family))
 
 static const struct filter default_dbs[MAX_DB] = {
 	[TCP_DB] = {
 		.states   = SS_CONN,
-		.families = (1 << AF_INET) | (1 << AF_INET6),
+		.families = FAMILY_MASK(AF_INET) | FAMILY_MASK(AF_INET6),
 	},
 	[DCCP_DB] = {
 		.states   = SS_CONN,
-		.families = (1 << AF_INET) | (1 << AF_INET6),
+		.families = FAMILY_MASK(AF_INET) | FAMILY_MASK(AF_INET6),
 	},
 	[UDP_DB] = {
 		.states   = (1 << SS_ESTABLISHED),
-		.families = (1 << AF_INET) | (1 << AF_INET6),
+		.families = FAMILY_MASK(AF_INET) | FAMILY_MASK(AF_INET6),
 	},
 	[RAW_DB] = {
 		.states   = (1 << SS_ESTABLISHED),
-		.families = (1 << AF_INET) | (1 << AF_INET6),
+		.families = FAMILY_MASK(AF_INET) | FAMILY_MASK(AF_INET6),
 	},
 	[UNIX_DG_DB] = {
 		.states   = (1 << SS_CLOSE),
-		.families = (1 << AF_UNIX),
+		.families = FAMILY_MASK(AF_UNIX),
 	},
 	[UNIX_ST_DB] = {
 		.states   = SS_CONN,
-		.families = (1 << AF_UNIX),
+		.families = FAMILY_MASK(AF_UNIX),
 	},
 	[UNIX_SQ_DB] = {
 		.states   = SS_CONN,
-		.families = (1 << AF_UNIX),
+		.families = FAMILY_MASK(AF_UNIX),
 	},
 	[PACKET_DG_DB] = {
 		.states   = (1 << SS_CLOSE),
-		.families = (1 << AF_PACKET),
+		.families = FAMILY_MASK(AF_PACKET),
 	},
 	[PACKET_R_DB] = {
 		.states   = (1 << SS_CLOSE),
-		.families = (1 << AF_PACKET),
+		.families = FAMILY_MASK(AF_PACKET),
 	},
 	[NETLINK_DB] = {
 		.states   = (1 << SS_CLOSE),
-		.families = (1 << AF_NETLINK),
+		.families = FAMILY_MASK(AF_NETLINK),
 	},
 	[SCTP_DB] = {
 		.states   = SS_CONN,
-		.families = (1 << AF_INET) | (1 << AF_INET6),
+		.families = FAMILY_MASK(AF_INET) | FAMILY_MASK(AF_INET6),
+	},
+	[VSOCK_ST_DB] = {
+		.states   = SS_CONN,
+		.families = FAMILY_MASK(AF_VSOCK),
+	},
+	[VSOCK_DG_DB] = {
+		.states   = SS_CONN,
+		.families = FAMILY_MASK(AF_VSOCK),
+	},
+	[TIPC_DB] = {
+		.states   = TIPC_SS_CONN,
+		.families = FAMILY_MASK(AF_TIPC),
 	},
 };
 
@@ -243,44 +332,96 @@ static const struct filter default_afs[AF_MAX] = {
 		.dbs    = (1 << NETLINK_DB),
 		.states = (1 << SS_CLOSE),
 	},
+	[AF_VSOCK] = {
+		.dbs    = VSOCK_DBM,
+		.states = SS_CONN,
+	},
+	[AF_TIPC] = {
+		.dbs    = (1 << TIPC_DB),
+		.states = TIPC_SS_CONN,
+	},
 };
 
 static int do_default = 1;
 static struct filter current_filter;
 
-static void filter_db_set(struct filter *f, int db)
+static void filter_db_set(struct filter *f, int db, bool enable)
 {
-	f->states   |= default_dbs[db].states;
-	f->dbs	    |= 1 << db;
+	if (enable) {
+		f->states   |= default_dbs[db].states;
+		f->dbs	    |= 1 << db;
+	} else {
+		f->dbs &= ~(1 << db);
+	}
 	do_default   = 0;
+}
+
+static int filter_db_parse(struct filter *f, const char *s)
+{
+	const struct {
+		const char *name;
+		int dbs[MAX_DB + 1];
+	} db_name_tbl[] = {
+#define ENTRY(name, ...) { #name, { __VA_ARGS__, MAX_DB } }
+		ENTRY(all, UDP_DB, DCCP_DB, TCP_DB, RAW_DB,
+			   UNIX_ST_DB, UNIX_DG_DB, UNIX_SQ_DB,
+			   PACKET_R_DB, PACKET_DG_DB, NETLINK_DB,
+			   SCTP_DB, VSOCK_ST_DB, VSOCK_DG_DB),
+		ENTRY(inet, UDP_DB, DCCP_DB, TCP_DB, SCTP_DB, RAW_DB),
+		ENTRY(udp, UDP_DB),
+		ENTRY(dccp, DCCP_DB),
+		ENTRY(tcp, TCP_DB),
+		ENTRY(sctp, SCTP_DB),
+		ENTRY(raw, RAW_DB),
+		ENTRY(unix, UNIX_ST_DB, UNIX_DG_DB, UNIX_SQ_DB),
+		ENTRY(unix_stream, UNIX_ST_DB),
+		ENTRY(u_str, UNIX_ST_DB),	/* alias for unix_stream */
+		ENTRY(unix_dgram, UNIX_DG_DB),
+		ENTRY(u_dgr, UNIX_DG_DB),	/* alias for unix_dgram */
+		ENTRY(unix_seqpacket, UNIX_SQ_DB),
+		ENTRY(u_seq, UNIX_SQ_DB),	/* alias for unix_seqpacket */
+		ENTRY(packet, PACKET_R_DB, PACKET_DG_DB),
+		ENTRY(packet_raw, PACKET_R_DB),
+		ENTRY(p_raw, PACKET_R_DB),	/* alias for packet_raw */
+		ENTRY(packet_dgram, PACKET_DG_DB),
+		ENTRY(p_dgr, PACKET_DG_DB),	/* alias for packet_dgram */
+		ENTRY(netlink, NETLINK_DB),
+		ENTRY(vsock, VSOCK_ST_DB, VSOCK_DG_DB),
+		ENTRY(vsock_stream, VSOCK_ST_DB),
+		ENTRY(v_str, VSOCK_ST_DB),	/* alias for vsock_stream */
+		ENTRY(vsock_dgram, VSOCK_DG_DB),
+		ENTRY(v_dgr, VSOCK_DG_DB),	/* alias for vsock_dgram */
+#undef ENTRY
+	};
+	bool enable = true;
+	unsigned int i;
+	const int *dbp;
+
+	if (s[0] == '!') {
+		enable = false;
+		s++;
+	}
+	for (i = 0; i < ARRAY_SIZE(db_name_tbl); i++) {
+		if (strcmp(s, db_name_tbl[i].name))
+			continue;
+		for (dbp = db_name_tbl[i].dbs; *dbp != MAX_DB; dbp++)
+			filter_db_set(f, *dbp, enable);
+		return 0;
+	}
+	return -1;
 }
 
 static void filter_af_set(struct filter *f, int af)
 {
 	f->states	   |= default_afs[af].states;
-	f->families	   |= 1 << af;
+	f->families	   |= FAMILY_MASK(af);
 	do_default	    = 0;
 	preferred_family    = af;
 }
 
 static int filter_af_get(struct filter *f, int af)
 {
-	return f->families & (1 << af);
-}
-
-static void filter_default_dbs(struct filter *f)
-{
-	filter_db_set(f, UDP_DB);
-	filter_db_set(f, DCCP_DB);
-	filter_db_set(f, TCP_DB);
-	filter_db_set(f, RAW_DB);
-	filter_db_set(f, UNIX_ST_DB);
-	filter_db_set(f, UNIX_DG_DB);
-	filter_db_set(f, UNIX_SQ_DB);
-	filter_db_set(f, PACKET_R_DB);
-	filter_db_set(f, PACKET_DG_DB);
-	filter_db_set(f, NETLINK_DB);
-	filter_db_set(f, SCTP_DB);
+	return !!(f->families & FAMILY_MASK(af));
 }
 
 static void filter_states_set(struct filter *f, int states)
@@ -302,7 +443,7 @@ static void filter_merge_defaults(struct filter *f)
 			f->families |= default_dbs[db].families;
 	}
 	for (af = 0; af < AF_MAX; af++) {
-		if (!(f->families & (1 << af)))
+		if (!(f->families & FAMILY_MASK(af)))
 			continue;
 
 		if (!(default_afs[af].dbs & f->dbs))
@@ -334,7 +475,6 @@ static FILE *generic_proc_open(const char *env, const char *name)
 							"net/packet")
 #define net_netlink_open()	generic_proc_open("PROC_NET_NETLINK", \
 							"net/netlink")
-#define slabinfo_open()		generic_proc_open("PROC_SLABINFO", "slabinfo")
 #define net_sockstat_open()	generic_proc_open("PROC_NET_SOCKSTAT", \
 							"net/sockstat")
 #define net_sockstat6_open()	generic_proc_open("PROC_NET_SOCKSTAT6", \
@@ -588,67 +728,6 @@ next:
 	return cnt;
 }
 
-/* Get stats from slab */
-
-struct slabstat {
-	int socks;
-	int tcp_ports;
-	int tcp_tws;
-	int tcp_syns;
-	int skbs;
-};
-
-static struct slabstat slabstat;
-
-static int get_slabstat(struct slabstat *s)
-{
-	char buf[256];
-	FILE *fp;
-	int cnt;
-	static int slabstat_valid;
-	static const char * const slabstat_ids[] = {
-		"sock",
-		"tcp_bind_bucket",
-		"tcp_tw_bucket",
-		"tcp_open_request",
-		"skbuff_head_cache",
-	};
-
-	if (slabstat_valid)
-		return 0;
-
-	memset(s, 0, sizeof(*s));
-
-	fp = slabinfo_open();
-	if (!fp)
-		return -1;
-
-	cnt = sizeof(*s)/sizeof(int);
-
-	if (!fgets(buf, sizeof(buf), fp)) {
-		fclose(fp);
-		return -1;
-	}
-	while (fgets(buf, sizeof(buf), fp) != NULL) {
-		int i;
-
-		for (i = 0; i < ARRAY_SIZE(slabstat_ids); i++) {
-			if (memcmp(buf, slabstat_ids[i], strlen(slabstat_ids[i])) == 0) {
-				sscanf(buf, "%*s%d", ((int *)s) + i);
-				cnt--;
-				break;
-			}
-		}
-		if (cnt <= 0)
-			break;
-	}
-
-	slabstat_valid = 1;
-
-	fclose(fp);
-	return 0;
-}
-
 static unsigned long long cookie_sk_get(const uint32_t *cookie)
 {
 	return (((unsigned long long)cookie[1] << 31) << 1) | cookie[0];
@@ -663,6 +742,14 @@ static const char *sctp_sstate_name[] = {
 	[SCTP_STATE_SHUTDOWN_SENT] = "SHUTDOWN_SENT",
 	[SCTP_STATE_SHUTDOWN_RECEIVED] = "SHUTDOWN_RECEIVED",
 	[SCTP_STATE_SHUTDOWN_ACK_SENT] = "ACK_SENT",
+};
+
+static const char * const stype_nameg[] = {
+	"UNKNOWN",
+	[SOCK_STREAM] = "STREAM",
+	[SOCK_DGRAM] = "DGRAM",
+	[SOCK_RDM] = "RDM",
+	[SOCK_SEQPACKET] = "SEQPACKET",
 };
 
 struct sockstat {
@@ -708,6 +795,7 @@ struct tcpstat {
 	int		    mss;
 	int		    rcv_mss;
 	int		    advmss;
+	unsigned int	    pmtu;
 	unsigned int	    cwnd;
 	unsigned int	    lastsnd;
 	unsigned int	    lastrcv;
@@ -732,6 +820,7 @@ struct tcpstat {
 	double		    rcv_rtt;
 	double		    min_rtt;
 	int		    rcv_space;
+	unsigned int        rcv_ssthresh;
 	unsigned long long  busy_time;
 	unsigned long long  rwnd_limited;
 	unsigned long long  sndbuf_limited;
@@ -791,6 +880,413 @@ static const char *proto_name(int protocol)
 	return "???";
 }
 
+static const char *vsock_netid_name(int type)
+{
+	switch (type) {
+	case SOCK_STREAM:
+		return "v_str";
+	case SOCK_DGRAM:
+		return "v_dgr";
+	default:
+		return "???";
+	}
+}
+
+static const char *tipc_netid_name(int type)
+{
+	switch (type) {
+	case SOCK_STREAM:
+		return "ti_st";
+	case SOCK_DGRAM:
+		return "ti_dg";
+	case SOCK_RDM:
+		return "ti_rd";
+	case SOCK_SEQPACKET:
+		return "ti_sq";
+	default:
+		return "???";
+	}
+}
+
+/* Allocate and initialize a new buffer chunk */
+static struct buf_chunk *buf_chunk_new(void)
+{
+	struct buf_chunk *new = malloc(BUF_CHUNK);
+
+	if (!new)
+		abort();
+
+	new->next = NULL;
+
+	/* This is also the last block */
+	buffer.tail = new;
+
+	/* Next token will be stored at the beginning of chunk data area, and
+	 * its initial length is zero.
+	 */
+	buffer.cur = (struct buf_token *)new->data;
+	buffer.cur->len = 0;
+
+	new->end = buffer.cur->data;
+
+	return new;
+}
+
+/* Return available tail room in given chunk */
+static int buf_chunk_avail(struct buf_chunk *chunk)
+{
+	return BUF_CHUNK - offsetof(struct buf_chunk, data) -
+	       (chunk->end - chunk->data);
+}
+
+/* Update end pointer and token length, link new chunk if we hit the end of the
+ * current one. Return -EAGAIN if we got a new chunk, caller has to print again.
+ */
+static int buf_update(int len)
+{
+	struct buf_chunk *chunk = buffer.tail;
+	struct buf_token *t = buffer.cur;
+
+	/* Claim success if new content fits in the current chunk, and anyway
+	 * if this is the first token in the chunk: in the latter case,
+	 * allocating a new chunk won't help, so we'll just cut the output.
+	 */
+	if ((len < buf_chunk_avail(chunk) && len != -1 /* glibc < 2.0.6 */) ||
+	    t == (struct buf_token *)chunk->data) {
+		len = min(len, buf_chunk_avail(chunk));
+
+		/* Total field length can't exceed 2^16 bytes, cut as needed */
+		len = min(len, USHRT_MAX - t->len);
+
+		chunk->end += len;
+		t->len += len;
+		return 0;
+	}
+
+	/* Content truncated, time to allocate more */
+	chunk->next = buf_chunk_new();
+
+	/* Copy current token over to new chunk, including length descriptor */
+	memcpy(chunk->next->data, t, sizeof(t->len) + t->len);
+	chunk->next->end += t->len;
+
+	/* Discard partially written field in old chunk */
+	chunk->end -= t->len + sizeof(t->len);
+
+	return -EAGAIN;
+}
+
+/* Append content to buffer as part of the current field */
+__attribute__((format(printf, 1, 2)))
+static void out(const char *fmt, ...)
+{
+	struct column *f = current_field;
+	va_list args;
+	char *pos;
+	int len;
+
+	if (f->disabled)
+		return;
+
+	if (!buffer.head)
+		buffer.head = buf_chunk_new();
+
+again:	/* Append to buffer: if we have a new chunk, print again */
+
+	pos = buffer.cur->data + buffer.cur->len;
+	va_start(args, fmt);
+
+	/* Limit to tail room. If we hit the limit, buf_update() will tell us */
+	len = vsnprintf(pos, buf_chunk_avail(buffer.tail), fmt, args);
+	va_end(args);
+
+	if (buf_update(len))
+		goto again;
+}
+
+static int print_left_spacing(struct column *f, int stored, int printed)
+{
+	int s;
+
+	if (!f->width || f->align == ALIGN_LEFT)
+		return 0;
+
+	s = f->width - stored - printed;
+	if (f->align == ALIGN_CENTER)
+		/* If count of total spacing is odd, shift right by one */
+		s = (s + 1) / 2;
+
+	if (s > 0)
+		return printf("%*c", s, ' ');
+
+	return 0;
+}
+
+static void print_right_spacing(struct column *f, int printed)
+{
+	int s;
+
+	if (!f->width || f->align == ALIGN_RIGHT)
+		return;
+
+	s = f->width - printed;
+	if (f->align == ALIGN_CENTER)
+		s /= 2;
+
+	if (s > 0)
+		printf("%*c", s, ' ');
+}
+
+/* Done with field: update buffer pointer, start new token after current one */
+static void field_flush(struct column *f)
+{
+	struct buf_chunk *chunk;
+	unsigned int pad;
+
+	if (f->disabled)
+		return;
+
+	chunk = buffer.tail;
+	pad = buffer.cur->len % 2;
+
+	if (buffer.cur->len > f->max_len)
+		f->max_len = buffer.cur->len;
+
+	/* We need a new chunk if we can't store the next length descriptor.
+	 * Mind the gap between end of previous token and next aligned position
+	 * for length descriptor.
+	 */
+	if (buf_chunk_avail(chunk) - pad < sizeof(buffer.cur->len)) {
+		chunk->end += pad;
+		chunk->next = buf_chunk_new();
+		return;
+	}
+
+	buffer.cur = (struct buf_token *)(buffer.cur->data +
+					  LEN_ALIGN(buffer.cur->len));
+	buffer.cur->len = 0;
+	buffer.tail->end = buffer.cur->data;
+}
+
+static int field_is_last(struct column *f)
+{
+	return f - columns == COL_MAX - 1;
+}
+
+static void field_next(void)
+{
+	field_flush(current_field);
+
+	if (field_is_last(current_field))
+		current_field = columns;
+	else
+		current_field++;
+}
+
+/* Walk through fields and flush them until we reach the desired one */
+static void field_set(enum col_id id)
+{
+	while (id != current_field - columns)
+		field_next();
+}
+
+/* Print header for all non-empty columns */
+static void print_header(void)
+{
+	while (!field_is_last(current_field)) {
+		if (!current_field->disabled)
+			out("%s", current_field->header);
+		field_next();
+	}
+}
+
+/* Get the next available token in the buffer starting from the current token */
+static struct buf_token *buf_token_next(struct buf_token *cur)
+{
+	struct buf_chunk *chunk = buffer.tail;
+
+	/* If we reached the end of chunk contents, get token from next chunk */
+	if (cur->data + LEN_ALIGN(cur->len) == chunk->end) {
+		buffer.tail = chunk = chunk->next;
+		return chunk ? (struct buf_token *)chunk->data : NULL;
+	}
+
+	return (struct buf_token *)(cur->data + LEN_ALIGN(cur->len));
+}
+
+/* Free up all allocated buffer chunks */
+static void buf_free_all(void)
+{
+	struct buf_chunk *tmp;
+
+	for (buffer.tail = buffer.head; buffer.tail; ) {
+		tmp = buffer.tail;
+		buffer.tail = buffer.tail->next;
+		free(tmp);
+	}
+	buffer.head = NULL;
+}
+
+/* Get current screen width, default to 80 columns if TIOCGWINSZ fails */
+static int render_screen_width(void)
+{
+	int width = 80;
+
+	if (isatty(STDOUT_FILENO)) {
+		struct winsize w;
+
+		if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) != -1) {
+			if (w.ws_col > 0)
+				width = w.ws_col;
+		}
+	}
+
+	return width;
+}
+
+/* Calculate column width from contents length. If columns don't fit on one
+ * line, break them into the least possible amount of lines and keep them
+ * aligned across lines. Available screen space is equally spread between fields
+ * as additional spacing.
+ */
+static void render_calc_width(void)
+{
+	int screen_width = render_screen_width();
+	struct column *c, *eol = columns - 1;
+	int first, len = 0, linecols = 0;
+
+	/* First pass: set width for each column to measured content length */
+	for (first = 1, c = columns; c - columns < COL_MAX; c++) {
+		if (c->disabled)
+			continue;
+
+		if (!first && c->max_len)
+			c->width = c->max_len + strlen(c->ldelim);
+		else
+			c->width = c->max_len;
+
+		/* But don't exceed screen size. If we exceed the screen size
+		 * for even a single field, it will just start on a line of its
+		 * own and then naturally wrap.
+		 */
+		c->width = min(c->width, screen_width);
+
+		if (c->width)
+			first = 0;
+	}
+
+	/* Second pass: find out newlines and distribute available spacing */
+	for (c = columns; c - columns < COL_MAX; c++) {
+		int pad, spacing, rem, last;
+		struct column *tmp;
+
+		if (!c->width)
+			continue;
+
+		linecols++;
+		len += c->width;
+
+		for (last = 1, tmp = c + 1; tmp - columns < COL_MAX; tmp++) {
+			if (tmp->width) {
+				last = 0;
+				break;
+			}
+		}
+
+		if (!last && len < screen_width) {
+			/* Columns fit on screen so far, nothing to do yet */
+			continue;
+		}
+
+		if (len == screen_width) {
+			/* Exact fit, just start with new line */
+			goto newline;
+		}
+
+		if (len > screen_width) {
+			/* Screen width exceeded: go back one column */
+			len -= c->width;
+			c--;
+			linecols--;
+		}
+
+		/* Distribute remaining space to columns on this line */
+		pad = screen_width - len;
+		spacing = pad / linecols;
+		rem = pad % linecols;
+		for (tmp = c; tmp > eol; tmp--) {
+			if (!tmp->width)
+				continue;
+
+			tmp->width += spacing;
+			if (rem) {
+				tmp->width++;
+				rem--;
+			}
+		}
+
+newline:
+		/* Line break: reset line counters, mark end-of-line */
+		eol = c;
+		len = 0;
+		linecols = 0;
+	}
+}
+
+/* Render buffered output with spacing and delimiters, then free up buffers */
+static void render(void)
+{
+	struct buf_token *token;
+	int printed, line_started = 0;
+	struct column *f;
+
+	if (!buffer.head)
+		return;
+
+	token = (struct buf_token *)buffer.head->data;
+
+	/* Ensure end alignment of last token, it wasn't necessarily flushed */
+	buffer.tail->end += buffer.cur->len % 2;
+
+	render_calc_width();
+
+	/* Rewind and replay */
+	buffer.tail = buffer.head;
+
+	f = columns;
+	while (!f->width)
+		f++;
+
+	while (token) {
+		/* Print left delimiter only if we already started a line */
+		if (line_started++)
+			printed = printf("%s", current_field->ldelim);
+		else
+			printed = 0;
+
+		/* Print field content from token data with spacing */
+		printed += print_left_spacing(f, token->len, printed);
+		printed += fwrite(token->data, 1, token->len, stdout);
+		print_right_spacing(f, printed);
+
+		/* Go to next non-empty field, deal with end-of-line */
+		do {
+			if (field_is_last(f)) {
+				printf("\n");
+				f = columns;
+				line_started = 0;
+			} else {
+				f++;
+			}
+		} while (f->disabled);
+
+		token = buf_token_next(token);
+	}
+
+	buf_free_all();
+	current_field = columns;
+}
+
 static void sock_state_print(struct sockstat *s)
 {
 	const char *sock_name;
@@ -823,51 +1319,56 @@ static void sock_state_print(struct sockstat *s)
 	case AF_NETLINK:
 		sock_name = "nl";
 		break;
+	case AF_TIPC:
+		sock_name = tipc_netid_name(s->type);
+		break;
+	case AF_VSOCK:
+		sock_name = vsock_netid_name(s->type);
+		break;
 	default:
 		sock_name = "unknown";
 	}
 
-	if (netid_width)
-		printf("%-*s ", netid_width,
-		       is_sctp_assoc(s, sock_name) ? "" : sock_name);
-	if (state_width) {
-		if (is_sctp_assoc(s, sock_name))
-			printf("`- %-*s ", state_width - 3,
-			       sctp_sstate_name[s->state]);
-		else
-			printf("%-*s ", state_width, sstate_name[s->state]);
+	if (is_sctp_assoc(s, sock_name)) {
+		field_set(COL_STATE);		/* Empty Netid field */
+		out("`- %s", sctp_sstate_name[s->state]);
+	} else {
+		field_set(COL_NETID);
+		out("%s", sock_name);
+		field_set(COL_STATE);
+		out("%s", sstate_name[s->state]);
 	}
 
-	printf("%-6d %-6d %s", s->rq, s->wq, odd_width_pad);
+	field_set(COL_RECVQ);
+	out("%-6d", s->rq);
+	field_set(COL_SENDQ);
+	out("%-6d", s->wq);
+	field_set(COL_ADDR);
 }
 
 static void sock_details_print(struct sockstat *s)
 {
 	if (s->uid)
-		printf(" uid:%u", s->uid);
+		out(" uid:%u", s->uid);
 
-	printf(" ino:%u", s->ino);
-	printf(" sk:%llx", s->sk);
+	out(" ino:%u", s->ino);
+	out(" sk:%llx", s->sk);
 
 	if (s->mark)
-		printf(" fwmark:0x%x", s->mark);
-}
-
-static void sock_addr_print_width(int addr_len, const char *addr, char *delim,
-		int port_len, const char *port, const char *ifname)
-{
-	if (ifname) {
-		printf("%*s%%%s%s%-*s ", addr_len, addr, ifname, delim,
-				port_len, port);
-	} else {
-		printf("%*s%s%-*s ", addr_len, addr, delim, port_len, port);
-	}
+		out(" fwmark:0x%x", s->mark);
 }
 
 static void sock_addr_print(const char *addr, char *delim, const char *port,
 		const char *ifname)
 {
-	sock_addr_print_width(addr_width, addr, delim, serv_width, port, ifname);
+	if (ifname)
+		out("%s" "%%" "%s%s", addr, ifname, delim);
+	else
+		out("%s%s", addr, delim);
+
+	field_next();
+	out("%s", port);
+	field_next();
 }
 
 static const char *print_ms_timer(unsigned int timeout)
@@ -1048,7 +1549,6 @@ static void inet_addr_print(const inet_prefix *a, int port,
 {
 	char buf[1024];
 	const char *ap = buf;
-	int est_len = addr_width;
 	const char *ifname = NULL;
 
 	if (a->family == AF_INET) {
@@ -1067,24 +1567,13 @@ static void inet_addr_print(const inet_prefix *a, int port,
 					 "[%s]", ap);
 				ap = buf;
 			}
-
-			est_len = strlen(ap);
-			if (est_len <= addr_width)
-				est_len = addr_width;
-			else
-				est_len = addr_width + ((est_len-addr_width+3)/4)*4;
 		}
 	}
 
-	if (ifindex) {
-		ifname   = ll_index_to_name(ifindex);
-		est_len -= strlen(ifname) + 1;  /* +1 for percent char */
-		if (est_len < 0)
-			est_len = 0;
-	}
+	if (ifindex)
+		ifname = ll_index_to_name(ifindex);
 
-	sock_addr_print_width(est_len, ap, ":", serv_width, resolve_service(port),
-			ifname);
+	sock_addr_print(ap, ":", resolve_service(port), ifname);
 }
 
 struct aafilter {
@@ -1146,6 +1635,8 @@ static int run_ssfilter(struct ssfilter *f, struct sockstat *s)
 			return s->lport == 0 && s->local.data[0] == 0;
 		if (s->local.family == AF_NETLINK)
 			return s->lport < 0;
+		if (s->local.family == AF_VSOCK)
+			return s->lport > 1023;
 
 		return is_ephemeral(s->lport);
 	}
@@ -1521,6 +2012,15 @@ void *parse_devcond(char *name)
 	return res;
 }
 
+static void vsock_set_inet_prefix(inet_prefix *a, __u32 cid)
+{
+	*a = (inet_prefix){
+		.bytelen = sizeof(cid),
+		.family = AF_VSOCK,
+	};
+	memcpy(a->data, &cid, sizeof(cid));
+}
+
 void *parse_hostcond(char *addr, bool is_port)
 {
 	char *port = NULL;
@@ -1592,6 +2092,37 @@ void *parse_hostcond(char *addr, bool is_port)
 				return NULL;
 		}
 		fam = AF_NETLINK;
+		goto out;
+	}
+
+	if (fam == AF_VSOCK || strncmp(addr, "vsock:", 6) == 0) {
+		__u32 cid = ~(__u32)0;
+
+		a.addr.family = AF_VSOCK;
+		if (strncmp(addr, "vsock:", 6) == 0)
+			addr += 6;
+
+		if (is_port)
+			port = addr;
+		else {
+			port = strchr(addr, ':');
+			if (port) {
+				*port = '\0';
+				port++;
+			}
+		}
+
+		if (port && strcmp(port, "*") &&
+		    get_u32((__u32 *)&a.port, port, 0))
+			return NULL;
+
+		if (addr[0] && strcmp(addr, "*")) {
+			a.addr.bitlen = 32;
+			if (get_u32(&cid, addr, 0))
+				return NULL;
+		}
+		vsock_set_inet_prefix(&a.addr, cid);
+		fam = AF_VSOCK;
 		goto out;
 	}
 
@@ -1716,12 +2247,12 @@ static void proc_ctx_print(struct sockstat *s)
 		if (find_entry(s->ino, &buf,
 				(show_proc_ctx & show_sock_ctx) ?
 				PROC_SOCK_CTX : PROC_CTX) > 0) {
-			printf(" users:(%s)", buf);
+			out(" users:(%s)", buf);
 			free(buf);
 		}
 	} else if (show_users) {
 		if (find_entry(s->ino, &buf, USERS) > 0) {
-			printf(" users:(%s)", buf);
+			out(" users:(%s)", buf);
 			free(buf);
 		}
 	}
@@ -1801,51 +2332,51 @@ static char *sprint_bw(char *buf, double bw)
 static void sctp_stats_print(struct sctp_info *s)
 {
 	if (s->sctpi_tag)
-		printf(" tag:%x", s->sctpi_tag);
+		out(" tag:%x", s->sctpi_tag);
 	if (s->sctpi_state)
-		printf(" state:%s", sctp_sstate_name[s->sctpi_state]);
+		out(" state:%s", sctp_sstate_name[s->sctpi_state]);
 	if (s->sctpi_rwnd)
-		printf(" rwnd:%d", s->sctpi_rwnd);
+		out(" rwnd:%d", s->sctpi_rwnd);
 	if (s->sctpi_unackdata)
-		printf(" unackdata:%d", s->sctpi_unackdata);
+		out(" unackdata:%d", s->sctpi_unackdata);
 	if (s->sctpi_penddata)
-		printf(" penddata:%d", s->sctpi_penddata);
+		out(" penddata:%d", s->sctpi_penddata);
 	if (s->sctpi_instrms)
-		printf(" instrms:%d", s->sctpi_instrms);
+		out(" instrms:%d", s->sctpi_instrms);
 	if (s->sctpi_outstrms)
-		printf(" outstrms:%d", s->sctpi_outstrms);
+		out(" outstrms:%d", s->sctpi_outstrms);
 	if (s->sctpi_inqueue)
-		printf(" inqueue:%d", s->sctpi_inqueue);
+		out(" inqueue:%d", s->sctpi_inqueue);
 	if (s->sctpi_outqueue)
-		printf(" outqueue:%d", s->sctpi_outqueue);
+		out(" outqueue:%d", s->sctpi_outqueue);
 	if (s->sctpi_overall_error)
-		printf(" overerr:%d", s->sctpi_overall_error);
+		out(" overerr:%d", s->sctpi_overall_error);
 	if (s->sctpi_max_burst)
-		printf(" maxburst:%d", s->sctpi_max_burst);
+		out(" maxburst:%d", s->sctpi_max_burst);
 	if (s->sctpi_maxseg)
-		printf(" maxseg:%d", s->sctpi_maxseg);
+		out(" maxseg:%d", s->sctpi_maxseg);
 	if (s->sctpi_peer_rwnd)
-		printf(" prwnd:%d", s->sctpi_peer_rwnd);
+		out(" prwnd:%d", s->sctpi_peer_rwnd);
 	if (s->sctpi_peer_tag)
-		printf(" ptag:%x", s->sctpi_peer_tag);
+		out(" ptag:%x", s->sctpi_peer_tag);
 	if (s->sctpi_peer_capable)
-		printf(" pcapable:%d", s->sctpi_peer_capable);
+		out(" pcapable:%d", s->sctpi_peer_capable);
 	if (s->sctpi_peer_sack)
-		printf(" psack:%d", s->sctpi_peer_sack);
+		out(" psack:%d", s->sctpi_peer_sack);
 	if (s->sctpi_s_autoclose)
-		printf(" autoclose:%d", s->sctpi_s_autoclose);
+		out(" autoclose:%d", s->sctpi_s_autoclose);
 	if (s->sctpi_s_adaptation_ind)
-		printf(" adapind:%d", s->sctpi_s_adaptation_ind);
+		out(" adapind:%d", s->sctpi_s_adaptation_ind);
 	if (s->sctpi_s_pd_point)
-		printf(" pdpoint:%d", s->sctpi_s_pd_point);
+		out(" pdpoint:%d", s->sctpi_s_pd_point);
 	if (s->sctpi_s_nodelay)
-		printf(" nodealy:%d", s->sctpi_s_nodelay);
+		out(" nodealy:%d", s->sctpi_s_nodelay);
 	if (s->sctpi_s_disable_fragments)
-		printf(" nofrag:%d", s->sctpi_s_disable_fragments);
+		out(" nofrag:%d", s->sctpi_s_disable_fragments);
 	if (s->sctpi_s_v4mapped)
-		printf(" v4mapped:%d", s->sctpi_s_v4mapped);
+		out(" v4mapped:%d", s->sctpi_s_v4mapped);
 	if (s->sctpi_s_frag_interleave)
-		printf(" fraginl:%d", s->sctpi_s_frag_interleave);
+		out(" fraginl:%d", s->sctpi_s_frag_interleave);
 }
 
 static void tcp_stats_print(struct tcpstat *s)
@@ -1853,65 +2384,67 @@ static void tcp_stats_print(struct tcpstat *s)
 	char b1[64];
 
 	if (s->has_ts_opt)
-		printf(" ts");
+		out(" ts");
 	if (s->has_sack_opt)
-		printf(" sack");
+		out(" sack");
 	if (s->has_ecn_opt)
-		printf(" ecn");
+		out(" ecn");
 	if (s->has_ecnseen_opt)
-		printf(" ecnseen");
+		out(" ecnseen");
 	if (s->has_fastopen_opt)
-		printf(" fastopen");
+		out(" fastopen");
 	if (s->cong_alg[0])
-		printf(" %s", s->cong_alg);
+		out(" %s", s->cong_alg);
 	if (s->has_wscale_opt)
-		printf(" wscale:%d,%d", s->snd_wscale, s->rcv_wscale);
+		out(" wscale:%d,%d", s->snd_wscale, s->rcv_wscale);
 	if (s->rto)
-		printf(" rto:%g", s->rto);
+		out(" rto:%g", s->rto);
 	if (s->backoff)
-		printf(" backoff:%u", s->backoff);
+		out(" backoff:%u", s->backoff);
 	if (s->rtt)
-		printf(" rtt:%g/%g", s->rtt, s->rttvar);
+		out(" rtt:%g/%g", s->rtt, s->rttvar);
 	if (s->ato)
-		printf(" ato:%g", s->ato);
+		out(" ato:%g", s->ato);
 
 	if (s->qack)
-		printf(" qack:%d", s->qack);
+		out(" qack:%d", s->qack);
 	if (s->qack & 1)
-		printf(" bidir");
+		out(" bidir");
 
 	if (s->mss)
-		printf(" mss:%d", s->mss);
+		out(" mss:%d", s->mss);
+	if (s->pmtu)
+		out(" pmtu:%u", s->pmtu);
 	if (s->rcv_mss)
-		printf(" rcvmss:%d", s->rcv_mss);
+		out(" rcvmss:%d", s->rcv_mss);
 	if (s->advmss)
-		printf(" advmss:%d", s->advmss);
+		out(" advmss:%d", s->advmss);
 	if (s->cwnd)
-		printf(" cwnd:%u", s->cwnd);
+		out(" cwnd:%u", s->cwnd);
 	if (s->ssthresh)
-		printf(" ssthresh:%d", s->ssthresh);
+		out(" ssthresh:%d", s->ssthresh);
 
 	if (s->bytes_acked)
-		printf(" bytes_acked:%llu", s->bytes_acked);
+		out(" bytes_acked:%llu", s->bytes_acked);
 	if (s->bytes_received)
-		printf(" bytes_received:%llu", s->bytes_received);
+		out(" bytes_received:%llu", s->bytes_received);
 	if (s->segs_out)
-		printf(" segs_out:%u", s->segs_out);
+		out(" segs_out:%u", s->segs_out);
 	if (s->segs_in)
-		printf(" segs_in:%u", s->segs_in);
+		out(" segs_in:%u", s->segs_in);
 	if (s->data_segs_out)
-		printf(" data_segs_out:%u", s->data_segs_out);
+		out(" data_segs_out:%u", s->data_segs_out);
 	if (s->data_segs_in)
-		printf(" data_segs_in:%u", s->data_segs_in);
+		out(" data_segs_in:%u", s->data_segs_in);
 
 	if (s->dctcp && s->dctcp->enabled) {
 		struct dctcpstat *dctcp = s->dctcp;
 
-		printf(" dctcp:(ce_state:%u,alpha:%u,ab_ecn:%u,ab_tot:%u)",
-				dctcp->ce_state, dctcp->alpha, dctcp->ab_ecn,
-				dctcp->ab_tot);
+		out(" dctcp:(ce_state:%u,alpha:%u,ab_ecn:%u,ab_tot:%u)",
+			     dctcp->ce_state, dctcp->alpha, dctcp->ab_ecn,
+			     dctcp->ab_tot);
 	} else if (s->dctcp) {
-		printf(" dctcp:fallback_mode");
+		out(" dctcp:fallback_mode");
 	}
 
 	if (s->bbr_info) {
@@ -1921,71 +2454,72 @@ static void tcp_stats_print(struct tcpstat *s)
 		bw <<= 32;
 		bw |= s->bbr_info->bbr_bw_lo;
 
-		printf(" bbr:(bw:%sbps,mrtt:%g",
-		       sprint_bw(b1, bw * 8.0),
-		       (double)s->bbr_info->bbr_min_rtt / 1000.0);
+		out(" bbr:(bw:%sbps,mrtt:%g",
+		    sprint_bw(b1, bw * 8.0),
+		    (double)s->bbr_info->bbr_min_rtt / 1000.0);
 		if (s->bbr_info->bbr_pacing_gain)
-			printf(",pacing_gain:%g",
-			       (double)s->bbr_info->bbr_pacing_gain / 256.0);
+			out(",pacing_gain:%g",
+			    (double)s->bbr_info->bbr_pacing_gain / 256.0);
 		if (s->bbr_info->bbr_cwnd_gain)
-			printf(",cwnd_gain:%g",
-			       (double)s->bbr_info->bbr_cwnd_gain / 256.0);
-		printf(")");
+			out(",cwnd_gain:%g",
+			    (double)s->bbr_info->bbr_cwnd_gain / 256.0);
+		out(")");
 	}
 
 	if (s->send_bps)
-		printf(" send %sbps", sprint_bw(b1, s->send_bps));
+		out(" send %sbps", sprint_bw(b1, s->send_bps));
 	if (s->lastsnd)
-		printf(" lastsnd:%u", s->lastsnd);
+		out(" lastsnd:%u", s->lastsnd);
 	if (s->lastrcv)
-		printf(" lastrcv:%u", s->lastrcv);
+		out(" lastrcv:%u", s->lastrcv);
 	if (s->lastack)
-		printf(" lastack:%u", s->lastack);
+		out(" lastack:%u", s->lastack);
 
 	if (s->pacing_rate) {
-		printf(" pacing_rate %sbps", sprint_bw(b1, s->pacing_rate));
+		out(" pacing_rate %sbps", sprint_bw(b1, s->pacing_rate));
 		if (s->pacing_rate_max)
-				printf("/%sbps", sprint_bw(b1,
-							s->pacing_rate_max));
+			out("/%sbps", sprint_bw(b1, s->pacing_rate_max));
 	}
 
 	if (s->delivery_rate)
-		printf(" delivery_rate %sbps", sprint_bw(b1, s->delivery_rate));
+		out(" delivery_rate %sbps", sprint_bw(b1, s->delivery_rate));
 	if (s->app_limited)
-		printf(" app_limited");
+		out(" app_limited");
 
 	if (s->busy_time) {
-		printf(" busy:%llums", s->busy_time / 1000);
+		out(" busy:%llums", s->busy_time / 1000);
 		if (s->rwnd_limited)
-			printf(" rwnd_limited:%llums(%.1f%%)",
-			       s->rwnd_limited / 1000,
-			       100.0 * s->rwnd_limited / s->busy_time);
+			out(" rwnd_limited:%llums(%.1f%%)",
+			    s->rwnd_limited / 1000,
+			    100.0 * s->rwnd_limited / s->busy_time);
 		if (s->sndbuf_limited)
-			printf(" sndbuf_limited:%llums(%.1f%%)",
-			       s->sndbuf_limited / 1000,
-			       100.0 * s->sndbuf_limited / s->busy_time);
+			out(" sndbuf_limited:%llums(%.1f%%)",
+			    s->sndbuf_limited / 1000,
+			    100.0 * s->sndbuf_limited / s->busy_time);
 	}
 
 	if (s->unacked)
-		printf(" unacked:%u", s->unacked);
+		out(" unacked:%u", s->unacked);
 	if (s->retrans || s->retrans_total)
-		printf(" retrans:%u/%u", s->retrans, s->retrans_total);
+		out(" retrans:%u/%u", s->retrans, s->retrans_total);
 	if (s->lost)
-		printf(" lost:%u", s->lost);
+		out(" lost:%u", s->lost);
 	if (s->sacked && s->ss.state != SS_LISTEN)
-		printf(" sacked:%u", s->sacked);
+		out(" sacked:%u", s->sacked);
 	if (s->fackets)
-		printf(" fackets:%u", s->fackets);
+		out(" fackets:%u", s->fackets);
 	if (s->reordering != 3)
-		printf(" reordering:%d", s->reordering);
+		out(" reordering:%d", s->reordering);
 	if (s->rcv_rtt)
-		printf(" rcv_rtt:%g", s->rcv_rtt);
+		out(" rcv_rtt:%g", s->rcv_rtt);
 	if (s->rcv_space)
-		printf(" rcv_space:%d", s->rcv_space);
+		out(" rcv_space:%d", s->rcv_space);
+	if (s->rcv_ssthresh)
+		out(" rcv_ssthresh:%u", s->rcv_ssthresh);
 	if (s->not_sent)
-		printf(" notsent:%u", s->not_sent);
+		out(" notsent:%u", s->not_sent);
 	if (s->min_rtt)
-		printf(" minrtt:%g", s->min_rtt);
+		out(" minrtt:%g", s->min_rtt);
 }
 
 static void tcp_timer_print(struct tcpstat *s)
@@ -2002,18 +2536,18 @@ static void tcp_timer_print(struct tcpstat *s)
 	if (s->timer) {
 		if (s->timer > 4)
 			s->timer = 5;
-		printf(" timer:(%s,%s,%d)",
-				tmr_name[s->timer],
-				print_ms_timer(s->timeout),
-				s->retrans);
+		out(" timer:(%s,%s,%d)",
+			     tmr_name[s->timer],
+			     print_ms_timer(s->timeout),
+			     s->retrans);
 	}
 }
 
 static void sctp_timer_print(struct tcpstat *s)
 {
 	if (s->timer)
-		printf(" timer:(T3_RTX,%s,%d)",
-		       print_ms_timer(s->timeout), s->retrans);
+		out(" timer:(T3_RTX,%s,%d)",
+		    print_ms_timer(s->timeout), s->retrans);
 }
 
 static int tcp_show_line(char *line, const struct filter *f, int family)
@@ -2072,13 +2606,12 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 	if (show_details) {
 		sock_details_print(&s.ss);
 		if (opt[0])
-			printf(" opt:\"%s\"", opt);
+			out(" opt:\"%s\"", opt);
 	}
 
 	if (show_tcpinfo)
 		tcp_stats_print(&s);
 
-	printf("\n");
 	return 0;
 }
 
@@ -2121,44 +2654,44 @@ static void print_skmeminfo(struct rtattr *tb[], int attrtype)
 			const struct inet_diag_meminfo *minfo =
 				RTA_DATA(tb[INET_DIAG_MEMINFO]);
 
-			printf(" mem:(r%u,w%u,f%u,t%u)",
-					minfo->idiag_rmem,
-					minfo->idiag_wmem,
-					minfo->idiag_fmem,
-					minfo->idiag_tmem);
+			out(" mem:(r%u,w%u,f%u,t%u)",
+				   minfo->idiag_rmem,
+				   minfo->idiag_wmem,
+				   minfo->idiag_fmem,
+				   minfo->idiag_tmem);
 		}
 		return;
 	}
 
 	skmeminfo = RTA_DATA(tb[attrtype]);
 
-	printf(" skmem:(r%u,rb%u,t%u,tb%u,f%u,w%u,o%u",
-	       skmeminfo[SK_MEMINFO_RMEM_ALLOC],
-	       skmeminfo[SK_MEMINFO_RCVBUF],
-	       skmeminfo[SK_MEMINFO_WMEM_ALLOC],
-	       skmeminfo[SK_MEMINFO_SNDBUF],
-	       skmeminfo[SK_MEMINFO_FWD_ALLOC],
-	       skmeminfo[SK_MEMINFO_WMEM_QUEUED],
-	       skmeminfo[SK_MEMINFO_OPTMEM]);
+	out(" skmem:(r%u,rb%u,t%u,tb%u,f%u,w%u,o%u",
+		     skmeminfo[SK_MEMINFO_RMEM_ALLOC],
+		     skmeminfo[SK_MEMINFO_RCVBUF],
+		     skmeminfo[SK_MEMINFO_WMEM_ALLOC],
+		     skmeminfo[SK_MEMINFO_SNDBUF],
+		     skmeminfo[SK_MEMINFO_FWD_ALLOC],
+		     skmeminfo[SK_MEMINFO_WMEM_QUEUED],
+		     skmeminfo[SK_MEMINFO_OPTMEM]);
 
 	if (RTA_PAYLOAD(tb[attrtype]) >=
 		(SK_MEMINFO_BACKLOG + 1) * sizeof(__u32))
-		printf(",bl%u", skmeminfo[SK_MEMINFO_BACKLOG]);
+		out(",bl%u", skmeminfo[SK_MEMINFO_BACKLOG]);
 
 	if (RTA_PAYLOAD(tb[attrtype]) >=
 		(SK_MEMINFO_DROPS + 1) * sizeof(__u32))
-		printf(",d%u", skmeminfo[SK_MEMINFO_DROPS]);
+		out(",d%u", skmeminfo[SK_MEMINFO_DROPS]);
 
-	printf(")");
+	out(")");
 }
 
 static void print_md5sig(struct tcp_diag_md5sig *sig)
 {
-	printf("%s/%d=",
-	       format_host(sig->tcpm_family,
-			   sig->tcpm_family == AF_INET6 ? 16 : 4,
-			   &sig->tcpm_addr),
-	       sig->tcpm_prefixlen);
+	out("%s/%d=",
+	    format_host(sig->tcpm_family,
+			sig->tcpm_family == AF_INET6 ? 16 : 4,
+			&sig->tcpm_addr),
+	    sig->tcpm_prefixlen);
 	print_escape_buf(sig->tcpm_key, sig->tcpm_keylen, " ,");
 }
 
@@ -2227,8 +2760,9 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 		s.sacked	 = info->tcpi_sacked;
 		s.fackets	 = info->tcpi_fackets;
 		s.reordering	 = info->tcpi_reordering;
-		s.rcv_space	 = info->tcpi_rcv_space;
+		s.rcv_ssthresh   = info->tcpi_rcv_ssthresh;
 		s.cwnd		 = info->tcpi_snd_cwnd;
+		s.pmtu		 = info->tcpi_pmtu;
 
 		if (info->tcpi_snd_ssthresh < 0xFFFF)
 			s.ssthresh = info->tcpi_snd_ssthresh;
@@ -2303,10 +2837,10 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 		struct tcp_diag_md5sig *sig = RTA_DATA(tb[INET_DIAG_MD5SIG]);
 		int len = RTA_PAYLOAD(tb[INET_DIAG_MD5SIG]);
 
-		printf(" md5keys:");
+		out(" md5keys:");
 		print_md5sig(sig++);
 		for (len -= sizeof(*sig); len > 0; len -= sizeof(*sig)) {
-			printf(",");
+			out(",");
 			print_md5sig(sig++);
 		}
 	}
@@ -2341,18 +2875,18 @@ static void sctp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 		len = RTA_PAYLOAD(tb[INET_DIAG_LOCALS]);
 		sa = RTA_DATA(tb[INET_DIAG_LOCALS]);
 
-		printf("locals:%s", format_host_sa(sa));
+		out("locals:%s", format_host_sa(sa));
 		for (sa++, len -= sizeof(*sa); len > 0; sa++, len -= sizeof(*sa))
-			printf(",%s", format_host_sa(sa));
+			out(",%s", format_host_sa(sa));
 
 	}
 	if (tb[INET_DIAG_PEERS]) {
 		len = RTA_PAYLOAD(tb[INET_DIAG_PEERS]);
 		sa = RTA_DATA(tb[INET_DIAG_PEERS]);
 
-		printf(" peers:%s", format_host_sa(sa));
+		out(" peers:%s", format_host_sa(sa));
 		for (sa++, len -= sizeof(*sa); len > 0; sa++, len -= sizeof(*sa))
-			printf(",%s", format_host_sa(sa));
+			out(",%s", format_host_sa(sa));
 	}
 	if (tb[INET_DIAG_INFO]) {
 		struct sctp_info *info;
@@ -2439,18 +2973,19 @@ static int inet_show_sock(struct nlmsghdr *nlh,
 	if (show_details) {
 		sock_details_print(s);
 		if (s->local.family == AF_INET6 && tb[INET_DIAG_SKV6ONLY])
-			printf(" v6only:%u", v6only);
+			out(" v6only:%u", v6only);
 
 		if (tb[INET_DIAG_SHUTDOWN]) {
 			unsigned char mask;
 
 			mask = rta_getattr_u8(tb[INET_DIAG_SHUTDOWN]);
-			printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
+			out(" %c-%c",
+			    mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
 		}
 	}
 
 	if (show_mem || (show_tcpinfo && s->type != IPPROTO_UDP)) {
-		printf("\n\t");
+		out("\n\t");
 		if (s->type == IPPROTO_SCTP)
 			sctp_show_info(nlh, r, tb);
 		else
@@ -2458,7 +2993,6 @@ static int inet_show_sock(struct nlmsghdr *nlh,
 	}
 	sctp_ino = s->ino;
 
-	printf("\n");
 	return 0;
 }
 
@@ -2619,7 +3153,7 @@ static int kill_inet_sock(struct nlmsghdr *h, void *arg, struct sockstat *s)
 		raw->sdiag_raw_protocol = s->raw_prot;
 	}
 
-	return rtnl_talk(rth, &req.nlh, NULL, 0);
+	return rtnl_talk(rth, &req.nlh, NULL);
 }
 
 static int show_one_inet_sock(const struct sockaddr_nl *addr,
@@ -2630,7 +3164,7 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 	struct inet_diag_msg *r = NLMSG_DATA(h);
 	struct sockstat s = {};
 
-	if (!(diag_arg->f->families & (1 << r->idiag_family)))
+	if (!(diag_arg->f->families & FAMILY_MASK(r->idiag_family)))
 		return 0;
 
 	parse_diag_msg(h, &s);
@@ -2778,7 +3312,7 @@ static int tcp_show(struct filter *f)
 {
 	FILE *fp = NULL;
 	char *buf = NULL;
-	int bufsize = 64*1024;
+	int bufsize = 1024*1024;
 
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6))
 		return 0;
@@ -2793,27 +3327,6 @@ static int tcp_show(struct filter *f)
 		return 0;
 
 	/* Sigh... We have to parse /proc/net/tcp... */
-
-
-	/* Estimate amount of sockets and try to allocate
-	 * huge buffer to read all the table at one read.
-	 * Limit it by 16MB though. The assumption is: as soon as
-	 * kernel was able to hold information about N connections,
-	 * it is able to give us some memory for snapshot.
-	 */
-	if (1) {
-		get_slabstat(&slabstat);
-
-		int guess = slabstat.socks+slabstat.tcp_syns;
-
-		if (f->states&(1<<SS_TIME_WAIT))
-			guess += slabstat.tcp_tws;
-		if (guess > (16*1024*1024)/128)
-			guess = (16*1024*1024)/128;
-		guess *= 128;
-		if (guess > bufsize)
-			bufsize = guess;
-	}
 	while (bufsize >= 64*1024) {
 		if ((buf = malloc(bufsize)) != NULL)
 			break;
@@ -2824,7 +3337,7 @@ static int tcp_show(struct filter *f)
 		return -1;
 	}
 
-	if (f->families & (1<<AF_INET)) {
+	if (f->families & FAMILY_MASK(AF_INET)) {
 		if ((fp = net_tcp_open()) == NULL)
 			goto outerr;
 
@@ -2834,7 +3347,7 @@ static int tcp_show(struct filter *f)
 		fclose(fp);
 	}
 
-	if ((f->families & (1<<AF_INET6)) &&
+	if ((f->families & FAMILY_MASK(AF_INET6)) &&
 	    (fp = net_tcp6_open()) != NULL) {
 		setbuffer(fp, buf, bufsize);
 		if (generic_record_read(fp, tcp_show_line, f, AF_INET6))
@@ -2914,9 +3427,8 @@ static int dgram_show_line(char *line, const struct filter *f, int family)
 	inet_stats_print(&s, false);
 
 	if (show_details && opt[0])
-		printf(" opt:\"%s\"", opt);
+		out(" opt:\"%s\"", opt);
 
-	printf("\n");
 	return 0;
 }
 
@@ -2933,7 +3445,7 @@ static int udp_show(struct filter *f)
 	    && inet_show_netlink(f, NULL, IPPROTO_UDP) == 0)
 		return 0;
 
-	if (f->families&(1<<AF_INET)) {
+	if (f->families&FAMILY_MASK(AF_INET)) {
 		if ((fp = net_udp_open()) == NULL)
 			goto outerr;
 		if (generic_record_read(fp, dgram_show_line, f, AF_INET))
@@ -2941,7 +3453,7 @@ static int udp_show(struct filter *f)
 		fclose(fp);
 	}
 
-	if ((f->families&(1<<AF_INET6)) &&
+	if ((f->families&FAMILY_MASK(AF_INET6)) &&
 	    (fp = net_udp6_open()) != NULL) {
 		if (generic_record_read(fp, dgram_show_line, f, AF_INET6))
 			goto outerr;
@@ -2973,7 +3485,7 @@ static int raw_show(struct filter *f)
 	    inet_show_netlink(f, NULL, IPPROTO_RAW) == 0)
 		return 0;
 
-	if (f->families&(1<<AF_INET)) {
+	if (f->families&FAMILY_MASK(AF_INET)) {
 		if ((fp = net_raw_open()) == NULL)
 			goto outerr;
 		if (generic_record_read(fp, dgram_show_line, f, AF_INET))
@@ -2981,7 +3493,7 @@ static int raw_show(struct filter *f)
 		fclose(fp);
 	}
 
-	if ((f->families&(1<<AF_INET6)) &&
+	if ((f->families&FAMILY_MASK(AF_INET6)) &&
 	    (fp = net_raw6_open()) != NULL) {
 		if (generic_record_read(fp, dgram_show_line, f, AF_INET6))
 			goto outerr;
@@ -3091,10 +3603,25 @@ static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 			unsigned char mask;
 
 			mask = rta_getattr_u8(tb[UNIX_DIAG_SHUTDOWN]);
-			printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
+			out(" %c-%c",
+			    mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
+		}
+		if (tb[UNIX_DIAG_VFS]) {
+			struct unix_diag_vfs *uv = RTA_DATA(tb[UNIX_DIAG_VFS]);
+
+			out(" ino:%u dev:%u/%u", uv->udiag_vfs_ino, major(uv->udiag_vfs_dev),
+						 minor(uv->udiag_vfs_dev));
+		}
+		if (tb[UNIX_DIAG_ICONS]) {
+			int len = RTA_PAYLOAD(tb[UNIX_DIAG_ICONS]);
+			__u32 *peers = RTA_DATA(tb[UNIX_DIAG_ICONS]);
+			int i;
+
+			out(" peers:");
+			for (i = 0; i < len / sizeof(__u32); i++)
+				out(" %u", peers[i]);
 		}
 	}
-	printf("\n");
 
 	return 0;
 }
@@ -3131,6 +3658,8 @@ static int unix_show_netlink(struct filter *f)
 	req.r.udiag_show = UDIAG_SHOW_NAME | UDIAG_SHOW_PEER | UDIAG_SHOW_RQLEN;
 	if (show_mem)
 		req.r.udiag_show |= UDIAG_SHOW_MEMINFO;
+	if (show_details)
+		req.r.udiag_show |= UDIAG_SHOW_VFS | UDIAG_SHOW_ICONS;
 
 	return handle_netlink_request(f, &req.nlh, sizeof(req), unix_show_sock);
 }
@@ -3227,7 +3756,10 @@ static int unix_show(struct filter *f)
 			};
 
 			memcpy(st.local.data, &u->name, sizeof(u->name));
-			if (strcmp(u->peer_name, "*"))
+			/* when parsing the old format rport is set to 0 and
+			 * therefore peer_name remains NULL
+			 */
+			if (u->peer_name && strcmp(u->peer_name, "*"))
 				memcpy(st.remote.data, &u->peer_name,
 				       sizeof(u->peer_name));
 			if (run_ssfilter(f->f, &st) == 0) {
@@ -3251,8 +3783,6 @@ static int unix_show(struct filter *f)
 		if (++cnt > MAX_UNIX_REMEMBER) {
 			while (list) {
 				unix_stats_print(list, f);
-				printf("\n");
-
 				unix_list_drop_first(&list);
 			}
 			cnt = 0;
@@ -3261,8 +3791,6 @@ static int unix_show(struct filter *f)
 	fclose(fp);
 	while (list) {
 		unix_stats_print(list, f);
-		printf("\n");
-
 		unix_list_drop_first(&list);
 	}
 
@@ -3307,12 +3835,12 @@ static int packet_stats_print(struct sockstat *s, const struct filter *f)
 
 static void packet_show_ring(struct packet_diag_ring *ring)
 {
-	printf("blk_size:%d", ring->pdr_block_size);
-	printf(",blk_nr:%d", ring->pdr_block_nr);
-	printf(",frm_size:%d", ring->pdr_frame_size);
-	printf(",frm_nr:%d", ring->pdr_frame_nr);
-	printf(",tmo:%d", ring->pdr_retire_tmo);
-	printf(",features:0x%x", ring->pdr_features);
+	out("blk_size:%d", ring->pdr_block_size);
+	out(",blk_nr:%d", ring->pdr_block_nr);
+	out(",frm_size:%d", ring->pdr_frame_size);
+	out(",frm_nr:%d", ring->pdr_frame_nr);
+	out(",tmo:%d", ring->pdr_retire_tmo);
+	out(",features:0x%x", ring->pdr_features);
 }
 
 static int packet_show_sock(const struct sockaddr_nl *addr,
@@ -3370,56 +3898,56 @@ static int packet_show_sock(const struct sockaddr_nl *addr,
 
 	if (show_details) {
 		if (pinfo) {
-			printf("\n\tver:%d", pinfo->pdi_version);
-			printf(" cpy_thresh:%d", pinfo->pdi_copy_thresh);
-			printf(" flags( ");
+			out("\n\tver:%d", pinfo->pdi_version);
+			out(" cpy_thresh:%d", pinfo->pdi_copy_thresh);
+			out(" flags( ");
 			if (pinfo->pdi_flags & PDI_RUNNING)
-				printf("running");
+				out("running");
 			if (pinfo->pdi_flags & PDI_AUXDATA)
-				printf(" auxdata");
+				out(" auxdata");
 			if (pinfo->pdi_flags & PDI_ORIGDEV)
-				printf(" origdev");
+				out(" origdev");
 			if (pinfo->pdi_flags & PDI_VNETHDR)
-				printf(" vnethdr");
+				out(" vnethdr");
 			if (pinfo->pdi_flags & PDI_LOSS)
-				printf(" loss");
+				out(" loss");
 			if (!pinfo->pdi_flags)
-				printf("0");
-			printf(" )");
+				out("0");
+			out(" )");
 		}
 		if (ring_rx) {
-			printf("\n\tring_rx(");
+			out("\n\tring_rx(");
 			packet_show_ring(ring_rx);
-			printf(")");
+			out(")");
 		}
 		if (ring_tx) {
-			printf("\n\tring_tx(");
+			out("\n\tring_tx(");
 			packet_show_ring(ring_tx);
-			printf(")");
+			out(")");
 		}
 		if (has_fanout) {
 			uint16_t type = (fanout >> 16) & 0xffff;
 
-			printf("\n\tfanout(");
-			printf("id:%d,", fanout & 0xffff);
-			printf("type:");
+			out("\n\tfanout(");
+			out("id:%d,", fanout & 0xffff);
+			out("type:");
 
 			if (type == 0)
-				printf("hash");
+				out("hash");
 			else if (type == 1)
-				printf("lb");
+				out("lb");
 			else if (type == 2)
-				printf("cpu");
+				out("cpu");
 			else if (type == 3)
-				printf("roll");
+				out("roll");
 			else if (type == 4)
-				printf("random");
+				out("random");
 			else if (type == 5)
-				printf("qm");
+				out("qm");
 			else
-				printf("0x%x", type);
+				out("0x%x", type);
 
-			printf(")");
+			out(")");
 		}
 	}
 
@@ -3429,15 +3957,17 @@ static int packet_show_sock(const struct sockaddr_nl *addr,
 		int num = RTA_PAYLOAD(tb[PACKET_DIAG_FILTER]) /
 			  sizeof(struct sock_filter);
 
-		printf("\n\tbpf filter (%d): ", num);
+		out("\n\tbpf filter (%d): ", num);
 		while (num) {
-			printf(" 0x%02x %u %u %u,",
-			      fil->code, fil->jt, fil->jf, fil->k);
+			out(" 0x%02x %u %u %u,",
+			    fil->code, fil->jt, fil->jf, fil->k);
 			num--;
 			fil++;
 		}
 	}
-	printf("\n");
+
+	if (show_mem)
+		print_skmeminfo(tb, PACKET_DIAG_MEMINFO);
 	return 0;
 }
 
@@ -3480,7 +4010,6 @@ static int packet_show_line(char *buf, const struct filter *f, int fam)
 	if (packet_stats_print(&stat, f))
 		return 0;
 
-	printf("\n");
 	return 0;
 }
 
@@ -3545,7 +4074,7 @@ static int netlink_show_one(struct filter *f,
 
 		if (!pid) {
 			done = 1;
-			strncpy(procname, "kernel", 6);
+			strncpy(procname, "kernel", 7);
 		} else if (pid > 0) {
 			FILE *fp;
 
@@ -3593,14 +4122,13 @@ static int netlink_show_one(struct filter *f,
 		else if (pid > 0)
 			getpidcon(pid, &pid_context);
 
-		printf(" proc_ctx=%s", pid_context ? : "unavailable");
+		out(" proc_ctx=%s", pid_context ? : "unavailable");
 		free(pid_context);
 	}
 
 	if (show_details) {
-		printf(" sk=%llx cb=%llx groups=0x%08x", sk, cb, groups);
+		out(" sk=%llx cb=%llx groups=0x%08x", sk, cb, groups);
 	}
-	printf("\n");
 
 	return 0;
 }
@@ -3636,9 +4164,8 @@ static int netlink_show_sock(const struct sockaddr_nl *addr,
 	}
 
 	if (show_mem) {
-		printf("\t");
+		out("\t");
 		print_skmeminfo(tb, NETLINK_DIAG_MEMINFO);
-		printf("\n");
 	}
 
 	return 0;
@@ -3690,6 +4217,185 @@ static int netlink_show(struct filter *f)
 	return 0;
 }
 
+static bool vsock_type_skip(struct sockstat *s, struct filter *f)
+{
+	if (s->type == SOCK_STREAM && !(f->dbs & (1 << VSOCK_ST_DB)))
+		return true;
+	if (s->type == SOCK_DGRAM && !(f->dbs & (1 << VSOCK_DG_DB)))
+		return true;
+	return false;
+}
+
+static void vsock_addr_print(inet_prefix *a, __u32 port)
+{
+	char cid_str[sizeof("4294967295")];
+	char port_str[sizeof("4294967295")];
+	__u32 cid;
+
+	memcpy(&cid, a->data, sizeof(cid));
+
+	if (cid == ~(__u32)0)
+		snprintf(cid_str, sizeof(cid_str), "*");
+	else
+		snprintf(cid_str, sizeof(cid_str), "%u", cid);
+
+	if (port == ~(__u32)0)
+		snprintf(port_str, sizeof(port_str), "*");
+	else
+		snprintf(port_str, sizeof(port_str), "%u", port);
+
+	sock_addr_print(cid_str, ":", port_str, NULL);
+}
+
+static void vsock_stats_print(struct sockstat *s, struct filter *f)
+{
+	sock_state_print(s);
+
+	vsock_addr_print(&s->local, s->lport);
+	vsock_addr_print(&s->remote, s->rport);
+
+	proc_ctx_print(s);
+}
+
+static int vsock_show_sock(const struct sockaddr_nl *addr,
+			   struct nlmsghdr *nlh, void *arg)
+{
+	struct filter *f = (struct filter *)arg;
+	struct vsock_diag_msg *r = NLMSG_DATA(nlh);
+	struct sockstat stat = {
+		.type = r->vdiag_type,
+		.lport = r->vdiag_src_port,
+		.rport = r->vdiag_dst_port,
+		.state = r->vdiag_state,
+		.ino = r->vdiag_ino,
+	};
+
+	vsock_set_inet_prefix(&stat.local, r->vdiag_src_cid);
+	vsock_set_inet_prefix(&stat.remote, r->vdiag_dst_cid);
+
+	if (vsock_type_skip(&stat, f))
+		return 0;
+
+	if (f->f && run_ssfilter(f->f, &stat) == 0)
+		return 0;
+
+	vsock_stats_print(&stat, f);
+
+	return 0;
+}
+
+static int vsock_show(struct filter *f)
+{
+	DIAG_REQUEST(req, struct vsock_diag_req r);
+
+	if (!filter_af_get(f, AF_VSOCK))
+		return 0;
+
+	req.r.sdiag_family = AF_VSOCK;
+	req.r.vdiag_states = f->states;
+
+	return handle_netlink_request(f, &req.nlh, sizeof(req), vsock_show_sock);
+}
+
+static void tipc_sock_addr_print(struct rtattr *net_addr, struct rtattr *id)
+{
+	uint32_t node = rta_getattr_u32(net_addr);
+	uint32_t identity = rta_getattr_u32(id);
+
+	SPRINT_BUF(addr) = {};
+	SPRINT_BUF(port) = {};
+
+	sprintf(addr, "%u", node);
+	sprintf(port, "%u", identity);
+	sock_addr_print(addr, ":", port, NULL);
+
+}
+
+static int tipc_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
+			  void *arg)
+{
+	struct rtattr *stat[TIPC_NLA_SOCK_STAT_MAX + 1] = {};
+	struct rtattr *attrs[TIPC_NLA_SOCK_MAX + 1] = {};
+	struct rtattr *con[TIPC_NLA_CON_MAX + 1] = {};
+	struct rtattr *info[TIPC_NLA_MAX + 1] = {};
+	struct rtattr *msg_ref;
+	struct sockstat ss = {};
+
+	parse_rtattr(info, TIPC_NLA_MAX, NLMSG_DATA(nlh),
+		     NLMSG_PAYLOAD(nlh, 0));
+
+	if (!info[TIPC_NLA_SOCK])
+		return 0;
+
+	msg_ref = info[TIPC_NLA_SOCK];
+	parse_rtattr(attrs, TIPC_NLA_SOCK_MAX, RTA_DATA(msg_ref),
+		     RTA_PAYLOAD(msg_ref));
+
+	msg_ref = attrs[TIPC_NLA_SOCK_STAT];
+	parse_rtattr(stat, TIPC_NLA_SOCK_STAT_MAX,
+		     RTA_DATA(msg_ref), RTA_PAYLOAD(msg_ref));
+
+
+	ss.local.family = AF_TIPC;
+	ss.type = rta_getattr_u32(attrs[TIPC_NLA_SOCK_TYPE]);
+	ss.state = rta_getattr_u32(attrs[TIPC_NLA_SOCK_TIPC_STATE]);
+	ss.uid = rta_getattr_u32(attrs[TIPC_NLA_SOCK_UID]);
+	ss.ino = rta_getattr_u32(attrs[TIPC_NLA_SOCK_INO]);
+	ss.rq = rta_getattr_u32(stat[TIPC_NLA_SOCK_STAT_RCVQ]);
+	ss.wq = rta_getattr_u32(stat[TIPC_NLA_SOCK_STAT_SENDQ]);
+	ss.sk = rta_getattr_u64(attrs[TIPC_NLA_SOCK_COOKIE]);
+
+	sock_state_print (&ss);
+
+	tipc_sock_addr_print(attrs[TIPC_NLA_SOCK_ADDR],
+			     attrs[TIPC_NLA_SOCK_REF]);
+
+	msg_ref = attrs[TIPC_NLA_SOCK_CON];
+	if (msg_ref) {
+		parse_rtattr(con, TIPC_NLA_CON_MAX,
+			     RTA_DATA(msg_ref), RTA_PAYLOAD(msg_ref));
+
+		tipc_sock_addr_print(con[TIPC_NLA_CON_NODE],
+				     con[TIPC_NLA_CON_SOCK]);
+	} else
+		sock_addr_print("", "-", "", NULL);
+
+	if (show_details)
+		sock_details_print(&ss);
+
+	proc_ctx_print(&ss);
+
+	if (show_tipcinfo) {
+		out("\n type:%s", stype_nameg[ss.type]);
+		out(" cong:%s ",
+		       stat[TIPC_NLA_SOCK_STAT_LINK_CONG] ? "link" :
+		       stat[TIPC_NLA_SOCK_STAT_CONN_CONG] ? "conn" : "none");
+		out(" drop:%d ",
+		       rta_getattr_u32(stat[TIPC_NLA_SOCK_STAT_DROP]));
+
+		if (attrs[TIPC_NLA_SOCK_HAS_PUBL])
+			out(" publ");
+
+		if (con[TIPC_NLA_CON_FLAG])
+			out(" via {%u,%u} ",
+			       rta_getattr_u32(con[TIPC_NLA_CON_TYPE]),
+			       rta_getattr_u32(con[TIPC_NLA_CON_INST]));
+	}
+
+	return 0;
+}
+
+static int tipc_show(struct filter *f)
+{
+	DIAG_REQUEST(req, struct tipc_sock_diag_req r);
+
+	memset(&req.r, 0, sizeof(req.r));
+	req.r.sdiag_family = AF_TIPC;
+	req.r.tidiag_states = f->states;
+
+	return handle_netlink_request(f, &req.nlh, sizeof(req), tipc_show_sock);
+}
+
 struct sock_diag_msg {
 	__u8 sdiag_family;
 };
@@ -3699,35 +4405,48 @@ static int generic_show_sock(const struct sockaddr_nl *addr,
 {
 	struct sock_diag_msg *r = NLMSG_DATA(nlh);
 	struct inet_diag_arg inet_arg = { .f = arg, .protocol = IPPROTO_MAX };
+	int ret;
 
 	switch (r->sdiag_family) {
 	case AF_INET:
 	case AF_INET6:
-		return show_one_inet_sock(addr, nlh, &inet_arg);
+		inet_arg.rth = inet_arg.f->rth_for_killing;
+		ret = show_one_inet_sock(addr, nlh, &inet_arg);
+		break;
 	case AF_UNIX:
-		return unix_show_sock(addr, nlh, arg);
+		ret = unix_show_sock(addr, nlh, arg);
+		break;
 	case AF_PACKET:
-		return packet_show_sock(addr, nlh, arg);
+		ret = packet_show_sock(addr, nlh, arg);
+		break;
 	case AF_NETLINK:
-		return netlink_show_sock(addr, nlh, arg);
+		ret = netlink_show_sock(addr, nlh, arg);
+		break;
+	case AF_VSOCK:
+		ret = vsock_show_sock(addr, nlh, arg);
+		break;
 	default:
-		return -1;
+		ret = -1;
 	}
+
+	render();
+
+	return ret;
 }
 
 static int handle_follow_request(struct filter *f)
 {
 	int ret = 0;
 	int groups = 0;
-	struct rtnl_handle rth;
+	struct rtnl_handle rth, rth2;
 
-	if (f->families & (1 << AF_INET) && f->dbs & (1 << TCP_DB))
+	if (f->families & FAMILY_MASK(AF_INET) && f->dbs & (1 << TCP_DB))
 		groups |= 1 << (SKNLGRP_INET_TCP_DESTROY - 1);
-	if (f->families & (1 << AF_INET) && f->dbs & (1 << UDP_DB))
+	if (f->families & FAMILY_MASK(AF_INET) && f->dbs & (1 << UDP_DB))
 		groups |= 1 << (SKNLGRP_INET_UDP_DESTROY - 1);
-	if (f->families & (1 << AF_INET6) && f->dbs & (1 << TCP_DB))
+	if (f->families & FAMILY_MASK(AF_INET6) && f->dbs & (1 << TCP_DB))
 		groups |= 1 << (SKNLGRP_INET6_TCP_DESTROY - 1);
-	if (f->families & (1 << AF_INET6) && f->dbs & (1 << UDP_DB))
+	if (f->families & FAMILY_MASK(AF_INET6) && f->dbs & (1 << UDP_DB))
 		groups |= 1 << (SKNLGRP_INET6_UDP_DESTROY - 1);
 
 	if (groups == 0)
@@ -3739,10 +4458,20 @@ static int handle_follow_request(struct filter *f)
 	rth.dump = 0;
 	rth.local.nl_pid = 0;
 
+	if (f->kill) {
+		if (rtnl_open_byproto(&rth2, groups, NETLINK_SOCK_DIAG)) {
+			rtnl_close(&rth);
+			return -1;
+		}
+		f->rth_for_killing = &rth2;
+	}
+
 	if (rtnl_dump_filter(&rth, generic_show_sock, f))
 		ret = -1;
 
 	rtnl_close(&rth);
+	if (f->rth_for_killing)
+		rtnl_close(f->rth_for_killing);
 	return ret;
 }
 
@@ -3873,23 +4602,15 @@ static int print_summary(void)
 	if (get_snmp_int("Tcp:", "CurrEstab", &tcp_estab) < 0)
 		perror("ss: get_snmpstat");
 
-	get_slabstat(&slabstat);
+	printf("Total: %d\n", s.socks);
 
-	printf("Total: %d (kernel %d)\n", s.socks, slabstat.socks);
-
-	printf("TCP:   %d (estab %d, closed %d, orphaned %d, synrecv %d, timewait %d/%d), ports %d\n",
-	       s.tcp_total + slabstat.tcp_syns + s.tcp_tws,
-	       tcp_estab,
-	       s.tcp_total - (s.tcp4_hashed+s.tcp6_hashed-s.tcp_tws),
-	       s.tcp_orphans,
-	       slabstat.tcp_syns,
-	       s.tcp_tws, slabstat.tcp_tws,
-	       slabstat.tcp_ports
-	       );
+	printf("TCP:   %d (estab %d, closed %d, orphaned %d, timewait %d)\n",
+	       s.tcp_total + s.tcp_tws, tcp_estab,
+	       s.tcp_total - (s.tcp4_hashed + s.tcp6_hashed - s.tcp_tws),
+	       s.tcp_orphans, s.tcp_tws);
 
 	printf("\n");
 	printf("Transport Total     IP        IPv6\n");
-	printf("*	  %-9d %-9s %-9s\n", slabstat.socks, "-", "-");
 	printf("RAW	  %-9d %-9d %-9d\n", s.raw4+s.raw6, s.raw4, s.raw6);
 	printf("UDP	  %-9d %-9d %-9d\n", s.udp4+s.udp6, s.udp4, s.udp6);
 	printf("TCP	  %-9d %-9d %-9d\n", s.tcp4_hashed+s.tcp6_hashed, s.tcp4_hashed, s.tcp6_hashed);
@@ -3921,6 +4642,7 @@ static void _usage(FILE *dest)
 "   -m, --memory        show socket memory usage\n"
 "   -p, --processes     show process using socket\n"
 "   -i, --info          show internal TCP information\n"
+"       --tipcinfo      show internal tipc socket information\n"
 "   -s, --summary       show socket usage summary\n"
 "   -b, --bpf           show bpf filter socket information\n"
 "   -E, --events        continually display sockets as they are destroyed\n"
@@ -3937,14 +4659,16 @@ static void _usage(FILE *dest)
 "   -d, --dccp          display only DCCP sockets\n"
 "   -w, --raw           display only RAW sockets\n"
 "   -x, --unix          display only Unix domain sockets\n"
+"       --tipc          display only TIPC sockets\n"
+"       --vsock         display only vsock sockets\n"
 "   -f, --family=FAMILY display sockets of type FAMILY\n"
-"       FAMILY := {inet|inet6|link|unix|netlink|help}\n"
+"       FAMILY := {inet|inet6|link|unix|netlink|vsock|tipc|help}\n"
 "\n"
 "   -K, --kill          forcibly close sockets, display what was closed\n"
 "   -H, --no-header     Suppress header line\n"
 "\n"
 "   -A, --query=QUERY, --socket=QUERY\n"
-"       QUERY := {all|inet|tcp|udp|raw|unix|unix_dgram|unix_stream|unix_seqpacket|packet|netlink}[,QUERY]\n"
+"       QUERY := {all|inet|tcp|udp|raw|unix|unix_dgram|unix_stream|unix_seqpacket|packet|netlink|vsock_stream|vsock_dgram|tipc}[,QUERY]\n"
 "\n"
 "   -D, --diag=FILE     Dump raw information about TCP sockets to FILE\n"
 "   -F, --filter=FILE   read filter information from FILE\n"
@@ -4017,6 +4741,13 @@ static int scan_state(const char *state)
 	exit(-1);
 }
 
+/* Values 'v' and 'V' are already used so a non-character is used */
+#define OPT_VSOCK 256
+
+/* Values of 't' are already used so a non-character is used */
+#define OPT_TIPCSOCK 257
+#define OPT_TIPCINFO 258
+
 static const struct option long_opts[] = {
 	{ "numeric", 0, 0, 'n' },
 	{ "resolve", 0, 0, 'r' },
@@ -4033,6 +4764,8 @@ static const struct option long_opts[] = {
 	{ "udp", 0, 0, 'u' },
 	{ "raw", 0, 0, 'w' },
 	{ "unix", 0, 0, 'x' },
+	{ "tipc", 0, 0, OPT_TIPCSOCK},
+	{ "vsock", 0, 0, OPT_VSOCK },
 	{ "all", 0, 0, 'a' },
 	{ "listening", 0, 0, 'l' },
 	{ "ipv4", 0, 0, '4' },
@@ -4049,6 +4782,7 @@ static const struct option long_opts[] = {
 	{ "context", 0, 0, 'Z' },
 	{ "contexts", 0, 0, 'z' },
 	{ "net", 1, 0, 'N' },
+	{ "tipcinfo", 0, 0, OPT_TIPCINFO},
 	{ "kill", 0, 0, 'K' },
 	{ "no-header", 0, 0, 'H' },
 	{ 0 }
@@ -4064,7 +4798,6 @@ int main(int argc, char *argv[])
 	FILE *filter_fp = NULL;
 	int ch;
 	int state_filter = 0;
-	int addrp_width, screen_width = 80;
 
 	while ((ch = getopt_long(argc, argv,
 				 "dhaletuwxnro460spbEf:miA:D:F:vVzZN:KHS",
@@ -4101,22 +4834,28 @@ int main(int argc, char *argv[])
 			follow_events = 1;
 			break;
 		case 'd':
-			filter_db_set(&current_filter, DCCP_DB);
+			filter_db_set(&current_filter, DCCP_DB, true);
 			break;
 		case 't':
-			filter_db_set(&current_filter, TCP_DB);
+			filter_db_set(&current_filter, TCP_DB, true);
 			break;
 		case 'S':
-			filter_db_set(&current_filter, SCTP_DB);
+			filter_db_set(&current_filter, SCTP_DB, true);
 			break;
 		case 'u':
-			filter_db_set(&current_filter, UDP_DB);
+			filter_db_set(&current_filter, UDP_DB, true);
 			break;
 		case 'w':
-			filter_db_set(&current_filter, RAW_DB);
+			filter_db_set(&current_filter, RAW_DB, true);
 			break;
 		case 'x':
 			filter_af_set(&current_filter, AF_UNIX);
+			break;
+		case OPT_VSOCK:
+			filter_af_set(&current_filter, AF_VSOCK);
+			break;
+		case OPT_TIPCSOCK:
+			filter_af_set(&current_filter, AF_TIPC);
 			break;
 		case 'a':
 			state_filter = SS_ALL;
@@ -4144,6 +4883,10 @@ int main(int argc, char *argv[])
 				filter_af_set(&current_filter, AF_UNIX);
 			else if (strcmp(optarg, "netlink") == 0)
 				filter_af_set(&current_filter, AF_NETLINK);
+			else if (strcmp(optarg, "tipc") == 0)
+				filter_af_set(&current_filter, AF_TIPC);
+			else if (strcmp(optarg, "vsock") == 0)
+				filter_af_set(&current_filter, AF_VSOCK);
 			else if (strcmp(optarg, "help") == 0)
 				help();
 			else {
@@ -4167,49 +4910,7 @@ int main(int argc, char *argv[])
 			do {
 				if ((p1 = strchr(p, ',')) != NULL)
 					*p1 = 0;
-				if (strcmp(p, "all") == 0) {
-					filter_default_dbs(&current_filter);
-				} else if (strcmp(p, "inet") == 0) {
-					filter_db_set(&current_filter, UDP_DB);
-					filter_db_set(&current_filter, DCCP_DB);
-					filter_db_set(&current_filter, TCP_DB);
-					filter_db_set(&current_filter, SCTP_DB);
-					filter_db_set(&current_filter, RAW_DB);
-				} else if (strcmp(p, "udp") == 0) {
-					filter_db_set(&current_filter, UDP_DB);
-				} else if (strcmp(p, "dccp") == 0) {
-					filter_db_set(&current_filter, DCCP_DB);
-				} else if (strcmp(p, "tcp") == 0) {
-					filter_db_set(&current_filter, TCP_DB);
-				} else if (strcmp(p, "sctp") == 0) {
-					filter_db_set(&current_filter, SCTP_DB);
-				} else if (strcmp(p, "raw") == 0) {
-					filter_db_set(&current_filter, RAW_DB);
-				} else if (strcmp(p, "unix") == 0) {
-					filter_db_set(&current_filter, UNIX_ST_DB);
-					filter_db_set(&current_filter, UNIX_DG_DB);
-					filter_db_set(&current_filter, UNIX_SQ_DB);
-				} else if (strcasecmp(p, "unix_stream") == 0 ||
-					   strcmp(p, "u_str") == 0) {
-					filter_db_set(&current_filter, UNIX_ST_DB);
-				} else if (strcasecmp(p, "unix_dgram") == 0 ||
-					   strcmp(p, "u_dgr") == 0) {
-					filter_db_set(&current_filter, UNIX_DG_DB);
-				} else if (strcasecmp(p, "unix_seqpacket") == 0 ||
-					   strcmp(p, "u_seq") == 0) {
-					filter_db_set(&current_filter, UNIX_SQ_DB);
-				} else if (strcmp(p, "packet") == 0) {
-					filter_db_set(&current_filter, PACKET_R_DB);
-					filter_db_set(&current_filter, PACKET_DG_DB);
-				} else if (strcmp(p, "packet_raw") == 0 ||
-					   strcmp(p, "p_raw") == 0) {
-					filter_db_set(&current_filter, PACKET_R_DB);
-				} else if (strcmp(p, "packet_dgram") == 0 ||
-					   strcmp(p, "p_dgr") == 0) {
-					filter_db_set(&current_filter, PACKET_DG_DB);
-				} else if (strcmp(p, "netlink") == 0) {
-					filter_db_set(&current_filter, NETLINK_DB);
-				} else {
+				if (filter_db_parse(&current_filter, p)) {
 					fprintf(stderr, "ss: \"%s\" is illegal socket table id\n", p);
 					usage();
 				}
@@ -4256,6 +4957,9 @@ int main(int argc, char *argv[])
 			if (netns_switch(optarg))
 				exit(1);
 			break;
+		case OPT_TIPCINFO:
+			show_tipcinfo = 1;
+			break;
 		case 'K':
 			current_filter.kill = 1;
 			break;
@@ -4301,7 +5005,7 @@ int main(int argc, char *argv[])
 
 	if (do_default) {
 		state_filter = state_filter ? state_filter : SS_CONN;
-		filter_default_dbs(&current_filter);
+		filter_db_parse(&current_filter, "all");
 	}
 
 	filter_states_set(&current_filter, state_filter);
@@ -4346,66 +5050,14 @@ int main(int argc, char *argv[])
 	if (ssfilter_parse(&current_filter.f, argc, argv, filter_fp))
 		usage();
 
-	netid_width = 0;
-	if (current_filter.dbs&(current_filter.dbs-1))
-		netid_width = 5;
+	if (!(current_filter.dbs & (current_filter.dbs - 1)))
+		columns[COL_NETID].disabled = 1;
 
-	state_width = 0;
-	if (current_filter.states&(current_filter.states-1))
-		state_width = 10;
+	if (!(current_filter.states & (current_filter.states - 1)))
+		columns[COL_STATE].disabled = 1;
 
-	if (isatty(STDOUT_FILENO)) {
-		struct winsize w;
-
-		if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) != -1) {
-			if (w.ws_col > 0)
-				screen_width = w.ws_col;
-		}
-	}
-
-	addrp_width = screen_width;
-	if (netid_width)
-		addrp_width -= netid_width + 1;
-	if (state_width)
-		addrp_width -= state_width + 1;
-	addrp_width -= 14;
-
-	if (addrp_width&1) {
-		if (netid_width)
-			netid_width++;
-		else if (state_width)
-			state_width++;
-		else
-			odd_width_pad = " ";
-	}
-
-	addrp_width /= 2;
-	addrp_width--;
-
-	serv_width = resolve_services ? 7 : 5;
-
-	if (addrp_width < 15+serv_width+1)
-		addrp_width = 15+serv_width+1;
-
-	addr_width = addrp_width - serv_width - 1;
-
-	if (show_header) {
-		if (netid_width)
-			printf("%-*s ", netid_width, "Netid");
-		if (state_width)
-			printf("%-*s ", state_width, "State");
-		printf("%-6s %-6s %s", "Recv-Q", "Send-Q", odd_width_pad);
-	}
-
-	/* Make enough space for the local/remote port field */
-	addr_width -= 13;
-	serv_width += 13;
-
-	if (show_header) {
-		printf("%*s:%-*s %*s:%-*s\n",
-		       addr_width, "Local Address", serv_width, "Port",
-		       addr_width, "Peer Address", serv_width, "Port");
-	}
+	if (show_header)
+		print_header();
 
 	fflush(stdout);
 
@@ -4428,9 +5080,15 @@ int main(int argc, char *argv[])
 		dccp_show(&current_filter);
 	if (current_filter.dbs & (1<<SCTP_DB))
 		sctp_show(&current_filter);
+	if (current_filter.dbs & VSOCK_DBM)
+		vsock_show(&current_filter);
+	if (current_filter.dbs & (1<<TIPC_DB))
+		tipc_show(&current_filter);
 
 	if (show_users || show_proc_ctx || show_sock_ctx)
 		user_ent_destroy();
+
+	render();
 
 	return 0;
 }

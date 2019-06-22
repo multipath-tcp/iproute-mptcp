@@ -177,9 +177,9 @@ static int bond_parse_opt(struct link_util *lu, int argc, char **argv,
 			addattr8(n, 1024, IFLA_BOND_MODE, mode);
 		} else if (matches(*argv, "active_slave") == 0) {
 			NEXT_ARG();
-			ifindex = if_nametoindex(*argv);
+			ifindex = ll_name_to_index(*argv);
 			if (!ifindex)
-				return -1;
+				return nodev(*argv);
 			addattr32(n, 1024, IFLA_BOND_ACTIVE_SLAVE, ifindex);
 		} else if (matches(*argv, "clear_active_slave") == 0) {
 			addattr32(n, 1024, IFLA_BOND_ACTIVE_SLAVE, 0);
@@ -240,9 +240,9 @@ static int bond_parse_opt(struct link_util *lu, int argc, char **argv,
 			addattr32(n, 1024, IFLA_BOND_ARP_ALL_TARGETS, arp_all_targets);
 		} else if (matches(*argv, "primary") == 0) {
 			NEXT_ARG();
-			ifindex = if_nametoindex(*argv);
+			ifindex = ll_name_to_index(*argv);
 			if (!ifindex)
-				return -1;
+				return nodev(*argv);
 			addattr32(n, 1024, IFLA_BOND_PRIMARY, ifindex);
 		} else if (matches(*argv, "primary_reselect") == 0) {
 			NEXT_ARG();
@@ -369,8 +369,6 @@ static int bond_parse_opt(struct link_util *lu, int argc, char **argv,
 
 static void bond_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 {
-	unsigned int ifindex;
-
 	if (!tb)
 		return;
 
@@ -380,21 +378,16 @@ static void bond_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		print_string(PRINT_ANY, "mode", "mode %s ", mode);
 	}
 
-	if (tb[IFLA_BOND_ACTIVE_SLAVE] &&
-	    (ifindex = rta_getattr_u32(tb[IFLA_BOND_ACTIVE_SLAVE]))) {
-		char buf[IFNAMSIZ];
-		const char *n = if_indextoname(ifindex, buf);
+	if (tb[IFLA_BOND_ACTIVE_SLAVE]) {
+		unsigned int ifindex =
+			rta_getattr_u32(tb[IFLA_BOND_ACTIVE_SLAVE]);
 
-		if (n)
+		if (ifindex) {
 			print_string(PRINT_ANY,
 				     "active_slave",
 				     "active_slave %s ",
-				     n);
-		else
-			print_uint(PRINT_ANY,
-				   "active_slave_index",
-				   "active_slave %u ",
-				   ifindex);
+				     ll_index_to_name(ifindex));
+		}
 	}
 
 	if (tb[IFLA_BOND_MIIMON])
@@ -479,18 +472,15 @@ static void bond_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 			     arp_all_targets);
 	}
 
-	if (tb[IFLA_BOND_PRIMARY] &&
-	    (ifindex = rta_getattr_u32(tb[IFLA_BOND_PRIMARY]))) {
-		char buf[IFNAMSIZ];
-		const char *n = if_indextoname(ifindex, buf);
+	if (tb[IFLA_BOND_PRIMARY]) {
+		unsigned int ifindex = rta_getattr_u32(tb[IFLA_BOND_PRIMARY]);
 
-		if (n)
-			print_string(PRINT_ANY, "primary", "primary %s ", n);
-		else
-			print_uint(PRINT_ANY,
-				   "primary_index",
-				   "primary %u ",
-				   ifindex);
+		if (ifindex) {
+			print_string(PRINT_ANY,
+				     "primary",
+				     "primary %s ",
+				     ll_index_to_name(ifindex));
+		}
 	}
 
 	if (tb[IFLA_BOND_PRIMARY_RESELECT]) {

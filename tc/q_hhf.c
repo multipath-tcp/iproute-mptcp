@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /* q_hhf.c		Heavy-Hitter Filter (HHF)
  *
  * Copyright (C) 2013 Terry Lam <vtlam@google.com>
@@ -5,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -26,7 +26,7 @@ static void explain(void)
 }
 
 static int hhf_parse_opt(struct qdisc_util *qu, int argc, char **argv,
-			 struct nlmsghdr *n)
+			 struct nlmsghdr *n, const char *dev)
 {
 	unsigned int limit = 0;
 	unsigned int quantum = 0;
@@ -91,8 +91,7 @@ static int hhf_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 		argc--; argv++;
 	}
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 1024, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 1024, TCA_OPTIONS);
 	if (limit)
 		addattr_l(n, 1024, TCA_HHF_BACKLOG_LIMIT, &limit,
 			  sizeof(limit));
@@ -113,7 +112,7 @@ static int hhf_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 	if (non_hh_weight)
 		addattr_l(n, 1024, TCA_HHF_NON_HH_WEIGHT, &non_hh_weight,
 			  sizeof(non_hh_weight));
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_nest_end(n, tail);
 	return 0;
 }
 

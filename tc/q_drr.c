@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -34,7 +33,8 @@ static void explain2(void)
 }
 
 
-static int drr_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
+static int drr_parse_opt(struct qdisc_util *qu, int argc, char **argv,
+			 struct nlmsghdr *n, const char *dev)
 {
 	while (argc) {
 		if (strcmp(*argv, "help") == 0) {
@@ -50,13 +50,12 @@ static int drr_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nl
 }
 
 static int drr_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
-			       struct nlmsghdr *n)
+			       struct nlmsghdr *n, const char *dev)
 {
 	struct rtattr *tail;
 	__u32 tmp;
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 1024, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 1024, TCA_OPTIONS);
 
 	while (argc > 0) {
 		if (strcmp(*argv, "quantum") == 0) {
@@ -77,7 +76,7 @@ static int drr_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
 		argc--; argv++;
 	}
 
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *)tail;
+	addattr_nest_end(n, tail);
 	return 0;
 }
 

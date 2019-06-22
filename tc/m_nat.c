@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -129,10 +128,9 @@ parse_nat(struct action_util *a, int *argc_p, char ***argv_p, int tca_id, struct
 		}
 	}
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, MAX_MSG, tca_id, NULL, 0);
+	tail = addattr_nest(n, MAX_MSG, tca_id);
 	addattr_l(n, MAX_MSG, TCA_NAT_PARMS, &sel, sizeof(sel));
-	tail->rta_len = (char *)NLMSG_TAIL(n) - (char *)tail;
+	addattr_nest_end(n, tail);
 
 	*argc_p = argc;
 	*argv_p = argv;
@@ -144,9 +142,8 @@ print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 {
 	struct tc_nat *sel;
 	struct rtattr *tb[TCA_NAT_MAX + 1];
-	char buf1[256];
-	char buf2[256];
-
+	SPRINT_BUF(buf1);
+	SPRINT_BUF(buf2);
 	int len;
 
 	if (arg == NULL)
@@ -155,7 +152,7 @@ print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 	parse_rtattr_nested(tb, TCA_NAT_MAX, arg);
 
 	if (tb[TCA_NAT_PARMS] == NULL) {
-		fprintf(f, "[NULL nat parameters]");
+		print_string(PRINT_FP, NULL, "%s", "[NULL nat parameters]");
 		return -1;
 	}
 	sel = RTA_DATA(tb[TCA_NAT_PARMS]);
@@ -163,12 +160,22 @@ print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 	len = ffs(sel->mask);
 	len = len ? 33 - len : 0;
 
-	fprintf(f, " nat %s %s/%d %s", sel->flags & TCA_NAT_FLAG_EGRESS ?
-				       "egress" : "ingress",
-		format_host_r(AF_INET, 4, &sel->old_addr, buf1, sizeof(buf1)),
-		len,
-		format_host_r(AF_INET, 4, &sel->new_addr, buf2, sizeof(buf2)));
+	print_string(PRINT_ANY, "type", " %s ", "nat");
+	print_string(PRINT_ANY, "direction", "%s",
+		     sel->flags & TCA_NAT_FLAG_EGRESS ? "egress" : "ingress");
+
+	snprintf(buf2, sizeof(buf2), "%s/%d",
+		 format_host_r(AF_INET, 4, &sel->old_addr, buf1, sizeof(buf1)),
+		 len);
+	print_string(PRINT_ANY, "old_addr", " %s", buf2);
+	print_string(PRINT_ANY, "new_addr", " %s",
+		     format_host_r(AF_INET, 4, &sel->new_addr, buf1, sizeof(buf1)));
+
 	print_action_control(f, " ", sel->action, "");
+	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_uint(PRINT_ANY, "index", "\t index %u", sel->index);
+	print_int(PRINT_ANY, "ref", " ref %d", sel->refcnt);
+	print_int(PRINT_ANY, "bind", " bind %d", sel->bindcnt);
 
 	if (show_stats) {
 		if (tb[TCA_NAT_TM]) {
@@ -177,6 +184,8 @@ print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 			print_tm(f, tm);
 		}
 	}
+
+	print_string(PRINT_FP, NULL, "%s", _SL_);
 
 	return 0;
 }

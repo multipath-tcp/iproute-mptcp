@@ -15,8 +15,9 @@
 static void help(char *name)
 {
 	pr_out("Usage: %s [ OPTIONS ] OBJECT { COMMAND | help }\n"
-	       "where  OBJECT := { dev | link | help }\n"
-	       "       OPTIONS := { -V[ersion] | -d[etails] | -j[son] | -p[retty]}\n", name);
+	       "       %s [ -f[orce] ] -b[atch] filename\n"
+	       "where  OBJECT := { dev | link | resource | help }\n"
+	       "       OPTIONS := { -V[ersion] | -d[etails] | -j[son] | -p[retty]}\n", name, name);
 }
 
 static int cmd_help(struct rd *rd)
@@ -25,28 +26,67 @@ static int cmd_help(struct rd *rd)
 	return 0;
 }
 
-static int rd_cmd(struct rd *rd)
+static int rd_cmd(struct rd *rd, int argc, char **argv)
 {
 	const struct rd_cmd cmds[] = {
 		{ NULL,		cmd_help },
 		{ "help",	cmd_help },
 		{ "dev",	cmd_dev },
 		{ "link",	cmd_link },
+		{ "resource",	cmd_res },
 		{ 0 }
 	};
+
+	rd->argc = argc;
+	rd->argv = argv;
 
 	return rd_exec_cmd(rd, cmds, "object");
 }
 
-static int rd_init(struct rd *rd, int argc, char **argv, char *filename)
+static int rd_batch(struct rd *rd, const char *name, bool force)
+{
+	char *line = NULL;
+	size_t len = 0;
+	int ret = 0;
+
+	if (name && strcmp(name, "-") != 0) {
+		if (!freopen(name, "r", stdin)) {
+			pr_err("Cannot open file \"%s\" for reading: %s\n",
+			       name, strerror(errno));
+			return errno;
+		}
+	}
+
+	cmdlineno = 0;
+	while (getcmdline(&line, &len, stdin) != -1) {
+		char *largv[512];
+		int largc;
+
+		largc = makeargs(line, largv, ARRAY_SIZE(largv));
+		if (!largc)
+			continue;	/* blank line */
+
+		ret = rd_cmd(rd, largc, largv);
+		if (ret) {
+			pr_err("Command failed %s:%d\n", name, cmdlineno);
+			if (!force)
+				break;
+		}
+	}
+
+	free(line);
+
+	return ret;
+}
+
+static int rd_init(struct rd *rd, char *filename)
 {
 	uint32_t seq;
 	int ret;
 
 	rd->filename = filename;
-	rd->argc = argc;
-	rd->argv = argv;
 	INIT_LIST_HEAD(&rd->dev_map_list);
+	INIT_LIST_HEAD(&rd->filter_list);
 
 	if (rd->json_output) {
 		rd->jw = jsonw_new(stdout);
@@ -70,12 +110,11 @@ static int rd_init(struct rd *rd, int argc, char **argv, char *filename)
 	return rd_recv_msg(rd, rd_dev_init_cb, rd, seq);
 }
 
-static void rd_free(struct rd *rd)
+static void rd_cleanup(struct rd *rd)
 {
 	if (rd->json_output)
 		jsonw_destroy(&rd->jw);
-	free(rd->buff);
-	rd_free_devmap(rd);
+	rd_free(rd);
 }
 
 int main(int argc, char **argv)
@@ -86,19 +125,24 @@ int main(int argc, char **argv)
 		{ "json",		no_argument,		NULL, 'j' },
 		{ "pretty",		no_argument,		NULL, 'p' },
 		{ "details",		no_argument,		NULL, 'd' },
+		{ "force",		no_argument,		NULL, 'f' },
+		{ "batch",		required_argument,	NULL, 'b' },
 		{ NULL, 0, NULL, 0 }
 	};
+	bool show_driver_details = false;
+	const char *batch_file = NULL;
 	bool pretty_output = false;
 	bool show_details = false;
 	bool json_output = false;
+	bool force = false;
+	struct rd rd = {};
 	char *filename;
-	struct rd rd;
 	int opt;
 	int err;
 
 	filename = basename(argv[0]);
 
-	while ((opt = getopt_long(argc, argv, "Vhdpj",
+	while ((opt = getopt_long(argc, argv, ":Vhdpjfb:",
 				  long_options, NULL)) >= 0) {
 		switch (opt) {
 		case 'V':
@@ -109,14 +153,26 @@ int main(int argc, char **argv)
 			pretty_output = true;
 			break;
 		case 'd':
-			show_details = true;
+			if (show_details)
+				show_driver_details = true;
+			else
+				show_details = true;
 			break;
 		case 'j':
 			json_output = true;
 			break;
+		case 'f':
+			force = true;
+			break;
+		case 'b':
+			batch_file = optarg;
+			break;
 		case 'h':
 			help(filename);
 			return EXIT_SUCCESS;
+		case ':':
+			pr_err("-%c option requires an argument\n", optopt);
+			return EXIT_FAILURE;
 		default:
 			pr_err("Unknown option.\n");
 			help(filename);
@@ -128,16 +184,20 @@ int main(int argc, char **argv)
 	argv += optind;
 
 	rd.show_details = show_details;
+	rd.show_driver_details = show_driver_details;
 	rd.json_output = json_output;
 	rd.pretty_output = pretty_output;
 
-	err = rd_init(&rd, argc, argv, filename);
+	err = rd_init(&rd, filename);
 	if (err)
 		goto out;
 
-	err = rd_cmd(&rd);
+	if (batch_file)
+		err = rd_batch(&rd, batch_file, force);
+	else
+		err = rd_cmd(&rd, argc, argv);
 out:
 	/* Always cleanup */
-	rd_free(&rd);
+	rd_cleanup(&rd);
 	return err ? EXIT_FAILURE : EXIT_SUCCESS;
 }

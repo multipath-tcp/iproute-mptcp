@@ -21,7 +21,7 @@ static void explain(void)
 }
 
 static int ingress_parse_opt(struct qdisc_util *qu, int argc, char **argv,
-			     struct nlmsghdr *n)
+			     struct nlmsghdr *n, const char *dev)
 {
 	while (argc > 0) {
 		if (strcmp(*argv, "handle") == 0) {
@@ -40,7 +40,7 @@ static int ingress_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 static int ingress_print_opt(struct qdisc_util *qu, FILE *f,
 			     struct rtattr *opt)
 {
-	fprintf(f, "---------------- ");
+	print_string(PRINT_FP, NULL, "---------------- ", NULL);
 	return 0;
 }
 

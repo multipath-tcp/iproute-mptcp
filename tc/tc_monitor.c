@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -44,7 +43,10 @@ static int accept_tcmsg(const struct sockaddr_nl *who,
 	if (timestamp)
 		print_timestamp(fp);
 
-	if (n->nlmsg_type == RTM_NEWTFILTER || n->nlmsg_type == RTM_DELTFILTER) {
+	if (n->nlmsg_type == RTM_NEWTFILTER ||
+	    n->nlmsg_type == RTM_DELTFILTER ||
+	    n->nlmsg_type == RTM_NEWCHAIN ||
+	    n->nlmsg_type == RTM_DELCHAIN) {
 		print_filter(who, n, arg);
 		return 0;
 	}

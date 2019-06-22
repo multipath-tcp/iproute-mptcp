@@ -10,7 +10,10 @@ flower \- flow based traffic control filter
 .B action
 .IR ACTION_SPEC " ] [ "
 .B classid
-.IR CLASSID " ]"
+.IR CLASSID " ] [ "
+.B hw_tc
+.IR TCID " ]"
+
 
 .ti -8
 .IR MATCH_LIST " := [ " MATCH_LIST " ] " MATCH
@@ -19,6 +22,8 @@ flower \- flow based traffic control filter
 .IR MATCH " := { "
 .B indev
 .IR ifname " | "
+.BR verbose
+.RI " | "
 .BR skip_sw " | " skip_hw
 .RI " | { "
 .BR dst_mac " | " src_mac " } "
@@ -29,6 +34,20 @@ flower \- flow based traffic control filter
 .IR PRIORITY " | "
 .BR vlan_ethtype " { " ipv4 " | " ipv6 " | "
 .IR ETH_TYPE " } | "
+.B cvlan_id
+.IR VID " | "
+.B cvlan_prio
+.IR PRIORITY " | "
+.BR cvlan_ethtype " { " ipv4 " | " ipv6 " | "
+.IR ETH_TYPE " } | "
+.B mpls_label
+.IR LABEL " | "
+.B mpls_tc
+.IR TC " | "
+.B mpls_bos
+.IR BOS " | "
+.B mpls_ttl
+.IR TTL " | "
 .BR ip_proto " { " tcp " | " udp " | " sctp " | " icmp " | " icmpv6 " | "
 .IR IP_PROTO " } | "
 .B ip_tos
@@ -57,6 +76,10 @@ flower \- flow based traffic control filter
 .IR ipv4_address " | " ipv6_address " } | "
 .B enc_dst_port
 .IR port_number " | "
+.B enc_tos
+.IR TOS " | "
+.B enc_ttl
+.IR TTL " | "
 .BR ip_flags
 .IR IP_FLAGS
 .SH DESCRIPTION
@@ -77,6 +100,10 @@ is in the form
 .BR X : Y ", while " X " and " Y
 are interpreted as numbers in hexadecimal format.
 .TP
+.BI hw_tc " TCID"
+Specify a hardware traffic class to pass matching packets on to. TCID is in the
+range 0 through 15.
+.TP
 .BI indev " ifname"
 Match on incoming interface name. Obviously this makes sense only for forwarded
 flows.
@@ -84,6 +111,11 @@ flows.
 is the name of an interface which must exist at the time of
 .B tc
 invocation.
+.TP
+.BI verbose
+Enable verbose logging, including offloading errors when not using
+.B skip_sw
+flag.
 .TP
 .BI skip_sw
 Do not process filter by software. If hardware has no offload support for this
@@ -117,7 +149,47 @@ Match on layer three protocol.
 .I VLAN_ETH_TYPE
 may be either
 .BR ipv4 ", " ipv6
+or an unsigned 16bit value in hexadecimal format. To match on QinQ packet, it must be 802.1Q or 802.1AD.
+.TP
+.BI cvlan_id " VID"
+Match on QinQ inner vlan tag id.
+.I VID
+is an unsigned 12bit value in decimal format.
+.TP
+.BI cvlan_prio " PRIORITY"
+Match on QinQ inner vlan tag priority.
+.I PRIORITY
+is an unsigned 3bit value in decimal format.
+.TP
+.BI cvlan_ethtype " VLAN_ETH_TYPE"
+Match on QinQ layer three protocol.
+.I VLAN_ETH_TYPE
+may be either
+.BR ipv4 ", " ipv6
 or an unsigned 16bit value in hexadecimal format.
+.TP
+.BI mpls_label " LABEL"
+Match the label id in the outermost MPLS label stack entry.
+.I LABEL
+is an unsigned 20 bit value in decimal format.
+.TP
+.BI mpls_tc " TC"
+Match on the MPLS TC field, which is typically used for packet priority,
+in the outermost MPLS label stack entry.
+.I TC
+is an unsigned 3 bit value in decimal format.
+.TP
+.BI mpls_bos " BOS"
+Match on the MPLS Bottom Of Stack field in the outermost MPLS label stack
+entry.
+.I BOS
+is a 1 bit value in decimal format.
+.TP
+.BI mpls_ttl " TTL"
+Match on the MPLS Time To Live field in the outermost MPLS label stack
+entry.
+.I TTL
+is an unsigned 8 bit value in decimal format.
 .TP
 .BI ip_proto " IP_PROTO"
 Match on layer four protocol.
@@ -207,6 +279,10 @@ bits is assumed.
 .BI enc_src_ip " PREFIX"
 .TQ
 .BI enc_dst_port " NUMBER"
+.TQ
+.BI enc_tos " NUMBER"
+.TQ
+.BI enc_ttl " NUMBER"
 Match on IP tunnel metadata. Key id
 .I NUMBER
 is a 32 bit tunnel key id (e.g. VNI for VXLAN tunnel).
@@ -215,19 +291,29 @@ must be a valid IPv4 or IPv6 address optionally followed by a slash and the
 prefix length. If the prefix is missing, \fBtc\fR assumes a full-length
 host match.  Dst port
 .I NUMBER
-is a 16 bit UDP dst port.
+is a 16 bit UDP dst port. Tos
+.I NUMBER
+is an 8 bit tos (dscp+ecn) value, ttl
+.I NUMBER
+is an 8 bit time-to-live value.
 .TP
 .BI ip_flags " IP_FLAGS"
 .I IP_FLAGS
 may be either
-.BR frag " or " nofrag
-to match on fragmented packets or not respectively.
+.BR frag ", " nofrag ", " firstfrag " or " nofirstfrag
+where frag and nofrag could be used to match on fragmented packets or not,
+respectively. firstfrag and nofirstfrag can be used to further distinguish
+fragmented packet. firstfrag can be used to indicate the first fragmented
+packet. nofirstfrag can be used to indicates subsequent fragmented packets
+or non-fragmented packets.
 .SH NOTES
 As stated above where applicable, matches of a certain layer implicitly depend
 on the matches of the next lower layer. Precisely, layer one and two matches
 (\fBindev\fR,  \fBdst_mac\fR and \fBsrc_mac\fR)
-have no dependency, layer three matches
-(\fBip_proto\fR, \fBdst_ip\fR, \fBsrc_ip\fR, \fBarp_tip\fR, \fBarp_sip\fR,
+have no dependency,
+MPLS and layer three matches
+(\fBmpls_label\fR, \fBmpls_tc\fR, \fBmpls_bos\fR, \fBmpls_ttl\fR,
+\fBip_proto\fR, \fBdst_ip\fR, \fBsrc_ip\fR, \fBarp_tip\fR, \fBarp_sip\fR,
 \fBarp_op\fR, \fBarp_tha\fR, \fBarp_sha\fR and \fBip_flags\fR)
 depend on the
 .B protocol

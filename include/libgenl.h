@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __LIBGENL_H__
 #define __LIBGENL_H__
 
@@ -20,8 +21,8 @@ struct {								\
 	},								\
 }
 
-extern int genl_resolve_family(struct rtnl_handle *grth, const char *family);
-extern int genl_init_handle(struct rtnl_handle *grth, const char *family,
-			    int *genl_family);
+int genl_resolve_family(struct rtnl_handle *grth, const char *family);
+int genl_init_handle(struct rtnl_handle *grth, const char *family,
+		     int *genl_family);
 
 #endif /* __LIBGENL_H__ */

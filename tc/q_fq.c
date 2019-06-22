@@ -38,7 +38,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -72,7 +71,7 @@ static unsigned int ilog2(unsigned int val)
 }
 
 static int fq_parse_opt(struct qdisc_util *qu, int argc, char **argv,
-			struct nlmsghdr *n)
+			struct nlmsghdr *n, const char *dev)
 {
 	unsigned int plimit;
 	unsigned int flow_plimit;
@@ -119,7 +118,12 @@ static int fq_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 			}
 		} else if (strcmp(*argv, "maxrate") == 0) {
 			NEXT_ARG();
-			if (get_rate(&maxrate, *argv)) {
+			if (strchr(*argv, '%')) {
+				if (get_percent_rate(&maxrate, *argv, dev)) {
+					fprintf(stderr, "Illegal \"maxrate\"\n");
+					return -1;
+				}
+			} else if (get_rate(&maxrate, *argv)) {
 				fprintf(stderr, "Illegal \"maxrate\"\n");
 				return -1;
 			}
@@ -133,7 +137,12 @@ static int fq_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 			set_low_rate_threshold = true;
 		} else if (strcmp(*argv, "defrate") == 0) {
 			NEXT_ARG();
-			if (get_rate(&defrate, *argv)) {
+			if (strchr(*argv, '%')) {
+				if (get_percent_rate(&defrate, *argv, dev)) {
+					fprintf(stderr, "Illegal \"defrate\"\n");
+					return -1;
+				}
+			} else if (get_rate(&defrate, *argv)) {
 				fprintf(stderr, "Illegal \"defrate\"\n");
 				return -1;
 			}
@@ -181,8 +190,7 @@ static int fq_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 		argc--; argv++;
 	}
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 1024, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 1024, TCA_OPTIONS);
 	if (buckets) {
 		unsigned int log = ilog2(buckets);
 
@@ -218,7 +226,7 @@ static int fq_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 	if (set_orphan_mask)
 		addattr_l(n, 1024, TCA_FQ_ORPHAN_MASK,
 			  &orphan_mask, sizeof(refill_delay));
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_nest_end(n, tail);
 	return 0;
 }
 

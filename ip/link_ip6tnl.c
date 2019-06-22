@@ -29,19 +29,26 @@
 
 #define DEFAULT_TNL_HOP_LIMIT	(64)
 
-static void print_usage(FILE *f)
+static void ip6tunnel_print_help(struct link_util *lu, int argc, char **argv,
+				 FILE *f)
 {
+	const char *mode;
+
 	fprintf(f,
-		"Usage: ... ip6tnl [ mode { ip6ip6 | ipip6 | any } ]\n"
-		"                  [ remote ADDR ]\n"
+		"Usage: ... %-6s [ remote ADDR ]\n",
+		lu->id
+	);
+	fprintf(f,
 		"                  [ local ADDR ]\n"
-		"                  [ dev PHYS_DEV ]\n"
 		"                  [ encaplimit ELIM ]\n"
 		"                  [ hoplimit HLIM ]\n"
 		"                  [ tclass TCLASS ]\n"
 		"                  [ flowlabel FLOWLABEL ]\n"
 		"                  [ dscp inherit ]\n"
+		"                  [ [no]allow-localremote ]\n"
+		"                  [ dev PHYS_DEV ]\n"
 		"                  [ fwmark MARK ]\n"
+		"                  [ external ]\n"
 		"                  [ noencap ]\n"
 		"                  [ encap { fou | gue | none } ]\n"
 		"                  [ encap-sport PORT ]\n"
@@ -49,8 +56,14 @@ static void print_usage(FILE *f)
 		"                  [ [no]encap-csum ]\n"
 		"                  [ [no]encap-csum6 ]\n"
 		"                  [ [no]encap-remcsum ]\n"
-		"                  [ external ]\n"
-		"\n"
+	);
+	mode = "{ ip6ip6 | ipip6 | any }";
+	fprintf(f,
+		"                  [ mode %s ]\n"
+		"\n",
+		mode
+	);
+	fprintf(f,
 		"Where: ADDR      := IPV6_ADDRESS\n"
 		"       ELIM      := { none | 0..255 }(default=%d)\n"
 		"       HLIM      := 0..255 (default=%d)\n"
@@ -61,21 +74,13 @@ static void print_usage(FILE *f)
 	);
 }
 
-static void usage(void) __attribute__((noreturn));
-static void usage(void)
-{
-	print_usage(stderr);
-	exit(-1);
-}
-
 static int ip6tunnel_parse_opt(struct link_util *lu, int argc, char **argv,
 			       struct nlmsghdr *n)
 {
-	struct ifinfomsg *ifi = (struct ifinfomsg *)(n + 1);
+	struct ifinfomsg *ifi = NLMSG_DATA(n);
 	struct {
 		struct nlmsghdr n;
 		struct ifinfomsg i;
-		char buf[2048];
 	} req = {
 		.n.nlmsg_len = NLMSG_LENGTH(sizeof(*ifi)),
 		.n.nlmsg_flags = NLM_F_REQUEST,
@@ -83,18 +88,18 @@ static int ip6tunnel_parse_opt(struct link_util *lu, int argc, char **argv,
 		.i.ifi_family = preferred_family,
 		.i.ifi_index = ifi->ifi_index,
 	};
+	struct nlmsghdr *answer;
 	struct rtattr *tb[IFLA_MAX + 1];
 	struct rtattr *linkinfo[IFLA_INFO_MAX+1];
 	struct rtattr *iptuninfo[IFLA_IPTUN_MAX + 1];
 	int len;
-	struct in6_addr laddr = {};
-	struct in6_addr raddr = {};
+	inet_prefix saddr, daddr;
 	__u8 hop_limit = DEFAULT_TNL_HOP_LIMIT;
 	__u8 encap_limit = IPV6_DEFAULT_TNL_ENCAP_LIMIT;
 	__u32 flowinfo = 0;
 	__u32 flags = 0;
-	__u32 link = 0;
 	__u8 proto = 0;
+	__u32 link = 0;
 	__u16 encaptype = 0;
 	__u16 encapflags = TUNNEL_ENCAP_FLAG_CSUM6;
 	__u16 encapsport = 0;
@@ -102,20 +107,25 @@ static int ip6tunnel_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u8 metadata = 0;
 	__u32 fwmark = 0;
 
+	inet_prefix_reset(&saddr);
+	inet_prefix_reset(&daddr);
+
 	if (!(n->nlmsg_flags & NLM_F_CREATE)) {
-		if (rtnl_talk(&rth, &req.n, &req.n, sizeof(req)) < 0) {
+		const struct rtattr *rta;
+
+		if (rtnl_talk(&rth, &req.n, &answer) < 0) {
 get_failed:
 			fprintf(stderr,
 				"Failed to get existing tunnel info.\n");
 			return -1;
 		}
 
-		len = req.n.nlmsg_len;
+		len = answer->nlmsg_len;
 		len -= NLMSG_LENGTH(sizeof(*ifi));
 		if (len < 0)
 			goto get_failed;
 
-		parse_rtattr(tb, IFLA_MAX, IFLA_RTA(&req.i), len);
+		parse_rtattr(tb, IFLA_MAX, IFLA_RTA(NLMSG_DATA(answer)), len);
 
 		if (!tb[IFLA_LINKINFO])
 			goto get_failed;
@@ -128,13 +138,13 @@ get_failed:
 		parse_rtattr_nested(iptuninfo, IFLA_IPTUN_MAX,
 				    linkinfo[IFLA_INFO_DATA]);
 
-		if (iptuninfo[IFLA_IPTUN_LOCAL])
-			memcpy(&laddr, RTA_DATA(iptuninfo[IFLA_IPTUN_LOCAL]),
-			       sizeof(laddr));
+		rta = iptuninfo[IFLA_IPTUN_LOCAL];
+		if (rta && get_addr_rta(&saddr, rta, AF_INET6))
+			goto get_failed;
 
-		if (iptuninfo[IFLA_IPTUN_REMOTE])
-			memcpy(&raddr, RTA_DATA(iptuninfo[IFLA_IPTUN_REMOTE]),
-			       sizeof(raddr));
+		rta = iptuninfo[IFLA_IPTUN_REMOTE];
+		if (rta && get_addr_rta(&daddr, rta, AF_INET6))
+			goto get_failed;
 
 		if (iptuninfo[IFLA_IPTUN_TTL])
 			hop_limit = rta_getattr_u8(iptuninfo[IFLA_IPTUN_TTL]);
@@ -158,10 +168,12 @@ get_failed:
 
 		if (iptuninfo[IFLA_IPTUN_FWMARK])
 			fwmark = rta_getattr_u32(iptuninfo[IFLA_IPTUN_FWMARK]);
+
+		free(answer);
 	}
 
 	while (argc > 0) {
-		if (matches(*argv, "mode") == 0) {
+		if (strcmp(*argv, "mode") == 0) {
 			NEXT_ARG();
 			if (strcmp(*argv, "ipv6/ipv6") == 0 ||
 			    strcmp(*argv, "ip6ip6") == 0)
@@ -177,35 +189,25 @@ get_failed:
 			else
 				invarg("Cannot guess tunnel mode.", *argv);
 		} else if (strcmp(*argv, "remote") == 0) {
-			inet_prefix addr;
-
 			NEXT_ARG();
-			get_prefix(&addr, *argv, preferred_family);
-			if (addr.family == AF_UNSPEC)
-				invarg("\"remote\" address family is AF_UNSPEC", *argv);
-			memcpy(&raddr, addr.data, addr.bytelen);
+			get_addr(&daddr, *argv, AF_INET6);
 		} else if (strcmp(*argv, "local") == 0) {
-			inet_prefix addr;
-
 			NEXT_ARG();
-			get_prefix(&addr, *argv, preferred_family);
-			if (addr.family == AF_UNSPEC)
-				invarg("\"local\" address family is AF_UNSPEC", *argv);
-			memcpy(&laddr, addr.data, addr.bytelen);
+			get_addr(&saddr, *argv, AF_INET6);
 		} else if (matches(*argv, "dev") == 0) {
 			NEXT_ARG();
-			link = if_nametoindex(*argv);
-			if (link == 0)
-				invarg("\"dev\" is invalid", *argv);
-		} else if (strcmp(*argv, "hoplimit") == 0 ||
-			   strcmp(*argv, "ttl") == 0 ||
+			link = ll_name_to_index(*argv);
+			if (!link)
+				exit(nodev(*argv));
+		} else if (strcmp(*argv, "ttl") == 0 ||
+			   strcmp(*argv, "hoplimit") == 0 ||
 			   strcmp(*argv, "hlim") == 0) {
-			__u8 uval;
-
 			NEXT_ARG();
-			if (get_u8(&uval, *argv, 0))
-				invarg("invalid HLIM", *argv);
-			hop_limit = uval;
+			if (strcmp(*argv, "inherit") != 0) {
+				if (get_u8(&hop_limit, *argv, 0))
+					invarg("invalid HLIM\n", *argv);
+			} else
+				hop_limit = 0;
 		} else if (strcmp(*argv, "encaplimit") == 0) {
 			NEXT_ARG();
 			if (strcmp(*argv, "none") == 0) {
@@ -218,9 +220,9 @@ get_failed:
 				encap_limit = uval;
 				flags &= ~IP6_TNL_F_IGN_ENCAP_LIMIT;
 			}
-		} else if (strcmp(*argv, "tclass") == 0 ||
+		} else if (strcmp(*argv, "tos") == 0 ||
+			   strcmp(*argv, "tclass") == 0 ||
 			   strcmp(*argv, "tc") == 0 ||
-			   strcmp(*argv, "tos") == 0 ||
 			   matches(*argv, "dsfield") == 0) {
 			__u8 uval;
 
@@ -265,6 +267,10 @@ get_failed:
 					invarg("invalid fwmark\n", *argv);
 				flags &= ~IP6_TNL_F_USE_ORIG_FWMARK;
 			}
+		} else if (strcmp(*argv, "allow-localremote") == 0) {
+			flags |= IP6_TNL_F_ALLOW_LOCAL_REMOTE;
+		} else if (strcmp(*argv, "noallow-localremote") == 0) {
+			flags &= ~IP6_TNL_F_ALLOW_LOCAL_REMOTE;
 		} else if (strcmp(*argv, "noencap") == 0) {
 			encaptype = TUNNEL_ENCAP_NONE;
 		} else if (strcmp(*argv, "encap") == 0) {
@@ -298,11 +304,13 @@ get_failed:
 		} else if (strcmp(*argv, "encap-remcsum") == 0) {
 			encapflags |= TUNNEL_ENCAP_FLAG_REMCSUM;
 		} else if (strcmp(*argv, "noencap-remcsum") == 0) {
-			encapflags |= ~TUNNEL_ENCAP_FLAG_REMCSUM;
+			encapflags &= ~TUNNEL_ENCAP_FLAG_REMCSUM;
 		} else if (strcmp(*argv, "external") == 0) {
 			metadata = 1;
-		} else
-			usage();
+		} else {
+			ip6tunnel_print_help(lu, argc, argv, stderr);
+			return -1;
+		}
 		argc--, argv++;
 	}
 
@@ -311,8 +319,15 @@ get_failed:
 		addattr_l(n, 1024, IFLA_IPTUN_COLLECT_METADATA, NULL, 0);
 		return 0;
 	}
-	addattr_l(n, 1024, IFLA_IPTUN_LOCAL, &laddr, sizeof(laddr));
-	addattr_l(n, 1024, IFLA_IPTUN_REMOTE, &raddr, sizeof(raddr));
+
+	if (is_addrtype_inet_not_unspec(&saddr)) {
+		addattr_l(n, 1024, IFLA_IPTUN_LOCAL,
+			  saddr.data, saddr.bytelen);
+	}
+	if (is_addrtype_inet_not_unspec(&daddr)) {
+		addattr_l(n, 1024, IFLA_IPTUN_REMOTE,
+			  daddr.data, daddr.bytelen);
+	}
 	addattr8(n, 1024, IFLA_IPTUN_TTL, hop_limit);
 	addattr8(n, 1024, IFLA_IPTUN_ENCAP_LIMIT, encap_limit);
 	addattr32(n, 1024, IFLA_IPTUN_FLOWINFO, flowinfo);
@@ -331,11 +346,17 @@ get_failed:
 static void ip6tunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 {
 	char s2[64];
-	int flags = 0;
+	__u32 flags = 0;
 	__u32 flowinfo = 0;
+	__u8 ttl = 0;
 
 	if (!tb)
 		return;
+
+	if (tb[IFLA_IPTUN_COLLECT_METADATA]) {
+		print_bool(PRINT_ANY, "external", "external", true);
+		return;
+	}
 
 	if (tb[IFLA_IPTUN_FLAGS])
 		flags = rta_getattr_u32(tb[IFLA_IPTUN_FLAGS]);
@@ -357,63 +378,46 @@ static void ip6tunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb
 		}
 	}
 
-	if (tb[IFLA_IPTUN_REMOTE]) {
-		print_string(PRINT_ANY,
-			     "remote",
-			     "remote %s ",
-			     rt_addr_n2a_rta(AF_INET6, tb[IFLA_IPTUN_REMOTE]));
+	tnl_print_endpoint("remote", tb[IFLA_IPTUN_REMOTE], AF_INET6);
+	tnl_print_endpoint("local", tb[IFLA_IPTUN_LOCAL], AF_INET6);
+
+	if (tb[IFLA_IPTUN_LINK]) {
+		__u32 link = rta_getattr_u32(tb[IFLA_IPTUN_LINK]);
+
+		if (link) {
+			print_string(PRINT_ANY, "link", "dev %s ",
+				     ll_index_to_name(link));
+		}
 	}
 
-	if (tb[IFLA_IPTUN_LOCAL]) {
-		print_string(PRINT_ANY,
-			     "local",
-			     "local %s ",
-			     rt_addr_n2a_rta(AF_INET6, tb[IFLA_IPTUN_LOCAL]));
-	}
+	if (tb[IFLA_IPTUN_TTL])
+		ttl = rta_getattr_u8(tb[IFLA_IPTUN_TTL]);
+	if (is_json_context() || ttl)
+		print_uint(PRINT_ANY, "ttl", "hoplimit %u ", ttl);
+	else
+		print_string(PRINT_FP, NULL, "hoplimit %s ", "inherit");
 
-	if (tb[IFLA_IPTUN_LINK] && rta_getattr_u32(tb[IFLA_IPTUN_LINK])) {
-		unsigned int link = rta_getattr_u32(tb[IFLA_IPTUN_LINK]);
-		const char *n = if_indextoname(link, s2);
-
-		if (n)
-			print_string(PRINT_ANY, "link", "dev %s ", n);
-		else
-			print_uint(PRINT_ANY, "link_index", "dev %u ", link);
-	}
-
-	if (flags & IP6_TNL_F_IGN_ENCAP_LIMIT)
+	if (flags & IP6_TNL_F_IGN_ENCAP_LIMIT) {
 		print_bool(PRINT_ANY,
 			   "ip6_tnl_f_ign_encap_limit",
 			   "encaplimit none ",
 			   true);
-	else if (tb[IFLA_IPTUN_ENCAP_LIMIT])
-		print_uint(PRINT_ANY,
-			   "encap_limit",
-			   "encaplimit %u ",
-			   rta_getattr_u8(tb[IFLA_IPTUN_ENCAP_LIMIT]));
+	} else if (tb[IFLA_IPTUN_ENCAP_LIMIT]) {
+		__u8 val = rta_getattr_u8(tb[IFLA_IPTUN_ENCAP_LIMIT]);
 
-	if (tb[IFLA_IPTUN_TTL])
-		print_uint(PRINT_ANY,
-			   "ttl",
-			   "hoplimit %u ",
-			   rta_getattr_u8(tb[IFLA_IPTUN_TTL]));
+		print_uint(PRINT_ANY, "encap_limit", "encaplimit %u ", val);
+	}
 
-	if (flags & IP6_TNL_F_USE_ORIG_TCLASS)
+	if (flags & IP6_TNL_F_USE_ORIG_TCLASS) {
 		print_bool(PRINT_ANY,
 			   "ip6_tnl_f_use_orig_tclass",
 			   "tclass inherit ",
 			   true);
-	else if (tb[IFLA_IPTUN_FLOWINFO]) {
-		__u32 val = ntohl(flowinfo & IP6_FLOWINFO_TCLASS);
+	} else if (tb[IFLA_IPTUN_FLOWINFO]) {
+		__u32 val = ntohl(flowinfo & IP6_FLOWINFO_TCLASS) >> 20;
 
-		if (is_json_context()) {
-			SPRINT_BUF(b1);
-
-			snprintf(b1, sizeof(b1), "0x%02x", (__u8)(val >> 20));
-			print_string(PRINT_JSON, "flowinfo_tclass", NULL, b1);
-		} else {
-			printf("tclass 0x%02x ", (__u8)(val >> 20));
-		}
+		snprintf(s2, sizeof(s2), "0x%02x", val);
+		print_string(PRINT_ANY, "tclass", "tclass %s ", s2);
 	}
 
 	if (flags & IP6_TNL_F_USE_ORIG_FLOWLABEL) {
@@ -421,27 +425,11 @@ static void ip6tunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb
 			   "ip6_tnl_f_use_orig_flowlabel",
 			   "flowlabel inherit ",
 			   true);
-	} else {
-		if (is_json_context()) {
-			SPRINT_BUF(b1);
+	} else if (tb[IFLA_IPTUN_FLOWINFO]) {
+		__u32 val = ntohl(flowinfo & IP6_FLOWINFO_FLOWLABEL);
 
-			snprintf(b1, sizeof(b1), "0x%05x",
-				 ntohl(flowinfo & IP6_FLOWINFO_FLOWLABEL));
-			print_string(PRINT_JSON, "flowlabel", NULL, b1);
-		} else {
-			printf("flowlabel 0x%05x ",
-			       ntohl(flowinfo & IP6_FLOWINFO_FLOWLABEL));
-		}
-	}
-
-	if (is_json_context()) {
-		SPRINT_BUF(flwinfo);
-
-		snprintf(flwinfo, sizeof(flwinfo), "0x%08x", ntohl(flowinfo));
-		print_string(PRINT_JSON, "flowinfo", NULL, flwinfo);
-	} else {
-		printf("(flowinfo 0x%08x) ", ntohl(flowinfo));
-
+		snprintf(s2, sizeof(s2), "0x%05x", val);
+		print_string(PRINT_ANY, "flowlabel", "flowlabel %s ", s2);
 	}
 
 	if (flags & IP6_TNL_F_RCV_DSCP_COPY)
@@ -453,6 +441,12 @@ static void ip6tunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb
 	if (flags & IP6_TNL_F_MIP6_DEV)
 		print_bool(PRINT_ANY, "ip6_tnl_f_mip6_dev", "mip6 ", true);
 
+	if (flags & IP6_TNL_F_ALLOW_LOCAL_REMOTE)
+		print_bool(PRINT_ANY,
+			   "ip6_tnl_f_allow_local_remote",
+			   "allow-localremote ",
+			   true);
+
 	if (flags & IP6_TNL_F_USE_ORIG_FWMARK) {
 		print_bool(PRINT_ANY,
 			   "ip6_tnl_f_use_orig_fwmark",
@@ -462,77 +456,16 @@ static void ip6tunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb
 		__u32 fwmark = rta_getattr_u32(tb[IFLA_IPTUN_FWMARK]);
 
 		if (fwmark) {
-			SPRINT_BUF(b1);
-
-			snprintf(b1, sizeof(b1), "0x%x", fwmark);
-			print_string(PRINT_ANY, "fwmark", "fwmark %s ", b1);
+			print_0xhex(PRINT_ANY,
+				    "fwmark", "fwmark 0x%x ", fwmark);
 		}
 	}
 
-	if (tb[IFLA_IPTUN_ENCAP_TYPE] &&
-	    rta_getattr_u16(tb[IFLA_IPTUN_ENCAP_TYPE]) != TUNNEL_ENCAP_NONE) {
-		__u16 type = rta_getattr_u16(tb[IFLA_IPTUN_ENCAP_TYPE]);
-		__u16 flags = rta_getattr_u16(tb[IFLA_IPTUN_ENCAP_FLAGS]);
-		__u16 sport = rta_getattr_u16(tb[IFLA_IPTUN_ENCAP_SPORT]);
-		__u16 dport = rta_getattr_u16(tb[IFLA_IPTUN_ENCAP_DPORT]);
-
-		open_json_object("encap");
-		print_string(PRINT_FP, NULL, "encap ", NULL);
-		switch (type) {
-		case TUNNEL_ENCAP_FOU:
-			print_string(PRINT_ANY, "type", "%s ", "fou");
-			break;
-		case TUNNEL_ENCAP_GUE:
-			print_string(PRINT_ANY, "type", "%s ", "gue");
-			break;
-		default:
-			print_null(PRINT_ANY, "type", "unknown ", NULL);
-			break;
-		}
-
-		if (is_json_context()) {
-			print_uint(PRINT_JSON,
-				   "sport",
-				   NULL,
-				   sport ? ntohs(sport) : 0);
-			print_uint(PRINT_JSON, "dport", NULL, ntohs(dport));
-			print_bool(PRINT_JSON, "csum", NULL,
-				   flags & TUNNEL_ENCAP_FLAG_CSUM);
-			print_bool(PRINT_JSON, "csum6", NULL,
-				   flags & TUNNEL_ENCAP_FLAG_CSUM6);
-			print_bool(PRINT_JSON, "remcsum", NULL,
-				   flags & TUNNEL_ENCAP_FLAG_REMCSUM);
-			close_json_object();
-		} else {
-			if (sport == 0)
-				fputs("encap-sport auto ", f);
-			else
-				fprintf(f, "encap-sport %u", ntohs(sport));
-
-			fprintf(f, "encap-dport %u ", ntohs(dport));
-
-			if (flags & TUNNEL_ENCAP_FLAG_CSUM)
-				fputs("encap-csum ", f);
-			else
-				fputs("noencap-csum ", f);
-
-			if (flags & TUNNEL_ENCAP_FLAG_CSUM6)
-				fputs("encap-csum6 ", f);
-			else
-				fputs("noencap-csum6 ", f);
-
-			if (flags & TUNNEL_ENCAP_FLAG_REMCSUM)
-				fputs("encap-remcsum ", f);
-			else
-				fputs("noencap-remcsum ", f);
-		}
-	}
-}
-
-static void ip6tunnel_print_help(struct link_util *lu, int argc, char **argv,
-				 FILE *f)
-{
-	print_usage(f);
+	tnl_print_encap(tb,
+			IFLA_IPTUN_ENCAP_TYPE,
+			IFLA_IPTUN_ENCAP_FLAGS,
+			IFLA_IPTUN_ENCAP_SPORT,
+			IFLA_IPTUN_ENCAP_DPORT);
 }
 
 struct link_util ip6tnl_link_util = {

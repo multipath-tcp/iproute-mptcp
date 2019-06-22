@@ -7,7 +7,7 @@ devlink \- Devlink tool
 .in +8
 .ti -8
 .B devlink
-.RI "[ " OPTIONS " ] " OBJECT " { " COMMAND " | "
+.RI "[ " OPTIONS " ] { " dev | port | monitor | sb | resource " } { " COMMAND " | "
 .BR help " }"
 .sp
 
@@ -16,18 +16,6 @@ devlink \- Devlink tool
 .RB "[ " -force " ] "
 .BI "-batch " filename
 .sp
-
-.ti -8
-.IR OBJECT " := { "
-.BR dev " | " port " | " monitor " }"
-.sp
-
-.ti -8
-.IR OPTIONS " := { "
-\fB\-V\fR[\fIersion\fR] |
-\fB\-n\fR[\fIno-nice-names\fR] }
-\fB\-j\fR[\fIjson\fR] }
-\fB\-p\fR[\fIpretty\fR] }
 
 .SH OPTIONS
 
@@ -59,6 +47,10 @@ Generate JSON output.
 .BR "\-p" , " --pretty"
 When combined with -j generate a pretty JSON output.
 
+.TP
+.BR "\-v" , " --verbose"
+Turn on verbose output.
+
 .SS
 .I OBJECT
 
@@ -73,6 +65,14 @@ When combined with -j generate a pretty JSON output.
 .TP
 .B monitor
 - watch for netlink messages.
+
+.TP
+.B sb
+- devlink shared buffer configuration.
+
+.TP
+.B resource
+- devlink device resource configuration.
 
 .SS
 .I COMMAND
@@ -103,6 +103,8 @@ Exit status is 0 if command was successful or a positive integer upon failure.
 .BR devlink-port (8),
 .BR devlink-monitor (8),
 .BR devlink-sb (8),
+.BR devlink-resource (8),
+.BR devlink-region (8),
 .br
 
 .SH REPORTING BUGS

@@ -18,7 +18,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -112,7 +111,7 @@ reg:
 noexist:
 	p = calloc(1, sizeof(*p));
 	if (p) {
-		strncpy(p->id, str, sizeof(p->id) - 1);
+		strlcpy(p->id, str, sizeof(p->id));
 		p->parse_peopt = pedit_parse_nopopt;
 		goto reg;
 	}
@@ -525,7 +524,7 @@ static int parse_munge(int *argc_p, char ***argv_p, struct m_pedit_sel *sel)
 		res = parse_offset(&argc, &argv, sel, &tkey);
 		goto done;
 	} else {
-		char k[16];
+		char k[FILTER_NAMESZ];
 		struct m_pedit_util *p = NULL;
 
 		strncpy(k, *argv, sizeof(k) - 1);
@@ -686,8 +685,7 @@ int parse_pedit(struct action_util *a, int *argc_p, char ***argv_p, int tca_id,
 		}
 	}
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, MAX_MSG, tca_id, NULL, 0);
+	tail = addattr_nest(n, MAX_MSG, tca_id);
 	if (!sel.extended) {
 		addattr_l(n, MAX_MSG, TCA_PEDIT_PARMS, &sel,
 			  sizeof(sel.sel) +
@@ -700,7 +698,7 @@ int parse_pedit(struct action_util *a, int *argc_p, char ***argv_p, int tca_id,
 		pedit_keys_ex_addattr(&sel, n);
 	}
 
-	tail->rta_len = (void *)NLMSG_TAIL(n) - (void *)tail;
+	addattr_nest_end(n, tail);
 
 	*argc_p = argc;
 	*argv_p = argv;

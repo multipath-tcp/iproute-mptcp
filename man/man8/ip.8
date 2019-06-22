@@ -1,6 +1,6 @@
 .TH IP 8 "20 Dec 2011" "iproute2" "Linux"
 .SH NAME
-ip \- show / manipulate routing, devices, policy routing and tunnels
+ip \- show / manipulate routing, network devices, interfaces and tunnels
 .SH SYNOPSIS
 
 .ad l
@@ -48,9 +48,10 @@ ip \- show / manipulate routing, devices, policy routing and tunnels
 \fB\-ts\fR[\fIhort\fR] |
 \fB\-n\fR[\fIetns\fR] name |
 \fB\-a\fR[\fIll\fR] |
-\fB\-c\fR[\fIolor\fR]
-\fB\-br\fR[\fIief\fR] }
-
+\fB\-c\fR[\fIolor\fR] |
+\fB\-br\fR[\fIief\fR] |
+\fB\-j\fR[son\fR] |
+\fB\-p\fR[retty\fR] }
 
 .SH OPTIONS
 
@@ -186,8 +187,17 @@ to
 executes specified command over all objects, it depends if command supports this option.
 
 .TP
-.BR "\-c" , " -color"
-Use color output.
+.BR \-c [ color ][ = { always | auto | never }
+Configure color output. If parameter is omitted or
+.BR always ,
+color output is enabled regardless of stdout state. If parameter is
+.BR auto ,
+stdout is checked to be a terminal before enabling color output. If parameter is
+.BR never ,
+color output is disabled. If specified multiple times, the last one takes
+precedence. This flag is ignored if
+.B \-json
+is also given.
 
 .TP
 .BR "\-t" , " \-timestamp"
@@ -208,9 +218,18 @@ Set the netlink socket receive buffer size, defaults to 1MB.
 print human readable rates in IEC units (e.g. 1Ki = 1024).
 
 .TP
-.BR "\-br" , "\-brief"
+.BR "\-br" , " \-brief"
 Print only basic information in a tabular format for better readability. This option is currently only supported by
 .BR "ip addr show " and " ip link show " commands.
+
+.TP
+.BR "\-j", " \-json"
+Output results in JavaScript Object Notation (JSON).
+
+.TP
+.BR "\-p", " \-pretty"
+The default JSON format is compact and more efficient to parse but hard for most users to read.
+This flag adds indentation for readability.
 
 .SH IP - COMMAND SYNTAX
 

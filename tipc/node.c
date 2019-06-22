@@ -26,12 +26,12 @@
 
 static int node_list_cb(const struct nlmsghdr *nlh, void *data)
 {
-	uint32_t addr;
-	struct genlmsghdr *genl = mnl_nlmsg_get_payload(nlh);
 	struct nlattr *info[TIPC_NLA_MAX + 1] = {};
 	struct nlattr *attrs[TIPC_NLA_NODE_MAX + 1] = {};
+	char str[33] = {};
+	uint32_t addr;
 
-	mnl_attr_parse(nlh, sizeof(*genl), parse_attrs, info);
+	mnl_attr_parse(nlh, sizeof(struct genlmsghdr), parse_attrs, info);
 	if (!info[TIPC_NLA_NODE])
 		return MNL_CB_ERROR;
 
@@ -40,16 +40,12 @@ static int node_list_cb(const struct nlmsghdr *nlh, void *data)
 		return MNL_CB_ERROR;
 
 	addr = mnl_attr_get_u32(attrs[TIPC_NLA_NODE_ADDR]);
-	printf("<%u.%u.%u>: ",
-		tipc_zone(addr),
-		tipc_cluster(addr),
-		tipc_node(addr));
-
+	hash2nodestr(addr, str);
+	printf("%-32s %08x ", str, addr);
 	if (attrs[TIPC_NLA_NODE_UP])
 		printf("up\n");
 	else
 		printf("down\n");
-
 	return MNL_CB_OK;
 }
 
@@ -67,7 +63,7 @@ static int cmd_node_list(struct nlmsghdr *nlh, const struct cmd *cmd,
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
-
+	printf("Node Identity                    Hash     State\n");
 	return msg_dumpit(nlh, node_list_cb, NULL);
 }
 
@@ -123,21 +119,96 @@ static int cmd_node_get_addr(struct nlmsghdr *nlh, const struct cmd *cmd,
 	}
 	close(sk);
 
-	printf("<%u.%u.%u>\n",
-		tipc_zone(addr.addr.id.node),
-		tipc_cluster(addr.addr.id.node),
-		tipc_node(addr.addr.id.node));
-
+	printf("%08x\n", addr.addr.id.node);
 	return 0;
 }
 
+static int cmd_node_set_nodeid(struct nlmsghdr *nlh, const struct cmd *cmd,
+			       struct cmdl *cmdl, void *data)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	uint8_t id[16] = {0,};
+	uint64_t *w0 = (uint64_t *) &id[0];
+	uint64_t *w1 = (uint64_t *) &id[8];
+	struct nlattr *nest;
+	char *str;
+
+	if (cmdl->argc != cmdl->optind + 1) {
+		fprintf(stderr, "Usage: %s node set nodeid NODE_ID\n",
+			cmdl->argv[0]);
+		return -EINVAL;
+	}
+
+	str = shift_cmdl(cmdl);
+	if (str2nodeid(str, id)) {
+		fprintf(stderr, "Invalid node identity\n");
+		return -EINVAL;
+	}
+
+	nlh = msg_init(buf, TIPC_NL_NET_SET);
+	if (!nlh) {
+		fprintf(stderr, "error, message initialisation failed\n");
+		return -1;
+	}
+	nest = mnl_attr_nest_start(nlh, TIPC_NLA_NET);
+	mnl_attr_put_u64(nlh, TIPC_NLA_NET_NODEID, *w0);
+	mnl_attr_put_u64(nlh, TIPC_NLA_NET_NODEID_W1, *w1);
+	mnl_attr_nest_end(nlh, nest);
+	return msg_doit(nlh, NULL, NULL);
+}
+
+static int nodeid_get_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct nlattr *info[TIPC_NLA_MAX + 1] = {};
+	struct nlattr *attrs[TIPC_NLA_NET_MAX + 1] = {};
+	char str[33] = {0,};
+	uint8_t id[16] = {0,};
+	uint64_t *w0 = (uint64_t *) &id[0];
+	uint64_t *w1 = (uint64_t *) &id[8];
+
+	mnl_attr_parse(nlh, sizeof(struct genlmsghdr), parse_attrs, info);
+	if (!info[TIPC_NLA_NET])
+		return MNL_CB_ERROR;
+
+	mnl_attr_parse_nested(info[TIPC_NLA_NET], parse_attrs, attrs);
+	if (!attrs[TIPC_NLA_NET_ID])
+		return MNL_CB_ERROR;
+
+	*w0 = mnl_attr_get_u64(attrs[TIPC_NLA_NET_NODEID]);
+	*w1 = mnl_attr_get_u64(attrs[TIPC_NLA_NET_NODEID_W1]);
+	nodeid2str(id, str);
+	printf("Node Identity                    Hash\n");
+	printf("%-33s", str);
+	cmd_node_get_addr(NULL, NULL, NULL, NULL);
+	return MNL_CB_OK;
+}
+
+static int cmd_node_get_nodeid(struct nlmsghdr *nlh, const struct cmd *cmd,
+			       struct cmdl *cmdl, void *data)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+
+	if (help_flag) {
+		(cmd->help)(cmdl);
+		return -EINVAL;
+	}
+
+	nlh = msg_init(buf, TIPC_NL_NET_GET);
+	if (!nlh) {
+		fprintf(stderr, "error, message initialisation failed\n");
+		return -1;
+	}
+
+	return msg_dumpit(nlh, nodeid_get_cb, NULL);
+}
+
+
 static int netid_get_cb(const struct nlmsghdr *nlh, void *data)
 {
-	struct genlmsghdr *genl = mnl_nlmsg_get_payload(nlh);
 	struct nlattr *info[TIPC_NLA_MAX + 1] = {};
 	struct nlattr *attrs[TIPC_NLA_NET_MAX + 1] = {};
 
-	mnl_attr_parse(nlh, sizeof(*genl), parse_attrs, info);
+	mnl_attr_parse(nlh, sizeof(struct genlmsghdr), parse_attrs, info);
 	if (!info[TIPC_NLA_NET])
 		return MNL_CB_ERROR;
 
@@ -204,8 +275,8 @@ static void cmd_node_set_help(struct cmdl *cmdl)
 	fprintf(stderr,
 		"Usage: %s node set PROPERTY\n\n"
 		"PROPERTIES\n"
-		" address ADDRESS       - Set local address\n"
-		" netid NETID           - Set local netid\n",
+		" identity NODEID       - Set node identity\n"
+		" clusterid CLUSTERID   - Set local cluster id\n",
 		cmdl->argv[0]);
 }
 
@@ -213,8 +284,10 @@ static int cmd_node_set(struct nlmsghdr *nlh, const struct cmd *cmd,
 			struct cmdl *cmdl, void *data)
 {
 	const struct cmd cmds[] = {
-		{ "address",	cmd_node_set_addr,	NULL },
+		{ "address",    cmd_node_set_addr,      NULL },
+		{ "identity",	cmd_node_set_nodeid,	NULL },
 		{ "netid",	cmd_node_set_netid,	NULL },
+		{ "clusterid",	cmd_node_set_netid,	NULL },
 		{ NULL }
 	};
 
@@ -226,8 +299,8 @@ static void cmd_node_get_help(struct cmdl *cmdl)
 	fprintf(stderr,
 		"Usage: %s node get PROPERTY\n\n"
 		"PROPERTIES\n"
-		" address               - Get local address\n"
-		" netid                 - Get local netid\n",
+		" identity              - Get node identity\n"
+		" clusterid             - Get local clusterid\n",
 		cmdl->argv[0]);
 }
 
@@ -236,7 +309,9 @@ static int cmd_node_get(struct nlmsghdr *nlh, const struct cmd *cmd,
 {
 	const struct cmd cmds[] = {
 		{ "address",	cmd_node_get_addr,	NULL },
+		{ "identity",	cmd_node_get_nodeid,	NULL },
 		{ "netid",	cmd_node_get_netid,	NULL },
+		{ "clusterid",	cmd_node_get_netid,	NULL },
 		{ NULL }
 	};
 

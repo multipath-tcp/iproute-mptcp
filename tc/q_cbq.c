@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -47,7 +46,7 @@ static void explain1(char *arg)
 }
 
 
-static int cbq_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
+static int cbq_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n, const char *dev)
 {
 	struct tc_ratespec r = {};
 	struct tc_cbq_lssopt lss = {};
@@ -63,7 +62,12 @@ static int cbq_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nl
 		if (matches(*argv, "bandwidth") == 0 ||
 		    matches(*argv, "rate") == 0) {
 			NEXT_ARG();
-			if (get_rate(&r.rate, *argv)) {
+			if (strchr(*argv, '%')) {
+				if (get_percent_rate(&r.rate, *argv, dev)) {
+					explain1("bandwidth");
+					return -1;
+				}
+			} else if (get_rate(&r.rate, *argv)) {
 				explain1("bandwidth");
 				return -1;
 			}
@@ -161,8 +165,7 @@ static int cbq_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nl
 	lss.change = TCF_CBQ_LSS_MAXIDLE|TCF_CBQ_LSS_EWMA|TCF_CBQ_LSS_AVPKT;
 	lss.avpkt = avpkt;
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 1024, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 1024, TCA_OPTIONS);
 	addattr_l(n, 1024, TCA_CBQ_RATE, &r, sizeof(r));
 	addattr_l(n, 1024, TCA_CBQ_LSSOPT, &lss, sizeof(lss));
 	addattr_l(n, 3024, TCA_CBQ_RTAB, rtab, 1024);
@@ -173,11 +176,11 @@ static int cbq_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nl
 			printf("%u ", rtab[i]);
 		printf("\n");
 	}
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_nest_end(n, tail);
 	return 0;
 }
 
-static int cbq_parse_class_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
+static int cbq_parse_class_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n, const char *dev)
 {
 	int wrr_ok = 0, fopt_ok = 0;
 	struct tc_ratespec r = {};
@@ -197,13 +200,23 @@ static int cbq_parse_class_opt(struct qdisc_util *qu, int argc, char **argv, str
 	while (argc > 0) {
 		if (matches(*argv, "rate") == 0) {
 			NEXT_ARG();
-			if (get_rate(&r.rate, *argv)) {
+			if (strchr(*argv, '%')) {
+				if (get_percent_rate(&r.rate, *argv, dev)) {
+					explain1("rate");
+					return -1;
+				}
+			} else if (get_rate(&r.rate, *argv)) {
 				explain1("rate");
 				return -1;
 			}
 		} else if (matches(*argv, "bandwidth") == 0) {
 			NEXT_ARG();
-			if (get_rate(&bndw, *argv)) {
+			if (strchr(*argv, '%')) {
+				if (get_percent_rate(&bndw, *argv, dev)) {
+					explain1("bandwidth");
+					return -1;
+				}
+			} else if (get_rate(&bndw, *argv)) {
 				explain1("bandwidth");
 				return -1;
 			}
@@ -405,8 +418,7 @@ static int cbq_parse_class_opt(struct qdisc_util *qu, int argc, char **argv, str
 		lss.change |= TCF_CBQ_LSS_EWMA;
 	}
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 1024, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 1024, TCA_OPTIONS);
 	if (lss.change) {
 		lss.change |= TCF_CBQ_LSS_FLAGS;
 		addattr_l(n, 1024, TCA_CBQ_LSSOPT, &lss, sizeof(lss));
@@ -426,7 +438,7 @@ static int cbq_parse_class_opt(struct qdisc_util *qu, int argc, char **argv, str
 			printf("\n");
 		}
 	}
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_nest_end(n, tail);
 	return 0;
 }
 

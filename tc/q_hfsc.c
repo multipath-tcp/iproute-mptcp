@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -24,8 +23,8 @@
 #include "utils.h"
 #include "tc_util.h"
 
-static int hfsc_get_sc(int *, char ***, struct tc_service_curve *);
-
+static int hfsc_get_sc(int *, char ***,
+		       struct tc_service_curve *, const char *);
 
 static void
 explain_qdisc(void)
@@ -71,7 +70,8 @@ explain1(char *arg)
 }
 
 static int
-hfsc_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
+hfsc_parse_opt(struct qdisc_util *qu, int argc, char **argv,
+	       struct nlmsghdr *n, const char *dev)
 {
 	struct tc_hfsc_qopt qopt = {};
 
@@ -142,7 +142,7 @@ hfsc_print_xstats(struct qdisc_util *qu, FILE *f, struct rtattr *xstats)
 
 static int
 hfsc_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
-		     struct nlmsghdr *n)
+		     struct nlmsghdr *n, const char *dev)
 {
 	struct tc_service_curve rsc = {}, fsc = {}, usc = {};
 	int rsc_ok = 0, fsc_ok = 0, usc_ok = 0;
@@ -151,21 +151,21 @@ hfsc_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
 	while (argc > 0) {
 		if (matches(*argv, "rt") == 0) {
 			NEXT_ARG();
-			if (hfsc_get_sc(&argc, &argv, &rsc) < 0) {
+			if (hfsc_get_sc(&argc, &argv, &rsc, dev) < 0) {
 				explain1("rt");
 				return -1;
 			}
 			rsc_ok = 1;
 		} else if (matches(*argv, "ls") == 0) {
 			NEXT_ARG();
-			if (hfsc_get_sc(&argc, &argv, &fsc) < 0) {
+			if (hfsc_get_sc(&argc, &argv, &fsc, dev) < 0) {
 				explain1("ls");
 				return -1;
 			}
 			fsc_ok = 1;
 		} else if (matches(*argv, "sc") == 0) {
 			NEXT_ARG();
-			if (hfsc_get_sc(&argc, &argv, &rsc) < 0) {
+			if (hfsc_get_sc(&argc, &argv, &rsc, dev) < 0) {
 				explain1("sc");
 				return -1;
 			}
@@ -174,7 +174,7 @@ hfsc_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
 			fsc_ok = 1;
 		} else if (matches(*argv, "ul") == 0) {
 			NEXT_ARG();
-			if (hfsc_get_sc(&argc, &argv, &usc) < 0) {
+			if (hfsc_get_sc(&argc, &argv, &usc, dev) < 0) {
 				explain1("ul");
 				return -1;
 			}
@@ -201,9 +201,7 @@ hfsc_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
 		return -1;
 	}
 
-	tail = NLMSG_TAIL(n);
-
-	addattr_l(n, 1024, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 1024, TCA_OPTIONS);
 	if (rsc_ok)
 		addattr_l(n, 1024, TCA_HFSC_RSC, &rsc, sizeof(rsc));
 	if (fsc_ok)
@@ -211,7 +209,7 @@ hfsc_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
 	if (usc_ok)
 		addattr_l(n, 1024, TCA_HFSC_USC, &usc, sizeof(usc));
 
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_nest_end(n, tail);
 	return 0;
 }
 
@@ -282,7 +280,8 @@ struct qdisc_util hfsc_qdisc_util = {
 };
 
 static int
-hfsc_get_sc1(int *argcp, char ***argvp, struct tc_service_curve *sc)
+hfsc_get_sc1(int *argcp, char ***argvp,
+	     struct tc_service_curve *sc, const char *dev)
 {
 	char **argv = *argvp;
 	int argc = *argcp;
@@ -290,7 +289,12 @@ hfsc_get_sc1(int *argcp, char ***argvp, struct tc_service_curve *sc)
 
 	if (matches(*argv, "m1") == 0) {
 		NEXT_ARG();
-		if (get_rate(&m1, *argv) < 0) {
+		if (strchr(*argv, '%')) {
+			if (get_percent_rate(&m1, *argv, dev)) {
+				explain1("m1");
+				return -1;
+			}
+		} else if (get_rate(&m1, *argv) < 0) {
 			explain1("m1");
 			return -1;
 		}
@@ -308,7 +312,12 @@ hfsc_get_sc1(int *argcp, char ***argvp, struct tc_service_curve *sc)
 
 	if (matches(*argv, "m2") == 0) {
 		NEXT_ARG();
-		if (get_rate(&m2, *argv) < 0) {
+		if (strchr(*argv, '%')) {
+			if (get_percent_rate(&m2, *argv, dev)) {
+				explain1("m2");
+				return -1;
+			}
+		} else if (get_rate(&m2, *argv) < 0) {
 			explain1("m2");
 			return -1;
 		}
@@ -325,7 +334,7 @@ hfsc_get_sc1(int *argcp, char ***argvp, struct tc_service_curve *sc)
 }
 
 static int
-hfsc_get_sc2(int *argcp, char ***argvp, struct tc_service_curve *sc)
+hfsc_get_sc2(int *argcp, char ***argvp, struct tc_service_curve *sc, const char *dev)
 {
 	char **argv = *argvp;
 	int argc = *argcp;
@@ -351,7 +360,12 @@ hfsc_get_sc2(int *argcp, char ***argvp, struct tc_service_curve *sc)
 
 	if (matches(*argv, "rate") == 0) {
 		NEXT_ARG();
-		if (get_rate(&rate, *argv) < 0) {
+		if (strchr(*argv, '%')) {
+			if (get_percent_rate(&rate, *argv, dev)) {
+				explain1("rate");
+				return -1;
+			}
+		} else if (get_rate(&rate, *argv) < 0) {
 			explain1("rate");
 			return -1;
 		}
@@ -387,10 +401,10 @@ hfsc_get_sc2(int *argcp, char ***argvp, struct tc_service_curve *sc)
 }
 
 static int
-hfsc_get_sc(int *argcp, char ***argvp, struct tc_service_curve *sc)
+hfsc_get_sc(int *argcp, char ***argvp, struct tc_service_curve *sc, const char *dev)
 {
-	if (hfsc_get_sc1(argcp, argvp, sc) < 0 &&
-	    hfsc_get_sc2(argcp, argvp, sc) < 0)
+	if (hfsc_get_sc1(argcp, argvp, sc, dev) < 0 &&
+	    hfsc_get_sc2(argcp, argvp, sc, dev) < 0)
 		return -1;
 
 	if (sc->m1 == 0 && sc->m2 == 0) {

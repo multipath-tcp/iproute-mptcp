@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 SSOBJ=ss.o ssfilter.o
 LNSTATOBJ=lnstat.o lnstat_util.o
 
@@ -24,7 +25,7 @@ rtacct: rtacct.c
 	$(QUIET_CC)$(CC) $(CFLAGS) $(LDFLAGS) -o rtacct rtacct.c $(LDLIBS) -lm
 
 arpd: arpd.c
-	$(QUIET_CC)$(CC) $(CFLAGS) -I$(DBM_INCLUDE) $(LDFLAGS) -o arpd arpd.c $(LDLIBS) -ldb -lpthread
+	$(QUIET_CC)$(CC) $(CFLAGS) -I$(DBM_INCLUDE) $(LDFLAGS) -o arpd arpd.c $(LDLIBS) -ldb
 
 ssfilter.c: ssfilter.y
 	$(QUIET_YACC)bison ssfilter.y -o ssfilter.c

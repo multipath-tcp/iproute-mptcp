@@ -10,7 +10,6 @@
  *		Fabio Checconi <fabio@gandalf.sssup.it>
  *
  */
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -36,7 +35,7 @@ static void explain_class(void)
 }
 
 static int qfq_parse_opt(struct qdisc_util *qu, int argc, char **argv,
-			 struct nlmsghdr *n)
+			 struct nlmsghdr *n, const char *dev)
 {
 	if (argc > 0) {
 		if (matches(*argv, "help") != 0)
@@ -49,13 +48,12 @@ static int qfq_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 }
 
 static int qfq_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
-			       struct nlmsghdr *n)
+			       struct nlmsghdr *n, const char *dev)
 {
 	struct rtattr *tail;
 	__u32 tmp;
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 4096, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 4096, TCA_OPTIONS);
 
 	while (argc > 0) {
 		if (matches(*argv, "weight") == 0) {
@@ -81,7 +79,7 @@ static int qfq_parse_class_opt(struct qdisc_util *qu, int argc, char **argv,
 		argc--; argv++;
 	}
 
-	tail->rta_len = (void *)NLMSG_TAIL(n) - (void *)tail;
+	addattr_nest_end(n, tail);
 
 	return 0;
 }

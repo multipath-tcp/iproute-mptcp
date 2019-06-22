@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __LIST_H__
 #define __LIST_H__ 1
 /* List and hash list stuff from kernel */
@@ -105,6 +106,11 @@ static inline void hlist_add_head(struct hlist_node *n, struct hlist_head *h)
 		first->pprev = &n->next;
 	h->first = n;
 	n->pprev = &h->first;
+}
+
+static inline int list_empty(const struct list_head *head)
+{
+	return head->next == head;
 }
 
 #define hlist_for_each(pos, head) \

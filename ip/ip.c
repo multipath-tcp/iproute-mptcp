@@ -12,7 +12,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -34,7 +33,6 @@ int oneline;
 int brief;
 int json;
 int timestamp;
-const char *_SL_;
 int force;
 int max_flush_loops = 10;
 int batch_mode;
@@ -54,12 +52,12 @@ static void usage(void)
 "                   netns | l2tp | fou | macsec | tcp_metrics | token | netconf | ila |\n"
 "                   vrf | sr }\n"
 "       OPTIONS := { -V[ersion] | -s[tatistics] | -d[etails] | -r[esolve] |\n"
-"                    -h[uman-readable] | -iec |\n"
+"                    -h[uman-readable] | -iec | -j[son] | -p[retty] |\n"
 "                    -f[amily] { inet | inet6 | ipx | dnet | mpls | bridge | link } |\n"
-"                    -4 | -6 | -I | -D | -B | -0 |\n"
+"                    -4 | -6 | -I | -D | -M | -B | -0 |\n"
 "                    -l[oops] { maximum-addr-flush-attempts } | -br[ief] |\n"
 "                    -o[neline] | -t[imestamp] | -ts[hort] | -b[atch] [filename] |\n"
-"                    -rc[vbuf] [size] | -n[etns] name | -a[ll] | -c[olor]}\n");
+"                    -rc[vbuf] [size] | -n[etns] name | -a[ll] | -c[olor]}\n");
 	exit(-1);
 }
 
@@ -173,6 +171,19 @@ int main(int argc, char **argv)
 {
 	char *basename;
 	char *batch_file = NULL;
+	int color = 0;
+
+	/* to run vrf exec without root, capabilities might be set, drop them
+	 * if not needed as the first thing.
+	 * execv will drop them for the child command.
+	 * vrf exec requires:
+	 * - cap_dac_override to create the cgroup subdir in /sys
+	 * - cap_sys_admin to load the BPF program
+	 * - cap_net_admin to set the socket into the cgroup
+	 */
+	if (argc < 3 || strcmp(argv[1], "vrf") != 0 ||
+			strcmp(argv[2], "exec") != 0)
+		drop_cap();
 
 	basename = strrchr(argv[0], '/');
 	if (basename == NULL)
@@ -241,10 +252,6 @@ int main(int argc, char **argv)
 		} else if (matches(opt, "-tshort") == 0) {
 			++timestamp;
 			++timestamp_short;
-#if 0
-		} else if (matches(opt, "-numeric") == 0) {
-			rtnl_names_numeric++;
-#endif
 		} else if (matches(opt, "-Version") == 0) {
 			printf("ip utility, iproute2-ss%s\n", SNAPSHOT);
 			exit(0);
@@ -260,6 +267,8 @@ int main(int argc, char **argv)
 			++brief;
 		} else if (matches(opt, "-json") == 0) {
 			++json;
+		} else if (matches(opt, "-pretty") == 0) {
+			++pretty;
 		} else if (matches(opt, "-rcvbuf") == 0) {
 			unsigned int size;
 
@@ -273,8 +282,7 @@ int main(int argc, char **argv)
 				exit(-1);
 			}
 			rcvbuf = size;
-		} else if (matches(opt, "-color") == 0) {
-			enable_color();
+		} else if (matches_color(opt, &color)) {
 		} else if (matches(opt, "-help") == 0) {
 			usage();
 		} else if (matches(opt, "-netns") == 0) {
@@ -294,8 +302,7 @@ int main(int argc, char **argv)
 
 	_SL_ = oneline ? "\\" : "\n";
 
-	if (json)
-		check_if_color_enabled();
+	check_enable_color(color, json);
 
 	if (batch_file)
 		return batch(batch_file);

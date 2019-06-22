@@ -22,9 +22,10 @@
 #include <errno.h>
 
 #include "rt_names.h"
-#include "utils.h"
-#include "iproute_lwtunnel.h"
 #include "bpf_util.h"
+#include "utils.h"
+#include "ip_common.h"
+#include "ila_common.h"
 
 #include <linux/seg6.h>
 #include <linux/seg6_iptunnel.h>
@@ -93,20 +94,28 @@ static void print_srh(FILE *fp, struct ipv6_sr_hdr *srh)
 {
 	int i;
 
-	fprintf(fp, "segs %d [ ", srh->first_segment + 1);
+	if (is_json_context())
+		open_json_array(PRINT_JSON, "segs");
+	else
+		fprintf(fp, "segs %d [ ", srh->first_segment + 1);
 
 	for (i = srh->first_segment; i >= 0; i--)
-		fprintf(fp, "%s ",
-			rt_addr_n2a(AF_INET6, 16, &srh->segments[i]));
+		print_color_string(PRINT_ANY, COLOR_INET6,
+				   NULL, "%s ",
+				   rt_addr_n2a(AF_INET6, 16, &srh->segments[i]));
 
-	fprintf(fp, "] ");
+	if (is_json_context())
+		close_json_array(PRINT_JSON, NULL);
+	else
+		fprintf(fp, "] ");
 
 	if (sr_has_hmac(srh)) {
 		unsigned int offset = ((srh->hdrlen + 1) << 3) - 40;
 		struct sr6_tlv_hmac *tlv;
 
 		tlv = (struct sr6_tlv_hmac *)((char *)srh + offset);
-		fprintf(fp, "hmac 0x%X ", ntohl(tlv->hmackeyid));
+		print_0xhex(PRINT_ANY, "hmac",
+			    "hmac 0x%X ", ntohl(tlv->hmackeyid));
 	}
 }
 
@@ -147,7 +156,8 @@ static void print_encap_seg6(FILE *fp, struct rtattr *encap)
 		return;
 
 	tuninfo = RTA_DATA(tb[SEG6_IPTUNNEL_SRH]);
-	fprintf(fp, "mode %s ", format_seg6mode_type(tuninfo->mode));
+	print_string(PRINT_ANY, "mode",
+		     "mode %s ", format_seg6mode_type(tuninfo->mode));
 
 	print_srh(fp, tuninfo->srh);
 }
@@ -167,6 +177,7 @@ static const char *seg6_action_names[SEG6_LOCAL_ACTION_MAX + 1] = {
 	[SEG6_LOCAL_ACTION_END_S]		= "End.S",
 	[SEG6_LOCAL_ACTION_END_AS]		= "End.AS",
 	[SEG6_LOCAL_ACTION_END_AM]		= "End.AM",
+	[SEG6_LOCAL_ACTION_END_BPF]		= "End.BPF",
 };
 
 static const char *format_action_type(int action)
@@ -192,10 +203,30 @@ static int read_action_type(const char *name)
 	return SEG6_LOCAL_ACTION_UNSPEC;
 }
 
+static void print_encap_bpf_prog(FILE *fp, struct rtattr *encap,
+				 const char *str)
+{
+	struct rtattr *tb[LWT_BPF_PROG_MAX+1];
+	const char *progname = NULL;
+
+	parse_rtattr_nested(tb, LWT_BPF_PROG_MAX, encap);
+
+	if (tb[LWT_BPF_PROG_NAME])
+		progname = rta_getattr_str(tb[LWT_BPF_PROG_NAME]);
+
+	if (is_json_context())
+		print_string(PRINT_JSON, str, NULL,
+			     progname ? : "<unknown>");
+	else {
+		fprintf(fp, "%s ", str);
+		if (progname)
+			fprintf(fp, "%s ", progname);
+	}
+}
+
 static void print_encap_seg6local(FILE *fp, struct rtattr *encap)
 {
 	struct rtattr *tb[SEG6_LOCAL_MAX + 1];
-	char ifbuf[IFNAMSIZ];
 	int action;
 
 	parse_rtattr_nested(tb, SEG6_LOCAL_MAX, encap);
@@ -205,39 +236,45 @@ static void print_encap_seg6local(FILE *fp, struct rtattr *encap)
 
 	action = rta_getattr_u32(tb[SEG6_LOCAL_ACTION]);
 
-	fprintf(fp, "action %s ", format_action_type(action));
+	print_string(PRINT_ANY, "action",
+		     "action %s ", format_action_type(action));
 
 	if (tb[SEG6_LOCAL_SRH]) {
-		fprintf(fp, "srh ");
+		open_json_object("srh");
 		print_srh(fp, RTA_DATA(tb[SEG6_LOCAL_SRH]));
+		close_json_object();
 	}
 
 	if (tb[SEG6_LOCAL_TABLE])
-		fprintf(fp, "table %u ", rta_getattr_u32(tb[SEG6_LOCAL_TABLE]));
+		print_uint(PRINT_ANY, "table",
+			   "table %u ", rta_getattr_u32(tb[SEG6_LOCAL_TABLE]));
 
 	if (tb[SEG6_LOCAL_NH4]) {
-		fprintf(fp, "nh4 %s ",
-			rt_addr_n2a_rta(AF_INET, tb[SEG6_LOCAL_NH4]));
+		print_string(PRINT_ANY, "nh4",
+			     "nh4 %s ", rt_addr_n2a_rta(AF_INET, tb[SEG6_LOCAL_NH4]));
 	}
 
 	if (tb[SEG6_LOCAL_NH6]) {
-		fprintf(fp, "nh6 %s ",
-			rt_addr_n2a_rta(AF_INET6, tb[SEG6_LOCAL_NH6]));
+		print_string(PRINT_ANY, "nh6",
+			     "nh6 %s ", rt_addr_n2a_rta(AF_INET6, tb[SEG6_LOCAL_NH6]));
 	}
 
 	if (tb[SEG6_LOCAL_IIF]) {
 		int iif = rta_getattr_u32(tb[SEG6_LOCAL_IIF]);
 
-		fprintf(fp, "iif %s ",
-			if_indextoname(iif, ifbuf) ?: "<unknown>");
+		print_string(PRINT_ANY, "iif",
+			     "iif %s ", ll_index_to_name(iif));
 	}
 
 	if (tb[SEG6_LOCAL_OIF]) {
 		int oif = rta_getattr_u32(tb[SEG6_LOCAL_OIF]);
 
-		fprintf(fp, "oif %s ",
-			if_indextoname(oif, ifbuf) ?: "<unknown>");
+		print_string(PRINT_ANY, "oif",
+			     "oif %s ", ll_index_to_name(oif));
 	}
+
+	if (tb[SEG6_LOCAL_BPF])
+		print_encap_bpf_prog(fp, tb[SEG6_LOCAL_BPF], "endpoint");
 }
 
 static void print_encap_mpls(FILE *fp, struct rtattr *encap)
@@ -247,10 +284,10 @@ static void print_encap_mpls(FILE *fp, struct rtattr *encap)
 	parse_rtattr_nested(tb, MPLS_IPTUNNEL_MAX, encap);
 
 	if (tb[MPLS_IPTUNNEL_DST])
-		fprintf(fp, " %s ",
+		print_string(PRINT_ANY, "dst", " %s ",
 			format_host_rta(AF_MPLS, tb[MPLS_IPTUNNEL_DST]));
 	if (tb[MPLS_IPTUNNEL_TTL])
-		fprintf(fp, "ttl %u ",
+		print_uint(PRINT_ANY, "ttl", "ttl %u ",
 			rta_getattr_u8(tb[MPLS_IPTUNNEL_TTL]));
 }
 
@@ -261,48 +298,26 @@ static void print_encap_ip(FILE *fp, struct rtattr *encap)
 	parse_rtattr_nested(tb, LWTUNNEL_IP_MAX, encap);
 
 	if (tb[LWTUNNEL_IP_ID])
-		fprintf(fp, "id %llu ",
-			ntohll(rta_getattr_u64(tb[LWTUNNEL_IP_ID])));
+		print_u64(PRINT_ANY, "id", "id %llu ",
+			   ntohll(rta_getattr_u64(tb[LWTUNNEL_IP_ID])));
 
 	if (tb[LWTUNNEL_IP_SRC])
-		fprintf(fp, "src %s ",
-			rt_addr_n2a_rta(AF_INET, tb[LWTUNNEL_IP_SRC]));
+		print_color_string(PRINT_ANY, COLOR_INET,
+				   "src", "src %s ",
+				   rt_addr_n2a_rta(AF_INET, tb[LWTUNNEL_IP_SRC]));
 
 	if (tb[LWTUNNEL_IP_DST])
-		fprintf(fp, "dst %s ",
-			rt_addr_n2a_rta(AF_INET, tb[LWTUNNEL_IP_DST]));
+		print_color_string(PRINT_ANY, COLOR_INET,
+				   "dst", "dst %s ",
+				   rt_addr_n2a_rta(AF_INET, tb[LWTUNNEL_IP_DST]));
 
 	if (tb[LWTUNNEL_IP_TTL])
-		fprintf(fp, "ttl %d ", rta_getattr_u8(tb[LWTUNNEL_IP_TTL]));
+		print_uint(PRINT_ANY, "ttl",
+			   "ttl %u ", rta_getattr_u8(tb[LWTUNNEL_IP_TTL]));
 
 	if (tb[LWTUNNEL_IP_TOS])
-		fprintf(fp, "tos %d ", rta_getattr_u8(tb[LWTUNNEL_IP_TOS]));
-}
-
-static char *ila_csum_mode2name(__u8 csum_mode)
-{
-	switch (csum_mode) {
-	case ILA_CSUM_ADJUST_TRANSPORT:
-		return "adj-transport";
-	case ILA_CSUM_NEUTRAL_MAP:
-		return "neutral-map";
-	case ILA_CSUM_NO_ACTION:
-		return "no-action";
-	default:
-		return "unknown";
-	}
-}
-
-static int ila_csum_name2mode(char *name)
-{
-	if (strcmp(name, "adj-transport") == 0)
-		return ILA_CSUM_ADJUST_TRANSPORT;
-	else if (strcmp(name, "neutral-map") == 0)
-		return ILA_CSUM_NEUTRAL_MAP;
-	else if (strcmp(name, "no-action") == 0)
-		return ILA_CSUM_NO_ACTION;
-	else
-		return -1;
+		print_uint(PRINT_ANY, "tos",
+			   "tos %d ", rta_getattr_u8(tb[LWTUNNEL_IP_TOS]));
 }
 
 static void print_encap_ila(FILE *fp, struct rtattr *encap)
@@ -316,12 +331,24 @@ static void print_encap_ila(FILE *fp, struct rtattr *encap)
 
 		addr64_n2a(rta_getattr_u64(tb[ILA_ATTR_LOCATOR]),
 			   abuf, sizeof(abuf));
-		fprintf(fp, " %s ", abuf);
+		print_string(PRINT_ANY, "locator",
+			     " %s ", abuf);
 	}
 
 	if (tb[ILA_ATTR_CSUM_MODE])
-		fprintf(fp, " csum-mode %s ",
-			ila_csum_mode2name(rta_getattr_u8(tb[ILA_ATTR_CSUM_MODE])));
+		print_string(PRINT_ANY, "csum_mode",
+			     " csum-mode %s ",
+			     ila_csum_mode2name(rta_getattr_u8(tb[ILA_ATTR_CSUM_MODE])));
+
+	if (tb[ILA_ATTR_IDENT_TYPE])
+		print_string(PRINT_ANY, "ident_type",
+			     " ident-type %s ",
+			     ila_ident_type2name(rta_getattr_u8(tb[ILA_ATTR_IDENT_TYPE])));
+
+	if (tb[ILA_ATTR_HOOK_TYPE])
+		print_string(PRINT_ANY, "hook_type",
+			     " hook-type %s ",
+			     ila_hook_type2name(rta_getattr_u8(tb[ILA_ATTR_HOOK_TYPE])));
 }
 
 static void print_encap_ip6(FILE *fp, struct rtattr *encap)
@@ -331,35 +358,27 @@ static void print_encap_ip6(FILE *fp, struct rtattr *encap)
 	parse_rtattr_nested(tb, LWTUNNEL_IP6_MAX, encap);
 
 	if (tb[LWTUNNEL_IP6_ID])
-		fprintf(fp, "id %llu ",
-			ntohll(rta_getattr_u64(tb[LWTUNNEL_IP6_ID])));
+		print_u64(PRINT_ANY, "id", "id %llu ",
+			    ntohll(rta_getattr_u64(tb[LWTUNNEL_IP6_ID])));
 
 	if (tb[LWTUNNEL_IP6_SRC])
-		fprintf(fp, "src %s ",
-			rt_addr_n2a_rta(AF_INET6, tb[LWTUNNEL_IP6_SRC]));
+		print_color_string(PRINT_ANY, COLOR_INET6,
+				   "src", "src %s ",
+				   rt_addr_n2a_rta(AF_INET6, tb[LWTUNNEL_IP6_SRC]));
 
 	if (tb[LWTUNNEL_IP6_DST])
-		fprintf(fp, "dst %s ",
-			rt_addr_n2a_rta(AF_INET6, tb[LWTUNNEL_IP6_DST]));
+		print_color_string(PRINT_ANY, COLOR_INET6,
+				   "dst", "dst %s ",
+				   rt_addr_n2a_rta(AF_INET6, tb[LWTUNNEL_IP6_DST]));
 
 	if (tb[LWTUNNEL_IP6_HOPLIMIT])
-		fprintf(fp, "hoplimit %d ",
-			rta_getattr_u8(tb[LWTUNNEL_IP6_HOPLIMIT]));
+		print_u64(PRINT_ANY, "hoplimit",
+			   "hoplimit %u ",
+			   rta_getattr_u8(tb[LWTUNNEL_IP6_HOPLIMIT]));
 
 	if (tb[LWTUNNEL_IP6_TC])
-		fprintf(fp, "tc %d ", rta_getattr_u8(tb[LWTUNNEL_IP6_TC]));
-}
-
-static void print_encap_bpf_prog(FILE *fp, struct rtattr *encap,
-				 const char *str)
-{
-	struct rtattr *tb[LWT_BPF_PROG_MAX+1];
-
-	parse_rtattr_nested(tb, LWT_BPF_PROG_MAX, encap);
-	fprintf(fp, "%s ", str);
-
-	if (tb[LWT_BPF_PROG_NAME])
-		fprintf(fp, "%s ", rta_getattr_str(tb[LWT_BPF_PROG_NAME]));
+		print_uint(PRINT_ANY, "tc",
+			   "tc %u ", rta_getattr_u8(tb[LWTUNNEL_IP6_TC]));
 }
 
 static void print_encap_bpf(FILE *fp, struct rtattr *encap)
@@ -375,7 +394,8 @@ static void print_encap_bpf(FILE *fp, struct rtattr *encap)
 	if (tb[LWT_BPF_XMIT])
 		print_encap_bpf_prog(fp, tb[LWT_BPF_XMIT], "xmit");
 	if (tb[LWT_BPF_XMIT_HEADROOM])
-		fprintf(fp, "%d ", rta_getattr_u32(tb[LWT_BPF_XMIT_HEADROOM]));
+		print_uint(PRINT_ANY, "headroom",
+			   " %u ", rta_getattr_u32(tb[LWT_BPF_XMIT_HEADROOM]));
 }
 
 void lwt_print_encap(FILE *fp, struct rtattr *encap_type,
@@ -388,7 +408,7 @@ void lwt_print_encap(FILE *fp, struct rtattr *encap_type,
 
 	et = rta_getattr_u16(encap_type);
 
-	fprintf(fp, " encap %s ", format_encap_type(et));
+	print_string(PRINT_ANY, "encap", " encap %s ", format_encap_type(et));
 
 	switch (et) {
 	case LWTUNNEL_ENCAP_MPLS:
@@ -448,7 +468,10 @@ static struct ipv6_sr_hdr *parse_srh(char *segbuf, int hmac, bool encap)
 
 	i = srh->first_segment;
 	for (s = strtok(segbuf, ","); s; s = strtok(NULL, ",")) {
-		inet_get_addr(s, NULL, &srh->segments[i]);
+		inet_prefix addr;
+
+		get_addr(&addr, s, AF_INET6);
+		memcpy(&srh->segments[i], addr.data, sizeof(struct in6_addr));
 		i--;
 	}
 
@@ -471,10 +494,11 @@ static int parse_encap_seg6(struct rtattr *rta, size_t len, int *argcp,
 	struct seg6_iptunnel_encap *tuninfo;
 	struct ipv6_sr_hdr *srh;
 	char **argv = *argvp;
-	char segbuf[1024];
+	char segbuf[1024] = "";
 	int argc = *argcp;
 	int encap = -1;
 	__u32 hmac = 0;
+	int ret = 0;
 	int srhlen;
 
 	while (argc > 0) {
@@ -515,338 +539,20 @@ static int parse_encap_seg6(struct rtattr *rta, size_t len, int *argcp,
 
 	memcpy(tuninfo->srh, srh, srhlen);
 
-	rta_addattr_l(rta, len, SEG6_IPTUNNEL_SRH, tuninfo,
-		      sizeof(*tuninfo) + srhlen);
+	if (rta_addattr_l(rta, len, SEG6_IPTUNNEL_SRH, tuninfo,
+			  sizeof(*tuninfo) + srhlen)) {
+		ret = -1;
+		goto out;
+	}
 
+	*argcp = argc + 1;
+	*argvp = argv - 1;
+
+out:
 	free(tuninfo);
 	free(srh);
 
-	*argcp = argc + 1;
-	*argvp = argv - 1;
-
-	return 0;
-}
-
-static int parse_encap_seg6local(struct rtattr *rta, size_t len, int *argcp,
-				 char ***argvp)
-{
-	int segs_ok = 0, hmac_ok = 0, table_ok = 0, nh4_ok = 0, nh6_ok = 0;
-	int iif_ok = 0, oif_ok = 0, action_ok = 0, srh_ok = 0;
-	__u32 action = 0, table, iif, oif;
-	struct ipv6_sr_hdr *srh;
-	char **argv = *argvp;
-	int argc = *argcp;
-	char segbuf[1024];
-	inet_prefix addr;
-	__u32 hmac = 0;
-
-	while (argc > 0) {
-		if (strcmp(*argv, "action") == 0) {
-			NEXT_ARG();
-			if (action_ok++)
-				duparg2("action", *argv);
-			action = read_action_type(*argv);
-			if (!action)
-				invarg("\"action\" value is invalid\n", *argv);
-			rta_addattr32(rta, len, SEG6_LOCAL_ACTION, action);
-		} else if (strcmp(*argv, "table") == 0) {
-			NEXT_ARG();
-			if (table_ok++)
-				duparg2("table", *argv);
-			get_u32(&table, *argv, 0);
-			rta_addattr32(rta, len, SEG6_LOCAL_TABLE, table);
-		} else if (strcmp(*argv, "nh4") == 0) {
-			NEXT_ARG();
-			if (nh4_ok++)
-				duparg2("nh4", *argv);
-			get_addr(&addr, *argv, AF_INET);
-			rta_addattr_l(rta, len, SEG6_LOCAL_NH4, &addr.data,
-				      addr.bytelen);
-		} else if (strcmp(*argv, "nh6") == 0) {
-			NEXT_ARG();
-			if (nh6_ok++)
-				duparg2("nh6", *argv);
-			get_addr(&addr, *argv, AF_INET6);
-			rta_addattr_l(rta, len, SEG6_LOCAL_NH6, &addr.data,
-				      addr.bytelen);
-		} else if (strcmp(*argv, "iif") == 0) {
-			NEXT_ARG();
-			if (iif_ok++)
-				duparg2("iif", *argv);
-			iif = if_nametoindex(*argv);
-			if (!iif)
-				invarg("\"iif\" interface not found\n", *argv);
-			rta_addattr32(rta, len, SEG6_LOCAL_IIF, iif);
-		} else if (strcmp(*argv, "oif") == 0) {
-			NEXT_ARG();
-			if (oif_ok++)
-				duparg2("oif", *argv);
-			oif = if_nametoindex(*argv);
-			if (!oif)
-				invarg("\"oif\" interface not found\n", *argv);
-			rta_addattr32(rta, len, SEG6_LOCAL_OIF, oif);
-		} else if (strcmp(*argv, "srh") == 0) {
-			NEXT_ARG();
-			if (srh_ok++)
-				duparg2("srh", *argv);
-			if (strcmp(*argv, "segs") != 0)
-				invarg("missing \"segs\" attribute for srh\n",
-					*argv);
-			NEXT_ARG();
-			if (segs_ok++)
-				duparg2("segs", *argv);
-			strncpy(segbuf, *argv, 1024);
-			segbuf[1023] = 0;
-			if (!NEXT_ARG_OK())
-				break;
-			NEXT_ARG();
-			if (strcmp(*argv, "hmac") == 0) {
-				NEXT_ARG();
-				if (hmac_ok++)
-					duparg2("hmac", *argv);
-				get_u32(&hmac, *argv, 0);
-			} else {
-				continue;
-			}
-		} else {
-			break;
-		}
-		argc--; argv++;
-	}
-
-	if (!action) {
-		fprintf(stderr, "Missing action type\n");
-		exit(-1);
-	}
-
-	if (srh_ok) {
-		int srhlen;
-
-		srh = parse_srh(segbuf, hmac,
-				action == SEG6_LOCAL_ACTION_END_B6_ENCAP);
-		srhlen = (srh->hdrlen + 1) << 3;
-		rta_addattr_l(rta, len, SEG6_LOCAL_SRH, srh, srhlen);
-		free(srh);
-	}
-
-	*argcp = argc + 1;
-	*argvp = argv - 1;
-
-	return 0;
-}
-
-static int parse_encap_mpls(struct rtattr *rta, size_t len,
-			    int *argcp, char ***argvp)
-{
-	inet_prefix addr;
-	int argc = *argcp;
-	char **argv = *argvp;
-	int ttl_ok = 0;
-
-	if (get_addr(&addr, *argv, AF_MPLS)) {
-		fprintf(stderr,
-			"Error: an inet address is expected rather than \"%s\".\n",
-			*argv);
-		exit(1);
-	}
-
-	rta_addattr_l(rta, len, MPLS_IPTUNNEL_DST, &addr.data,
-		      addr.bytelen);
-
-	argc--;
-	argv++;
-
-	while (argc > 0) {
-		if (strcmp(*argv, "ttl") == 0) {
-			__u8 ttl;
-
-			NEXT_ARG();
-			if (ttl_ok++)
-				duparg2("ttl", *argv);
-			if (get_u8(&ttl, *argv, 0))
-				invarg("\"ttl\" value is invalid\n", *argv);
-			rta_addattr8(rta, len, MPLS_IPTUNNEL_TTL, ttl);
-		} else {
-			break;
-		}
-		argc--; argv++;
-	}
-
-	/* argv is currently the first unparsed argument,
-	 * but the lwt_parse_encap() caller will move to the next,
-	 * so step back
-	 */
-	*argcp = argc + 1;
-	*argvp = argv - 1;
-
-	return 0;
-}
-
-static int parse_encap_ip(struct rtattr *rta, size_t len,
-			  int *argcp, char ***argvp)
-{
-	int id_ok = 0, dst_ok = 0, tos_ok = 0, ttl_ok = 0;
-	char **argv = *argvp;
-	int argc = *argcp;
-
-	while (argc > 0) {
-		if (strcmp(*argv, "id") == 0) {
-			__u64 id;
-
-			NEXT_ARG();
-			if (id_ok++)
-				duparg2("id", *argv);
-			if (get_be64(&id, *argv, 0))
-				invarg("\"id\" value is invalid\n", *argv);
-			rta_addattr64(rta, len, LWTUNNEL_IP_ID, id);
-		} else if (strcmp(*argv, "dst") == 0) {
-			inet_prefix addr;
-
-			NEXT_ARG();
-			if (dst_ok++)
-				duparg2("dst", *argv);
-			get_addr(&addr, *argv, AF_INET);
-			rta_addattr_l(rta, len, LWTUNNEL_IP_DST,
-				      &addr.data, addr.bytelen);
-		} else if (strcmp(*argv, "tos") == 0) {
-			__u32 tos;
-
-			NEXT_ARG();
-			if (tos_ok++)
-				duparg2("tos", *argv);
-			if (rtnl_dsfield_a2n(&tos, *argv))
-				invarg("\"tos\" value is invalid\n", *argv);
-			rta_addattr8(rta, len, LWTUNNEL_IP_TOS, tos);
-		} else if (strcmp(*argv, "ttl") == 0) {
-			__u8 ttl;
-
-			NEXT_ARG();
-			if (ttl_ok++)
-				duparg2("ttl", *argv);
-			if (get_u8(&ttl, *argv, 0))
-				invarg("\"ttl\" value is invalid\n", *argv);
-			rta_addattr8(rta, len, LWTUNNEL_IP_TTL, ttl);
-		} else {
-			break;
-		}
-		argc--; argv++;
-	}
-
-	/* argv is currently the first unparsed argument,
-	 * but the lwt_parse_encap() caller will move to the next,
-	 * so step back
-	 */
-	*argcp = argc + 1;
-	*argvp = argv - 1;
-
-	return 0;
-}
-
-static int parse_encap_ila(struct rtattr *rta, size_t len,
-			   int *argcp, char ***argvp)
-{
-	__u64 locator;
-	int argc = *argcp;
-	char **argv = *argvp;
-
-	if (get_addr64(&locator, *argv) < 0) {
-		fprintf(stderr, "Bad locator: %s\n", *argv);
-		exit(1);
-	}
-
-	argc--; argv++;
-
-	rta_addattr64(rta, 1024, ILA_ATTR_LOCATOR, locator);
-
-	while (argc > 0) {
-		if (strcmp(*argv, "csum-mode") == 0) {
-			int csum_mode;
-
-			NEXT_ARG();
-
-			csum_mode = ila_csum_name2mode(*argv);
-			if (csum_mode < 0)
-				invarg("\"csum-mode\" value is invalid\n",
-				       *argv);
-
-			rta_addattr8(rta, 1024, ILA_ATTR_CSUM_MODE,
-				     (__u8)csum_mode);
-
-			argc--; argv++;
-		} else {
-			break;
-		}
-	}
-
-	/* argv is currently the first unparsed argument,
-	 * but the lwt_parse_encap() caller will move to the next,
-	 * so step back
-	 */
-	*argcp = argc + 1;
-	*argvp = argv - 1;
-
-	return 0;
-}
-
-static int parse_encap_ip6(struct rtattr *rta, size_t len,
-			   int *argcp, char ***argvp)
-{
-	int id_ok = 0, dst_ok = 0, tos_ok = 0, ttl_ok = 0;
-	char **argv = *argvp;
-	int argc = *argcp;
-
-	while (argc > 0) {
-		if (strcmp(*argv, "id") == 0) {
-			__u64 id;
-
-			NEXT_ARG();
-			if (id_ok++)
-				duparg2("id", *argv);
-			if (get_be64(&id, *argv, 0))
-				invarg("\"id\" value is invalid\n", *argv);
-			rta_addattr64(rta, len, LWTUNNEL_IP6_ID, id);
-		} else if (strcmp(*argv, "dst") == 0) {
-			inet_prefix addr;
-
-			NEXT_ARG();
-			if (dst_ok++)
-				duparg2("dst", *argv);
-			get_addr(&addr, *argv, AF_INET6);
-			rta_addattr_l(rta, len, LWTUNNEL_IP6_DST,
-				      &addr.data, addr.bytelen);
-		} else if (strcmp(*argv, "tc") == 0) {
-			__u32 tc;
-
-			NEXT_ARG();
-			if (tos_ok++)
-				duparg2("tc", *argv);
-			if (rtnl_dsfield_a2n(&tc, *argv))
-				invarg("\"tc\" value is invalid\n", *argv);
-			rta_addattr8(rta, len, LWTUNNEL_IP6_TC, tc);
-		} else if (strcmp(*argv, "hoplimit") == 0) {
-			__u8 hoplimit;
-
-			NEXT_ARG();
-			if (ttl_ok++)
-				duparg2("hoplimit", *argv);
-			if (get_u8(&hoplimit, *argv, 0))
-				invarg("\"hoplimit\" value is invalid\n",
-				       *argv);
-			rta_addattr8(rta, len, LWTUNNEL_IP6_HOPLIMIT, hoplimit);
-		} else {
-			break;
-		}
-		argc--; argv++;
-	}
-
-	/* argv is currently the first unparsed argument,
-	 * but the lwt_parse_encap() caller will move to the next,
-	 * so step back
-	 */
-	*argcp = argc + 1;
-	*argvp = argv - 1;
-
-	return 0;
+	return ret;
 }
 
 struct lwt_x {
@@ -872,6 +578,7 @@ static int lwt_parse_bpf(struct rtattr *rta, size_t len,
 			 int attr, const enum bpf_prog_type bpf_type)
 {
 	struct bpf_cfg_in cfg = {
+		.type = bpf_type,
 		.argc = *argcp,
 		.argv = *argvp,
 	};
@@ -883,7 +590,7 @@ static int lwt_parse_bpf(struct rtattr *rta, size_t len,
 	int err;
 
 	nest = rta_nest(rta, len, attr);
-	err = bpf_parse_common(bpf_type, &cfg, &bpf_cb_ops, &x);
+	err = bpf_parse_and_load_common(&cfg, &bpf_cb_ops, &x);
 	if (err < 0) {
 		fprintf(stderr, "Failed to parse eBPF program: %s\n",
 			strerror(-err));
@@ -895,6 +602,381 @@ static int lwt_parse_bpf(struct rtattr *rta, size_t len,
 	*argvp = cfg.argv;
 
 	return 0;
+}
+
+static int parse_encap_seg6local(struct rtattr *rta, size_t len, int *argcp,
+				 char ***argvp)
+{
+	int segs_ok = 0, hmac_ok = 0, table_ok = 0, nh4_ok = 0, nh6_ok = 0;
+	int iif_ok = 0, oif_ok = 0, action_ok = 0, srh_ok = 0, bpf_ok = 0;
+	__u32 action = 0, table, iif, oif;
+	struct ipv6_sr_hdr *srh;
+	char **argv = *argvp;
+	int argc = *argcp;
+	char segbuf[1024];
+	inet_prefix addr;
+	__u32 hmac = 0;
+	int ret = 0;
+
+	while (argc > 0) {
+		if (strcmp(*argv, "action") == 0) {
+			NEXT_ARG();
+			if (action_ok++)
+				duparg2("action", *argv);
+			action = read_action_type(*argv);
+			if (!action)
+				invarg("\"action\" value is invalid\n", *argv);
+			ret = rta_addattr32(rta, len, SEG6_LOCAL_ACTION,
+					    action);
+		} else if (strcmp(*argv, "table") == 0) {
+			NEXT_ARG();
+			if (table_ok++)
+				duparg2("table", *argv);
+			get_u32(&table, *argv, 0);
+			ret = rta_addattr32(rta, len, SEG6_LOCAL_TABLE, table);
+		} else if (strcmp(*argv, "nh4") == 0) {
+			NEXT_ARG();
+			if (nh4_ok++)
+				duparg2("nh4", *argv);
+			get_addr(&addr, *argv, AF_INET);
+			ret = rta_addattr_l(rta, len, SEG6_LOCAL_NH4,
+					    &addr.data, addr.bytelen);
+		} else if (strcmp(*argv, "nh6") == 0) {
+			NEXT_ARG();
+			if (nh6_ok++)
+				duparg2("nh6", *argv);
+			get_addr(&addr, *argv, AF_INET6);
+			ret = rta_addattr_l(rta, len, SEG6_LOCAL_NH6,
+					    &addr.data, addr.bytelen);
+		} else if (strcmp(*argv, "iif") == 0) {
+			NEXT_ARG();
+			if (iif_ok++)
+				duparg2("iif", *argv);
+			iif = ll_name_to_index(*argv);
+			if (!iif)
+				exit(nodev(*argv));
+			ret = rta_addattr32(rta, len, SEG6_LOCAL_IIF, iif);
+		} else if (strcmp(*argv, "oif") == 0) {
+			NEXT_ARG();
+			if (oif_ok++)
+				duparg2("oif", *argv);
+			oif = ll_name_to_index(*argv);
+			if (!oif)
+				exit(nodev(*argv));
+			ret = rta_addattr32(rta, len, SEG6_LOCAL_OIF, oif);
+		} else if (strcmp(*argv, "srh") == 0) {
+			NEXT_ARG();
+			if (srh_ok++)
+				duparg2("srh", *argv);
+			if (strcmp(*argv, "segs") != 0)
+				invarg("missing \"segs\" attribute for srh\n",
+					*argv);
+			NEXT_ARG();
+			if (segs_ok++)
+				duparg2("segs", *argv);
+			strncpy(segbuf, *argv, 1024);
+			segbuf[1023] = 0;
+			if (!NEXT_ARG_OK())
+				break;
+			NEXT_ARG();
+			if (strcmp(*argv, "hmac") == 0) {
+				NEXT_ARG();
+				if (hmac_ok++)
+					duparg2("hmac", *argv);
+				get_u32(&hmac, *argv, 0);
+			} else {
+				continue;
+			}
+		} else if (strcmp(*argv, "endpoint") == 0) {
+			NEXT_ARG();
+			if (bpf_ok++)
+				duparg2("endpoint", *argv);
+
+			if (lwt_parse_bpf(rta, len, &argc, &argv, SEG6_LOCAL_BPF,
+			    BPF_PROG_TYPE_LWT_SEG6LOCAL) < 0)
+				exit(-1);
+		} else {
+			break;
+		}
+		if (ret)
+			return ret;
+		argc--; argv++;
+	}
+
+	if (!action) {
+		fprintf(stderr, "Missing action type\n");
+		exit(-1);
+	}
+
+	if (srh_ok) {
+		int srhlen;
+
+		srh = parse_srh(segbuf, hmac,
+				action == SEG6_LOCAL_ACTION_END_B6_ENCAP);
+		srhlen = (srh->hdrlen + 1) << 3;
+		ret = rta_addattr_l(rta, len, SEG6_LOCAL_SRH, srh, srhlen);
+		free(srh);
+	}
+
+	*argcp = argc + 1;
+	*argvp = argv - 1;
+
+	return ret;
+}
+
+static int parse_encap_mpls(struct rtattr *rta, size_t len,
+			    int *argcp, char ***argvp)
+{
+	inet_prefix addr;
+	int argc = *argcp;
+	char **argv = *argvp;
+	int ttl_ok = 0;
+
+	if (get_addr(&addr, *argv, AF_MPLS)) {
+		fprintf(stderr,
+			"Error: an inet address is expected rather than \"%s\".\n",
+			*argv);
+		exit(1);
+	}
+
+	if (rta_addattr_l(rta, len, MPLS_IPTUNNEL_DST,
+			  &addr.data, addr.bytelen))
+		return -1;
+
+	argc--;
+	argv++;
+
+	while (argc > 0) {
+		if (strcmp(*argv, "ttl") == 0) {
+			__u8 ttl;
+
+			NEXT_ARG();
+			if (ttl_ok++)
+				duparg2("ttl", *argv);
+			if (get_u8(&ttl, *argv, 0))
+				invarg("\"ttl\" value is invalid\n", *argv);
+			if (rta_addattr8(rta, len, MPLS_IPTUNNEL_TTL, ttl))
+				return -1;
+		} else {
+			break;
+		}
+		argc--; argv++;
+	}
+
+	/* argv is currently the first unparsed argument,
+	 * but the lwt_parse_encap() caller will move to the next,
+	 * so step back
+	 */
+	*argcp = argc + 1;
+	*argvp = argv - 1;
+
+	return 0;
+}
+
+static int parse_encap_ip(struct rtattr *rta, size_t len,
+			  int *argcp, char ***argvp)
+{
+	int id_ok = 0, dst_ok = 0, tos_ok = 0, ttl_ok = 0;
+	char **argv = *argvp;
+	int argc = *argcp;
+	int ret = 0;
+
+	while (argc > 0) {
+		if (strcmp(*argv, "id") == 0) {
+			__u64 id;
+
+			NEXT_ARG();
+			if (id_ok++)
+				duparg2("id", *argv);
+			if (get_be64(&id, *argv, 0))
+				invarg("\"id\" value is invalid\n", *argv);
+			ret = rta_addattr64(rta, len, LWTUNNEL_IP_ID, id);
+		} else if (strcmp(*argv, "dst") == 0) {
+			inet_prefix addr;
+
+			NEXT_ARG();
+			if (dst_ok++)
+				duparg2("dst", *argv);
+			get_addr(&addr, *argv, AF_INET);
+			ret = rta_addattr_l(rta, len, LWTUNNEL_IP_DST,
+					    &addr.data, addr.bytelen);
+		} else if (strcmp(*argv, "tos") == 0) {
+			__u32 tos;
+
+			NEXT_ARG();
+			if (tos_ok++)
+				duparg2("tos", *argv);
+			if (rtnl_dsfield_a2n(&tos, *argv))
+				invarg("\"tos\" value is invalid\n", *argv);
+			ret = rta_addattr8(rta, len, LWTUNNEL_IP_TOS, tos);
+		} else if (strcmp(*argv, "ttl") == 0) {
+			__u8 ttl;
+
+			NEXT_ARG();
+			if (ttl_ok++)
+				duparg2("ttl", *argv);
+			if (get_u8(&ttl, *argv, 0))
+				invarg("\"ttl\" value is invalid\n", *argv);
+			ret = rta_addattr8(rta, len, LWTUNNEL_IP_TTL, ttl);
+		} else {
+			break;
+		}
+		if (ret)
+			break;
+		argc--; argv++;
+	}
+
+	/* argv is currently the first unparsed argument,
+	 * but the lwt_parse_encap() caller will move to the next,
+	 * so step back
+	 */
+	*argcp = argc + 1;
+	*argvp = argv - 1;
+
+	return ret;
+}
+
+static int parse_encap_ila(struct rtattr *rta, size_t len,
+			   int *argcp, char ***argvp)
+{
+	__u64 locator;
+	int argc = *argcp;
+	char **argv = *argvp;
+	int ret = 0;
+
+	if (get_addr64(&locator, *argv) < 0) {
+		fprintf(stderr, "Bad locator: %s\n", *argv);
+		exit(1);
+	}
+
+	argc--; argv++;
+
+	if (rta_addattr64(rta, 1024, ILA_ATTR_LOCATOR, locator))
+		return -1;
+
+	while (argc > 0) {
+		if (strcmp(*argv, "csum-mode") == 0) {
+			int csum_mode;
+
+			NEXT_ARG();
+
+			csum_mode = ila_csum_name2mode(*argv);
+			if (csum_mode < 0)
+				invarg("\"csum-mode\" value is invalid\n",
+				       *argv);
+
+			ret = rta_addattr8(rta, 1024, ILA_ATTR_CSUM_MODE,
+					   (__u8)csum_mode);
+
+			argc--; argv++;
+		} else if (strcmp(*argv, "ident-type") == 0) {
+			int ident_type;
+
+			NEXT_ARG();
+
+			ident_type = ila_ident_name2type(*argv);
+			if (ident_type < 0)
+				invarg("\"ident-type\" value is invalid\n",
+				       *argv);
+
+			ret = rta_addattr8(rta, 1024, ILA_ATTR_IDENT_TYPE,
+					   (__u8)ident_type);
+
+			argc--; argv++;
+		} else if (strcmp(*argv, "hook-type") == 0) {
+			int hook_type;
+
+			NEXT_ARG();
+
+			hook_type = ila_hook_name2type(*argv);
+			if (hook_type < 0)
+				invarg("\"hook-type\" value is invalid\n",
+				       *argv);
+
+			ret = rta_addattr8(rta, 1024, ILA_ATTR_HOOK_TYPE,
+					   (__u8)hook_type);
+
+			argc--; argv++;
+		} else {
+			break;
+		}
+		if (ret)
+			break;
+	}
+
+	/* argv is currently the first unparsed argument,
+	 * but the lwt_parse_encap() caller will move to the next,
+	 * so step back
+	 */
+	*argcp = argc + 1;
+	*argvp = argv - 1;
+
+	return ret;
+}
+
+static int parse_encap_ip6(struct rtattr *rta, size_t len,
+			   int *argcp, char ***argvp)
+{
+	int id_ok = 0, dst_ok = 0, tos_ok = 0, ttl_ok = 0;
+	char **argv = *argvp;
+	int argc = *argcp;
+	int ret = 0;
+
+	while (argc > 0) {
+		if (strcmp(*argv, "id") == 0) {
+			__u64 id;
+
+			NEXT_ARG();
+			if (id_ok++)
+				duparg2("id", *argv);
+			if (get_be64(&id, *argv, 0))
+				invarg("\"id\" value is invalid\n", *argv);
+			ret = rta_addattr64(rta, len, LWTUNNEL_IP6_ID, id);
+		} else if (strcmp(*argv, "dst") == 0) {
+			inet_prefix addr;
+
+			NEXT_ARG();
+			if (dst_ok++)
+				duparg2("dst", *argv);
+			get_addr(&addr, *argv, AF_INET6);
+			ret = rta_addattr_l(rta, len, LWTUNNEL_IP6_DST,
+					    &addr.data, addr.bytelen);
+		} else if (strcmp(*argv, "tc") == 0) {
+			__u32 tc;
+
+			NEXT_ARG();
+			if (tos_ok++)
+				duparg2("tc", *argv);
+			if (rtnl_dsfield_a2n(&tc, *argv))
+				invarg("\"tc\" value is invalid\n", *argv);
+			ret = rta_addattr8(rta, len, LWTUNNEL_IP6_TC, tc);
+		} else if (strcmp(*argv, "hoplimit") == 0) {
+			__u8 hoplimit;
+
+			NEXT_ARG();
+			if (ttl_ok++)
+				duparg2("hoplimit", *argv);
+			if (get_u8(&hoplimit, *argv, 0))
+				invarg("\"hoplimit\" value is invalid\n",
+				       *argv);
+			ret = rta_addattr8(rta, len, LWTUNNEL_IP6_HOPLIMIT,
+					   hoplimit);
+		} else {
+			break;
+		}
+		if (ret)
+			break;
+		argc--; argv++;
+	}
+
+	/* argv is currently the first unparsed argument,
+	 * but the lwt_parse_encap() caller will move to the next,
+	 * so step back
+	 */
+	*argcp = argc + 1;
+	*argvp = argv - 1;
+
+	return ret;
 }
 
 static void lwt_bpf_usage(void)
@@ -961,6 +1043,7 @@ int lwt_parse_encap(struct rtattr *rta, size_t len, int *argcp, char ***argvp)
 	int argc = *argcp;
 	char **argv = *argvp;
 	__u16 type;
+	int ret = 0;
 
 	NEXT_ARG();
 	type = read_encap_type(*argv);
@@ -977,37 +1060,40 @@ int lwt_parse_encap(struct rtattr *rta, size_t len, int *argcp, char ***argvp)
 	nest = rta_nest(rta, 1024, RTA_ENCAP);
 	switch (type) {
 	case LWTUNNEL_ENCAP_MPLS:
-		parse_encap_mpls(rta, len, &argc, &argv);
+		ret = parse_encap_mpls(rta, len, &argc, &argv);
 		break;
 	case LWTUNNEL_ENCAP_IP:
-		parse_encap_ip(rta, len, &argc, &argv);
+		ret = parse_encap_ip(rta, len, &argc, &argv);
 		break;
 	case LWTUNNEL_ENCAP_ILA:
-		parse_encap_ila(rta, len, &argc, &argv);
+		ret = parse_encap_ila(rta, len, &argc, &argv);
 		break;
 	case LWTUNNEL_ENCAP_IP6:
-		parse_encap_ip6(rta, len, &argc, &argv);
+		ret = parse_encap_ip6(rta, len, &argc, &argv);
 		break;
 	case LWTUNNEL_ENCAP_BPF:
 		if (parse_encap_bpf(rta, len, &argc, &argv) < 0)
 			exit(-1);
 		break;
 	case LWTUNNEL_ENCAP_SEG6:
-		parse_encap_seg6(rta, len, &argc, &argv);
+		ret = parse_encap_seg6(rta, len, &argc, &argv);
 		break;
 	case LWTUNNEL_ENCAP_SEG6_LOCAL:
-		parse_encap_seg6local(rta, len, &argc, &argv);
+		ret = parse_encap_seg6local(rta, len, &argc, &argv);
 		break;
 	default:
 		fprintf(stderr, "Error: unsupported encap type\n");
 		break;
 	}
+	if (ret)
+		return ret;
+
 	rta_nest_end(rta, nest);
 
-	rta_addattr16(rta, 1024, RTA_ENCAP_TYPE, type);
+	ret = rta_addattr16(rta, 1024, RTA_ENCAP_TYPE, type);
 
 	*argcp = argc;
 	*argvp = argv;
 
-	return 0;
+	return ret;
 }

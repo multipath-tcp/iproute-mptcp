@@ -20,6 +20,7 @@ static int link_help(struct rd *rd)
 static const char *caps_to_str(uint32_t idx)
 {
 #define RDMA_PORT_FLAGS(x) \
+	x(RESERVED, 0) \
 	x(SM, 1) \
 	x(NOTICE, 2) \
 	x(TRAP, 3) \
@@ -30,9 +31,11 @@ static const char *caps_to_str(uint32_t idx)
 	x(PKEY_NVRAM, 8) \
 	x(LED_INFO, 9) \
 	x(SM_DISABLED, 10) \
-	x(SYS_IMAGE_GUIG, 11) \
+	x(SYS_IMAGE_GUID, 11) \
 	x(PKEY_SW_EXT_PORT_TRAP, 12) \
+	x(CABLE_INFO, 13) \
 	x(EXTENDED_SPEEDS, 14) \
+	x(CAP_MASK2, 15) \
 	x(CM, 16) \
 	x(SNMP_TUNNEL, 17) \
 	x(REINIT, 18) \
@@ -43,7 +46,12 @@ static const char *caps_to_str(uint32_t idx)
 	x(BOOT_MGMT, 23) \
 	x(LINK_LATENCY, 24) \
 	x(CLIENT_REG, 25) \
-	x(IP_BASED_GIDS, 26)
+	x(OTHER_LOCAL_CHANGES, 26) \
+	x(LINK_SPPED_WIDTH, 27) \
+	x(VENDOR_SPECIFIC_MADS, 28) \
+	x(MULT_PKER_TRAP, 29) \
+	x(MULT_FDB, 30) \
+	x(HIERARCHY_INFO, 31)
 
 	enum { RDMA_PORT_FLAGS(RDMA_BITMAP_ENUM) };
 
@@ -51,9 +59,7 @@ static const char *caps_to_str(uint32_t idx)
 		rdma_port_names[] = { RDMA_PORT_FLAGS(RDMA_BITMAP_NAMES) };
 	#undef RDMA_PORT_FLAGS
 
-	if (idx < ARRAY_SIZE(rdma_port_names) && rdma_port_names[idx])
-		return rdma_port_names[idx];
-	return "UNKNOWN";
+	return rdma_port_names[idx];
 }
 
 static void link_print_caps(struct rd *rd, struct nlattr **tb)
@@ -205,6 +211,26 @@ static void link_print_phys_state(struct rd *rd, struct nlattr **tb)
 		pr_out("physical_state %s ", phys_state_to_str(phys_state));
 }
 
+static void link_print_netdev(struct rd *rd, struct nlattr **tb)
+{
+	const char *netdev_name;
+	uint32_t idx;
+
+	if (!tb[RDMA_NLDEV_ATTR_NDEV_NAME] || !tb[RDMA_NLDEV_ATTR_NDEV_INDEX])
+		return;
+
+	netdev_name = mnl_attr_get_str(tb[RDMA_NLDEV_ATTR_NDEV_NAME]);
+	idx = mnl_attr_get_u32(tb[RDMA_NLDEV_ATTR_NDEV_INDEX]);
+	if (rd->json_output) {
+		jsonw_string_field(rd->jw, "netdev", netdev_name);
+		jsonw_uint_field(rd->jw, "netdev_index", idx);
+	} else {
+		pr_out("netdev %s ", netdev_name);
+		if (rd->show_details)
+			pr_out("netdev_index %u ", idx);
+	}
+}
+
 static int link_parse_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct nlattr *tb[RDMA_NLDEV_ATTR_MAX] = {};
@@ -241,6 +267,7 @@ static int link_parse_cb(const struct nlmsghdr *nlh, void *data)
 	link_print_lmc(rd, tb);
 	link_print_state(rd, tb);
 	link_print_phys_state(rd, tb);
+	link_print_netdev(rd, tb);
 	if (rd->show_details)
 		link_print_caps(rd, tb);
 
@@ -277,56 +304,15 @@ static int link_one_show(struct rd *rd)
 		{ 0 }
 	};
 
+	if (!rd->port_idx)
+		return 0;
+
 	return rd_exec_cmd(rd, cmds, "parameter");
 }
 
 static int link_show(struct rd *rd)
 {
-	struct dev_map *dev_map;
-	uint32_t port;
-	int ret = 0;
-
-	if (rd->json_output)
-		jsonw_start_array(rd->jw);
-	if (rd_no_arg(rd)) {
-		list_for_each_entry(dev_map, &rd->dev_map_list, list) {
-			rd->dev_idx = dev_map->idx;
-			for (port = 1; port < dev_map->num_ports + 1; port++) {
-				rd->port_idx = port;
-				ret = link_one_show(rd);
-				if (ret)
-					goto out;
-			}
-		}
-
-	} else {
-		dev_map = dev_map_lookup(rd, true);
-		port = get_port_from_argv(rd);
-		if (!dev_map || port > dev_map->num_ports) {
-			pr_err("Wrong device name\n");
-			ret = -ENOENT;
-			goto out;
-		}
-		rd_arg_inc(rd);
-		rd->dev_idx = dev_map->idx;
-		rd->port_idx = port ? : 1;
-		for (; rd->port_idx < dev_map->num_ports + 1; rd->port_idx++) {
-			ret = link_one_show(rd);
-			if (ret)
-				goto out;
-			if (port)
-				/*
-				 * We got request to show link for devname
-				 * with port index.
-				 */
-				break;
-		}
-	}
-
-out:
-	if (rd->json_output)
-		jsonw_end_array(rd->jw);
-	return ret;
+	return rd_exec_link(rd, link_one_show, true);
 }
 
 int cmd_link(struct rd *rd)

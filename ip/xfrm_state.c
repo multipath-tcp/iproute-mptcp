@@ -61,6 +61,7 @@ static void usage(void)
 	fprintf(stderr, "        [ flag FLAG-LIST ] [ sel SELECTOR ] [ LIMIT-LIST ] [ encap ENCAP ]\n");
 	fprintf(stderr, "        [ coa ADDR[/PLEN] ] [ ctx CTX ] [ extra-flag EXTRA-FLAG-LIST ]\n");
 	fprintf(stderr, "        [ offload [dev DEV] dir DIR ]\n");
+	fprintf(stderr, "        [ output-mark OUTPUT-MARK ]\n");
 	fprintf(stderr, "Usage: ip xfrm state allocspi ID [ mode MODE ] [ mark MARK [ mask MASK ] ]\n");
 	fprintf(stderr, "        [ reqid REQID ] [ seq SEQ ] [ min SPI max SPI ]\n");
 	fprintf(stderr, "Usage: ip xfrm state { delete | get } ID [ mark MARK [ mask MASK ] ]\n");
@@ -322,6 +323,7 @@ static int xfrm_state_modify(int cmd, unsigned int flags, int argc, char **argv)
 		struct xfrm_user_sec_ctx sctx;
 		char    str[CTX_BUF_SIZE];
 	} ctx = {};
+	__u32 output_mark = 0;
 
 	while (argc > 0) {
 		if (strcmp(*argv, "mode") == 0) {
@@ -437,6 +439,10 @@ static int xfrm_state_modify(int cmd, unsigned int flags, int argc, char **argv)
 				invarg("value after \"offload dir\" is invalid", *argv);
 				is_offload = false;
 			}
+		} else if (strcmp(*argv, "output-mark") == 0) {
+			NEXT_ARG();
+			if (get_u32(&output_mark, *argv, 0))
+				invarg("value after \"output-mark\" is invalid", *argv);
 		} else {
 			/* try to assume ALGO */
 			int type = xfrm_algotype_getbyname(*argv);
@@ -720,13 +726,16 @@ static int xfrm_state_modify(int cmd, unsigned int flags, int argc, char **argv)
 		}
 	}
 
+	if (output_mark)
+		addattr32(&req.n, sizeof(req.buf), XFRMA_OUTPUT_MARK, output_mark);
+
 	if (rtnl_open_byproto(&rth, 0, NETLINK_XFRM) < 0)
 		exit(1);
 
 	if (req.xsinfo.family == AF_UNSPEC)
 		req.xsinfo.family = AF_INET;
 
-	if (rtnl_talk(&rth, &req.n, NULL, 0) < 0)
+	if (rtnl_talk(&rth, &req.n, NULL) < 0)
 		exit(2);
 
 	rtnl_close(&rth);
@@ -757,8 +766,7 @@ static int xfrm_state_allocspi(int argc, char **argv)
 	char *minp = NULL;
 	char *maxp = NULL;
 	struct xfrm_mark mark = {0, 0};
-	char res_buf[NLMSG_BUF_SIZE] = {};
-	struct nlmsghdr *res_n = (struct nlmsghdr *)res_buf;
+	struct nlmsghdr *answer;
 
 	while (argc > 0) {
 		if (strcmp(*argv, "mode") == 0) {
@@ -858,14 +866,15 @@ static int xfrm_state_allocspi(int argc, char **argv)
 		req.xspi.info.family = AF_INET;
 
 
-	if (rtnl_talk(&rth, &req.n, res_n, sizeof(res_buf)) < 0)
+	if (rtnl_talk(&rth, &req.n, &answer) < 0)
 		exit(2);
 
-	if (xfrm_state_print(NULL, res_n, (void *)stdout) < 0) {
+	if (xfrm_state_print(NULL, answer, (void *)stdout) < 0) {
 		fprintf(stderr, "An error :-)\n");
 		exit(1);
 	}
 
+	free(answer);
 	rtnl_close(&rth);
 
 	return 0;
@@ -920,7 +929,7 @@ int xfrm_state_print(const struct sockaddr_nl *who, struct nlmsghdr *n,
 	}
 
 	if (n->nlmsg_type == XFRM_MSG_DELSA) {
-		/* Dont blame me for this .. Herbert made me do it */
+		/* Don't blame me for this .. Herbert made me do it */
 		xsid = NLMSG_DATA(n);
 		len -= NLMSG_SPACE(sizeof(*xsid));
 	} else if (n->nlmsg_type == XFRM_MSG_EXPIRE) {
@@ -1046,19 +1055,20 @@ static int xfrm_state_get_or_delete(int argc, char **argv, int delete)
 		req.xsid.family = AF_INET;
 
 	if (delete) {
-		if (rtnl_talk(&rth, &req.n, NULL, 0) < 0)
+		if (rtnl_talk(&rth, &req.n, NULL) < 0)
 			exit(2);
 	} else {
-		char buf[NLMSG_BUF_SIZE] = {};
-		struct nlmsghdr *res_n = (struct nlmsghdr *)buf;
+		struct nlmsghdr *answer;
 
-		if (rtnl_talk(&rth, &req.n, res_n, sizeof(req)) < 0)
+		if (rtnl_talk(&rth, &req.n, &answer) < 0)
 			exit(2);
 
-		if (xfrm_state_print(NULL, res_n, (void *)stdout) < 0) {
+		if (xfrm_state_print(NULL, answer, (void *)stdout) < 0) {
 			fprintf(stderr, "An error :-)\n");
 			exit(1);
 		}
+
+		free(answer);
 	}
 
 	rtnl_close(&rth);
@@ -1326,22 +1336,23 @@ static int xfrm_sad_getinfo(int argc, char **argv)
 	struct {
 		struct nlmsghdr			n;
 		__u32				flags;
-		char				ans[64];
 	} req = {
 		.n.nlmsg_len = NLMSG_LENGTH(sizeof(req.flags)),
 		.n.nlmsg_flags = NLM_F_REQUEST,
 		.n.nlmsg_type = XFRM_MSG_GETSADINFO,
 		.flags = 0XFFFFFFFF,
 	};
+	struct nlmsghdr *answer;
 
 	if (rtnl_open_byproto(&rth, 0, NETLINK_XFRM) < 0)
 		exit(1);
 
-	if (rtnl_talk(&rth, &req.n, &req.n, sizeof(req)) < 0)
+	if (rtnl_talk(&rth, &req.n, &answer) < 0)
 		exit(2);
 
-	print_sadinfo(&req.n, (void *)stdout);
+	print_sadinfo(answer, (void *)stdout);
 
+	free(answer);
 	rtnl_close(&rth);
 
 	return 0;
@@ -1388,7 +1399,7 @@ static int xfrm_state_flush(int argc, char **argv)
 		fprintf(stderr, "Flush state with XFRM-PROTO value \"%s\"\n",
 			strxf_xfrmproto(req.xsf.proto));
 
-	if (rtnl_talk(&rth, &req.n, NULL, 0) < 0)
+	if (rtnl_talk(&rth, &req.n, NULL) < 0)
 		exit(2);
 
 	rtnl_close(&rth);

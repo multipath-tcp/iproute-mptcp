@@ -57,9 +57,8 @@ static void check_duparg(__u64 *attrs, int type, const char *key,
 static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 			  struct nlmsghdr *n)
 {
+	inet_prefix daddr;
 	__u32 vni = 0;
-	__u32 daddr = 0;
-	struct in6_addr daddr6 = IN6ADDR_ANY_INIT;
 	__u32 label = 0;
 	__u8 ttl = 0;
 	__u8 tos = 0;
@@ -71,6 +70,8 @@ static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u64 attrs = 0;
 	bool set_op = (n->nlmsg_type == RTM_NEWLINK &&
 		       !(n->nlmsg_flags & NLM_F_CREATE));
+
+	inet_prefix_reset(&daddr);
 
 	while (argc > 0) {
 		if (!matches(*argv, "id") ||
@@ -84,11 +85,8 @@ static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			check_duparg(&attrs, IFLA_GENEVE_REMOTE, "remote",
 				     *argv);
-			if (!inet_get_addr(*argv, &daddr, &daddr6)) {
-				fprintf(stderr, "Invalid address \"%s\"\n", *argv);
-				return -1;
-			}
-			if (IN6_IS_ADDR_MULTICAST(&daddr6) || IN_MULTICAST(ntohl(daddr)))
+			get_addr(&daddr, *argv, AF_UNSPEC);
+			if (!is_addrtype_inet_not_multi(&daddr))
 				invarg("invalid remote address", *argv);
 		} else if (!matches(*argv, "ttl") ||
 			   !matches(*argv, "hoplimit")) {
@@ -191,18 +189,17 @@ static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 		 * ID (VNI) to identify the geneve device, and we do not need
 		 * the remote IP.
 		 */
-		if (!set_op && !daddr && IN6_IS_ADDR_UNSPECIFIED(&daddr6)) {
+		if (!set_op && !is_addrtype_inet(&daddr)) {
 			fprintf(stderr, "geneve: remote link partner not specified\n");
 			return -1;
 		}
 	}
 
 	addattr32(n, 1024, IFLA_GENEVE_ID, vni);
-	if (daddr)
-		addattr_l(n, 1024, IFLA_GENEVE_REMOTE, &daddr, 4);
-	if (!IN6_IS_ADDR_UNSPECIFIED(&daddr6)) {
-		addattr_l(n, 1024, IFLA_GENEVE_REMOTE6, &daddr6,
-			  sizeof(struct in6_addr));
+	if (is_addrtype_inet(&daddr)) {
+		int type = (daddr.family == AF_INET) ? IFLA_GENEVE_REMOTE :
+						       IFLA_GENEVE_REMOTE6;
+		addattr_l(n, 1024, type, daddr.data, daddr.bytelen);
 	}
 	if (!set_op || GENEVE_ATTRSET(attrs, IFLA_GENEVE_LABEL))
 		addattr32(n, 1024, IFLA_GENEVE_LABEL, label);
@@ -227,10 +224,16 @@ static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 static void geneve_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 {
 	__u32 vni;
-	__u8 tos;
+	__u8 ttl = 0;
+	__u8 tos = 0;
 
 	if (!tb)
 		return;
+
+	if (tb[IFLA_GENEVE_COLLECT_METADATA]) {
+		print_bool(PRINT_ANY, "external", "external", true);
+		return;
+	}
 
 	if (!tb[IFLA_GENEVE_ID] ||
 	    RTA_PAYLOAD(tb[IFLA_GENEVE_ID]) < sizeof(__u32))
@@ -262,27 +265,20 @@ static void geneve_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		}
 	}
 
-	if (tb[IFLA_GENEVE_TTL]) {
-		__u8 ttl = rta_getattr_u8(tb[IFLA_GENEVE_TTL]);
+	if (tb[IFLA_GENEVE_TTL])
+		ttl = rta_getattr_u8(tb[IFLA_GENEVE_TTL]);
+	if (is_json_context() || ttl)
+		print_uint(PRINT_ANY, "ttl", "ttl %u ", ttl);
+	else
+		print_string(PRINT_FP, NULL, "ttl %s ", "inherit");
 
-		if (ttl)
-			print_int(PRINT_ANY, "ttl", "ttl %d ", ttl);
-	}
-
-	if (tb[IFLA_GENEVE_TOS] &&
-	    (tos = rta_getattr_u8(tb[IFLA_GENEVE_TOS]))) {
-		if (is_json_context()) {
-			print_0xhex(PRINT_JSON, "tos", "%#x", tos);
-		} else {
-			if (tos == 1) {
-				print_string(PRINT_FP,
-					     "tos",
-					     "tos %s ",
-					     "inherit");
-			} else {
-				fprintf(f, "tos %#x ", tos);
-			}
-		}
+	if (tb[IFLA_GENEVE_TOS])
+		tos = rta_getattr_u8(tb[IFLA_GENEVE_TOS]);
+	if (tos) {
+		if (is_json_context() || tos != 1)
+			print_0xhex(PRINT_ANY, "tos", "tos 0x%x ", tos);
+		else
+			print_string(PRINT_FP, NULL, "tos %s ", "inherit");
 	}
 
 	if (tb[IFLA_GENEVE_LABEL]) {
@@ -300,9 +296,6 @@ static void geneve_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 			   "port",
 			   "dstport %u ",
 			   rta_getattr_be16(tb[IFLA_GENEVE_PORT]));
-
-	if (tb[IFLA_GENEVE_COLLECT_METADATA])
-		print_bool(PRINT_ANY, "collect_metadata", "external ", true);
 
 	if (tb[IFLA_GENEVE_UDP_CSUM]) {
 		if (is_json_context()) {

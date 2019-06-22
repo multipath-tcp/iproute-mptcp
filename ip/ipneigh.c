@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <string.h>
 #include <sys/time.h>
@@ -24,6 +23,7 @@
 #include "rt_names.h"
 #include "utils.h"
 #include "ip_common.h"
+#include "json_print.h"
 
 #define NUD_VALID	(NUD_PERMANENT|NUD_NOARP|NUD_REACHABLE|NUD_PROBE|NUD_STALE|NUD_DELAY)
 #define MAX_ROUNDS	10
@@ -179,17 +179,58 @@ static int ipneigh_modify(int cmd, int flags, int argc, char **argv)
 
 	ll_init_map(&rth);
 
-	if (dev && (req.ndm.ndm_ifindex = ll_name_to_index(dev)) == 0) {
-		fprintf(stderr, "Cannot find device \"%s\"\n", dev);
-		return -1;
+	if (dev) {
+		req.ndm.ndm_ifindex = ll_name_to_index(dev);
+		if (!req.ndm.ndm_ifindex)
+			return nodev(dev);
 	}
 
-	if (rtnl_talk(&rth, &req.n, NULL, 0) < 0)
+	if (rtnl_talk(&rth, &req.n, NULL) < 0)
 		exit(2);
 
 	return 0;
 }
 
+static void print_cacheinfo(const struct nda_cacheinfo *ci)
+{
+	static int hz;
+
+	if (!hz)
+		hz = get_user_hz();
+
+	if (ci->ndm_refcnt)
+		print_uint(PRINT_ANY, "refcnt",
+				" ref %u", ci->ndm_refcnt);
+
+	print_uint(PRINT_ANY, "used", " used %u", ci->ndm_used / hz);
+	print_uint(PRINT_ANY, "confirmed", "/%u", ci->ndm_confirmed / hz);
+	print_uint(PRINT_ANY, "updated", "/%u", ci->ndm_updated / hz);
+}
+
+static void print_neigh_state(unsigned int nud)
+{
+
+	open_json_array(PRINT_JSON,
+			is_json_context() ?  "state" : "");
+
+#define PRINT_FLAG(f)						\
+	if (nud & NUD_##f) {					\
+		nud &= ~NUD_##f;				\
+		print_string(PRINT_ANY, NULL, " %s", #f);	\
+	}
+
+	PRINT_FLAG(INCOMPLETE);
+	PRINT_FLAG(REACHABLE);
+	PRINT_FLAG(STALE);
+	PRINT_FLAG(DELAY);
+	PRINT_FLAG(PROBE);
+	PRINT_FLAG(FAILED);
+	PRINT_FLAG(NOARP);
+	PRINT_FLAG(PERMANENT);
+#undef PRINT_FLAG
+
+	close_json_array(PRINT_JSON, NULL);
+}
 
 int print_neigh(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 {
@@ -221,8 +262,9 @@ int print_neigh(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		return 0;
 	if (!(filter.state&r->ndm_state) &&
 	    !(r->ndm_flags & NTF_PROXY) &&
+	    !(r->ndm_flags & NTF_EXT_LEARNED) &&
 	    (r->ndm_state || !(filter.state&0x100)) &&
-	     (r->ndm_family != AF_DECnet))
+	    (r->ndm_family != AF_DECnet))
 		return 0;
 
 	if (filter.master && !(n->nlmsg_flags & NLM_F_DUMP_FILTERED)) {
@@ -235,15 +277,9 @@ int print_neigh(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 
 	parse_rtattr(tb, NDA_MAX, NDA_RTA(r), n->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
 
-	if (tb[NDA_DST]) {
-		if (filter.pfx.family) {
-			inet_prefix dst = { .family = r->ndm_family };
+	if (inet_addr_match_rta(&filter.pfx, tb[NDA_DST]))
+		return 0;
 
-			memcpy(&dst.data, RTA_DATA(tb[NDA_DST]), RTA_PAYLOAD(tb[NDA_DST]));
-			if (inet_addr_match(&dst, &filter.pfx, filter.pfx.bitlen))
-				return 0;
-		}
-	}
 	if (filter.unused_only && tb[NDA_CACHEINFO]) {
 		struct nda_cacheinfo *ci = RTA_DATA(tb[NDA_CACHEINFO]);
 
@@ -269,65 +305,68 @@ int print_neigh(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			return 0;
 	}
 
+	open_json_object(NULL);
 	if (n->nlmsg_type == RTM_DELNEIGH)
-		fprintf(fp, "Deleted ");
+		print_bool(PRINT_ANY, "deleted", "Deleted ", true);
 	else if (n->nlmsg_type == RTM_GETNEIGH)
-		fprintf(fp, "miss ");
+		print_null(PRINT_ANY, "miss", "%s ", "miss");
+
 	if (tb[NDA_DST]) {
-		fprintf(fp, "%s ",
-			format_host_rta(r->ndm_family, tb[NDA_DST]));
+		const char *dst;
+
+		dst = format_host_rta(r->ndm_family, tb[NDA_DST]);
+		print_color_string(PRINT_ANY,
+				   ifa_family_color(r->ndm_family),
+				   "dst", "%s ", dst);
 	}
-	if (!filter.index && r->ndm_ifindex)
-		fprintf(fp, "dev %s ", ll_index_to_name(r->ndm_ifindex));
+
+	if (!filter.index && r->ndm_ifindex) {
+		if (!is_json_context())
+			fprintf(fp, "dev ");
+
+		print_color_string(PRINT_ANY, COLOR_IFNAME,
+				   "dev", "%s ",
+				   ll_index_to_name(r->ndm_ifindex));
+	}
+
 	if (tb[NDA_LLADDR]) {
+		const char *lladdr;
 		SPRINT_BUF(b1);
-		fprintf(fp, "lladdr %s", ll_addr_n2a(RTA_DATA(tb[NDA_LLADDR]),
-					      RTA_PAYLOAD(tb[NDA_LLADDR]),
-					      ll_index_to_type(r->ndm_ifindex),
-					      b1, sizeof(b1)));
-	}
-	if (r->ndm_flags & NTF_ROUTER) {
-		fprintf(fp, " router");
-	}
-	if (r->ndm_flags & NTF_PROXY) {
-		fprintf(fp, " proxy");
-	}
-	if (tb[NDA_CACHEINFO] && show_stats) {
-		struct nda_cacheinfo *ci = RTA_DATA(tb[NDA_CACHEINFO]);
-		int hz = get_user_hz();
 
-		if (ci->ndm_refcnt)
-			printf(" ref %d", ci->ndm_refcnt);
-		fprintf(fp, " used %d/%d/%d", ci->ndm_used/hz,
-		       ci->ndm_confirmed/hz, ci->ndm_updated/hz);
+		lladdr = ll_addr_n2a(RTA_DATA(tb[NDA_LLADDR]),
+				     RTA_PAYLOAD(tb[NDA_LLADDR]),
+				     ll_index_to_type(r->ndm_ifindex),
+				     b1, sizeof(b1));
+
+		if (!is_json_context())
+			fprintf(fp, "lladdr ");
+
+		print_color_string(PRINT_ANY, COLOR_MAC,
+				   "lladdr", "%s", lladdr);
 	}
 
-	if (tb[NDA_PROBES] && show_stats) {
-		__u32 p = rta_getattr_u32(tb[NDA_PROBES]);
+	if (r->ndm_flags & NTF_ROUTER)
+		print_null(PRINT_ANY, "router", " %s", "router");
 
-		fprintf(fp, " probes %u", p);
+	if (r->ndm_flags & NTF_PROXY)
+		print_null(PRINT_ANY, "proxy", " %s", "proxy");
+
+	if (show_stats) {
+		if (tb[NDA_CACHEINFO])
+			print_cacheinfo(RTA_DATA(tb[NDA_CACHEINFO]));
+
+		if (tb[NDA_PROBES])
+			print_uint(PRINT_ANY, "probes", " probes %u",
+				   rta_getattr_u32(tb[NDA_PROBES]));
 	}
 
-	if (r->ndm_state) {
-		int nud = r->ndm_state;
+	if (r->ndm_state)
+		print_neigh_state(r->ndm_state);
 
-		fprintf(fp, " ");
+	print_string(PRINT_FP, NULL, "\n", "");
+	close_json_object();
+	fflush(stdout);
 
-#define PRINT_FLAG(f) if (nud & NUD_##f) { \
-	nud &= ~NUD_##f; fprintf(fp, #f "%s", nud ? "," : ""); }
-		PRINT_FLAG(INCOMPLETE);
-		PRINT_FLAG(REACHABLE);
-		PRINT_FLAG(STALE);
-		PRINT_FLAG(DELAY);
-		PRINT_FLAG(PROBE);
-		PRINT_FLAG(FAILED);
-		PRINT_FLAG(NOARP);
-		PRINT_FLAG(PERMANENT);
-#undef PRINT_FLAG
-	}
-	fprintf(fp, "\n");
-
-	fflush(fp);
 	return 0;
 }
 
@@ -419,7 +458,8 @@ static int do_show_or_flush(int argc, char **argv, int flush)
 			}
 			if (matches(*argv, "help") == 0)
 				usage();
-			get_prefix(&filter.pfx, *argv, filter.family);
+			if (get_prefix(&filter.pfx, *argv, filter.family))
+				invarg("to value is invalid\n", *argv);
 			if (filter.family == AF_UNSPEC)
 				filter.family = filter.pfx.family;
 		}
@@ -429,10 +469,9 @@ static int do_show_or_flush(int argc, char **argv, int flush)
 	ll_init_map(&rth);
 
 	if (filter_dev) {
-		if ((filter.index = ll_name_to_index(filter_dev)) == 0) {
-			fprintf(stderr, "Cannot find device \"%s\"\n", filter_dev);
-			return -1;
-		}
+		filter.index = ll_name_to_index(filter_dev);
+		if (!filter.index)
+			return nodev(filter_dev);
 		addattr32(&req.n, sizeof(req), NDA_IFINDEX, filter.index);
 	}
 
@@ -485,10 +524,12 @@ static int do_show_or_flush(int argc, char **argv, int flush)
 		exit(1);
 	}
 
+	new_json_obj(json);
 	if (rtnl_dump_filter(&rth, print_neigh, stdout) < 0) {
 		fprintf(stderr, "Dump terminated\n");
 		exit(1);
 	}
+	delete_json_obj();
 
 	return 0;
 }

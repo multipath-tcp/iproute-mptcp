@@ -15,5 +15,8 @@
 #include <stdint.h>
 
 uint32_t str2addr(char *str);
+int str2nodeid(char *str, uint8_t *id);
+void nodeid2str(uint8_t *id, char *str);
+void hash2nodestr(uint32_t hash, char *str);
 
 #endif

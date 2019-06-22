@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -52,7 +51,7 @@ parse_ip(int *argc_p, char ***argv_p,
 	}
 	/* jamal - look at these and make them either old or new
 	** scheme given diffserv
-	** dont forget the CE bit
+	** don't forget the CE bit
 	*/
 	if (strcmp(*argv, "tos") == 0 || matches(*argv, "dsfield") == 0) {
 		NEXT_ARG();

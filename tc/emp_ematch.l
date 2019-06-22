@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 %{
  #include "emp_ematch.yacc.h"
  #include "m_ematch.h"
@@ -136,7 +137,7 @@
 ")"					{
 						return yylval.i = *yytext;
 					}
-[^ \t\r\n()]+				{
+[^" \t\r\n()][^ \t\r\n()]*		{
 						yylval.b = bstr_alloc(yytext);
 						if (yylval.b == NULL)
 							return ERROR;

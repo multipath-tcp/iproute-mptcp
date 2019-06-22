@@ -1,12 +1,15 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <linux/if.h>
 
 #include "color.h"
+#include "utils.h"
 
 enum color {
 	C_RED,
@@ -76,6 +79,44 @@ void enable_color(void)
 	set_color_palette();
 }
 
+bool check_enable_color(int color, int json)
+{
+	if (json || color == COLOR_OPT_NEVER)
+		return false;
+
+	if (color == COLOR_OPT_ALWAYS || isatty(fileno(stdout))) {
+		enable_color();
+		return true;
+	}
+	return false;
+}
+
+bool matches_color(const char *arg, int *val)
+{
+	char *dup, *p;
+
+	if (!val)
+		return false;
+
+	dup = strdupa(arg);
+	p = strchrnul(dup, '=');
+	if (*p)
+		*(p++) = '\0';
+
+	if (matches(dup, "-color"))
+		return false;
+
+	if (*p == '\0' || !strcmp(p, "always"))
+		*val = COLOR_OPT_ALWAYS;
+	else if (!strcmp(p, "auto"))
+		*val = COLOR_OPT_AUTO;
+	else if (!strcmp(p, "never"))
+		*val = COLOR_OPT_NEVER;
+	else
+		return false;
+	return true;
+}
+
 void set_color_palette(void)
 {
 	char *p = getenv("COLORFGBG");
@@ -91,14 +132,7 @@ void set_color_palette(void)
 		is_dark_bg = 1;
 }
 
-void check_if_color_enabled(void)
-{
-	if (color_is_enabled) {
-		fprintf(stderr, "Option \"-json\" conflicts with \"-color\".\n");
-		exit(1);
-	}
-}
-
+__attribute__((format(printf, 3, 4)))
 int color_fprintf(FILE *fp, enum color_attr attr, const char *fmt, ...)
 {
 	int ret = 0;

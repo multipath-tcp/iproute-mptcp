@@ -1,4 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
 # Top level Makefile for iproute2
+
+ifeq ("$(origin V)", "command line")
+VERBOSE = $(V)
+endif
+ifndef VERBOSE
+VERBOSE = 0
+endif
 
 ifeq ($(VERBOSE),0)
 MAKEFLAGS += --no-print-directory
@@ -8,6 +16,8 @@ PREFIX?=/usr
 LIBDIR?=$(PREFIX)/lib
 SBINDIR?=/sbin
 CONFDIR?=/etc/iproute2
+NETNS_RUN_DIR?=/var/run/netns
+NETNS_ETC_DIR?=/etc/netns
 DATADIR?=$(PREFIX)/share
 HDRDIR?=$(PREFIX)/include/iproute2
 DOCDIR?=$(DATADIR)/doc/iproute2
@@ -26,7 +36,9 @@ ifneq ($(SHARED_LIBS),y)
 DEFINES+= -DNO_SHARED_LIBS
 endif
 
-DEFINES+=-DCONFDIR=\"$(CONFDIR)\"
+DEFINES+=-DCONFDIR=\"$(CONFDIR)\" \
+         -DNETNS_RUN_DIR=\"$(NETNS_RUN_DIR)\" \
+         -DNETNS_ETC_DIR=\"$(NETNS_ETC_DIR)\"
 
 #options for decnet
 ADDLIB+=dnet_ntop.o dnet_pton.o
@@ -51,13 +63,26 @@ YACCFLAGS = -d -t -v
 
 SUBDIRS=lib ip tc bridge misc netem genl tipc devlink rdma man
 
-LIBNETLINK=../lib/libnetlink.a ../lib/libutil.a
+LIBNETLINK=../lib/libutil.a ../lib/libnetlink.a
 LDLIBS += $(LIBNETLINK)
 
 all: config.mk
 	@set -e; \
 	for i in $(SUBDIRS); \
 	do echo; echo $$i; $(MAKE) $(MFLAGS) -C $$i; done
+
+help:
+	@echo "Make Targets:"
+	@echo " all                 - build binaries"
+	@echo " clean               - remove products of build"
+	@echo " distclean           - remove configuration and build"
+	@echo " install             - install binaries on local machine"
+	@echo " check               - run tests"
+	@echo " cscope              - build cscope database"
+	@echo " snapshot            - generate version number header"
+	@echo ""
+	@echo "Make Arguments:"
+	@echo " V=[0|1]             - set build verbosity level"
 
 config.mk:
 	sh configure $(KERNEL_INCLUDE)
@@ -84,7 +109,7 @@ snapshot:
 		> include/SNAPSHOT.h
 
 clean:
-	@for i in $(SUBDIRS); \
+	@for i in $(SUBDIRS) testsuite; \
 	do $(MAKE) $(MFLAGS) -C $$i clean; done
 
 clobber:
@@ -93,6 +118,9 @@ clobber:
 	rm -f config.mk cscope.*
 
 distclean: clobber
+
+check:
+	cd testsuite && $(MAKE) && $(MAKE) alltests
 
 cscope:
 	cscope -b -q -R -Iinclude -sip -slib -smisc -snetem -stc

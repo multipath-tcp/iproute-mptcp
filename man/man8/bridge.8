@@ -22,7 +22,10 @@ bridge \- show / manipulate bridge addresses and devices
 \fB\-s\fR[\fItatistics\fR] |
 \fB\-n\fR[\fIetns\fR] name |
 \fB\-b\fR[\fIatch\fR] filename |
-\fB\-j\fR[\fIson\fR] }
+\fB\-c\fR[\folor\fR] |
+\fB\-p\fR[\fIretty\fR] |
+\fB\-j\fR[\fIson\fR] |
+\fB\-o\fR[\fIneline\fr] }
 
 .ti -8
 .BR "bridge link set"
@@ -44,6 +47,9 @@ bridge \- show / manipulate bridge addresses and devices
 .BR flood " { " on " | " off " } ] [ "
 .BR hwmode " { " vepa " | " veb " } ] [ "
 .BR mcast_flood " { " on " | " off " } ] [ "
+.BR neigh_suppress " { " on " | " off " } ] [ "
+.BR vlan_tunnel " { " on " | " off " } ] [ "
+.BR isolated " { " on " | " off " } ] [ "
 .BR self " ] [ " master " ]"
 
 .ti -8
@@ -57,7 +63,7 @@ bridge \- show / manipulate bridge addresses and devices
 .B dev
 .IR DEV " { "
 .BR local " | " static " | " dynamic " } [ "
-.BR self " ] [ " master " ] [ " router " ] [ " use " ] [ "
+.BR self " ] [ " master " ] [ " router " ] [ " use " ] [ " extern_learn " ] [ "
 .B dst
 .IR IPADDR " ] [ "
 .B vni
@@ -103,11 +109,13 @@ bridge \- show / manipulate bridge addresses and devices
 .IR DEV
 .B vid
 .IR VID " [ "
+.BR tunnel_info
+.IR TUNNEL_ID " ] [ "
 .BR pvid " ] [ " untagged " ] [ "
 .BR self " ] [ " master " ] "
 
 .ti -8
-.BR "bridge vlan" " [ " show " ] [ "
+.BR "bridge vlan" " [ " show " | " tunnelshow " ] [ "
 .B dev
 .IR DEV " ]"
 
@@ -164,8 +172,38 @@ If there were any errors during execution of the commands, the application
 return code will be non zero.
 
 .TP
-.BR "\-json"
-Display results in JSON format. Currently available for vlan and fdb.
+.BR \-c [ color ][ = { always | auto | never }
+Configure color output. If parameter is omitted or
+.BR always ,
+color output is enabled regardless of stdout state. If parameter is
+.BR auto ,
+stdout is checked to be a terminal before enabling color output. If parameter is
+.BR never ,
+color output is disabled. If specified multiple times, the last one takes
+precedence. This flag is ignored if
+.B \-json
+is also given.
+
+.TP
+.BR "\-j", " \-json"
+Output results in JavaScript Object Notation (JSON).
+
+.TP
+.BR "\-p", " \-pretty"
+When combined with -j generate a pretty JSON output.
+
+.TP
+.BR "\-o", " \-oneline"
+output each record on a single line, replacing line feeds
+with the
+.B '\e'
+character. This is convenient when you want to count records
+with
+.BR wc (1)
+or to
+.BR grep (1)
+the output.
+
 
 .SH BRIDGE - COMMAND SYNTAX
 
@@ -323,6 +361,19 @@ switch.
 Controls whether a given port will be flooded with multicast traffic for which there is no MDB entry. By default this flag is on.
 
 .TP
+.BR "neigh_suppress on " or " neigh_suppress off "
+Controls whether neigh discovery (arp and nd) proxy and suppression is enabled on the port. By default this flag is off.
+
+.TP
+.BR "vlan_tunnel on " or " vlan_tunnel off "
+Controls whether vlan to tunnel mapping is enabled on the port. By default this flag is off.
+
+.TP
+.BR "isolated on " or " isolated off "
+Controls whether a given port will be isolated, which means it will be able to communicate with non-isolated ports only.
+By default this flag is off.
+
+.TP
 .BI self
 link setting is configured on specified physical device
 
@@ -389,6 +440,12 @@ route shortcircuit enabled.
 .B use
 - the address is in use. User space can use this option to
 indicate to the kernel that the fdb entry is in use.
+.sp
+
+.B extern_learn
+- this entry was learned externally. This option can be used to
+indicate to the kernel that an entry was hardware or user-space
+controller learnt dynamic entry. Kernel will not age such an entry.
 .sp
 
 .in -8
@@ -552,6 +609,12 @@ the interface with which this vlan is associated.
 the VLAN ID that identifies the vlan.
 
 .TP
+.BI tunnel_info " TUNNEL_ID"
+the TUNNEL ID that maps to this vlan. The tunnel id is set in dst_metadata for
+every packet that belongs to this vlan (applicable to bridge ports with vlan_tunnel
+flag set).
+
+.TP
 .BI pvid
 the vlan specified is to be considered a PVID at ingress.
 Any untagged frames will be assigned to this VLAN.
@@ -587,6 +650,10 @@ This command displays the current VLAN filter table.
 With the
 .B -statistics
 option, the command displays per-vlan traffic statistics.
+
+.SS bridge vlan tunnelshow - list vlan tunnel mapping.
+
+This command displays the current vlan tunnel info mapping.
 
 .SH bridge monitor - state monitoring
 

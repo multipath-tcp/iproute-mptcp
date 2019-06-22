@@ -20,6 +20,7 @@
 #include <sys/ioctl.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
+#include <linux/if_arp.h>
 #include <pwd.h>
 #include <grp.h>
 #include <fcntl.h>
@@ -30,6 +31,8 @@
 #include "rt_names.h"
 #include "utils.h"
 #include "ip_common.h"
+
+static const char drv_name[] = "tun";
 
 #define TUNDEV "/dev/net/tun"
 
@@ -223,58 +226,37 @@ static int do_del(int argc, char **argv)
 	return tap_del_ioctl(&ifr);
 }
 
-static int read_prop(char *dev, char *prop, long *value)
-{
-	char fname[IFNAMSIZ+25], buf[80], *endp;
-	ssize_t len;
-	int fd;
-	long result;
-
-	sprintf(fname, "/sys/class/net/%s/%s", dev, prop);
-	fd = open(fname, O_RDONLY);
-	if (fd < 0) {
-		if (strcmp(prop, "tun_flags"))
-			fprintf(stderr, "open %s: %s\n", fname,
-				strerror(errno));
-		return -1;
-	}
-	len = read(fd, buf, sizeof(buf)-1);
-	close(fd);
-	if (len < 0) {
-		fprintf(stderr, "read %s: %s", fname, strerror(errno));
-		return -1;
-	}
-
-	buf[len] = 0;
-	result = strtol(buf, &endp, 0);
-	if (*endp != '\n') {
-		fprintf(stderr, "Failed to parse %s\n", fname);
-		return -1;
-	}
-	*value = result;
-	return 0;
-}
-
 static void print_flags(long flags)
 {
+	open_json_array(PRINT_JSON, "flags");
+
 	if (flags & IFF_TUN)
-		printf(" tun");
+		print_string(PRINT_ANY, NULL, " %s", "tun");
 
 	if (flags & IFF_TAP)
-		printf(" tap");
+		print_string(PRINT_ANY, NULL, " %s", "tap");
 
 	if (!(flags & IFF_NO_PI))
-		printf(" pi");
+		print_string(PRINT_ANY, NULL, " %s", "pi");
 
 	if (flags & IFF_ONE_QUEUE)
-		printf(" one_queue");
+		print_string(PRINT_ANY, NULL, " %s", "one_queue");
 
 	if (flags & IFF_VNET_HDR)
-		printf(" vnet_hdr");
+		print_string(PRINT_ANY, NULL, " %s", "vnet_hdr");
 
-	flags &= ~(IFF_TUN|IFF_TAP|IFF_NO_PI|IFF_ONE_QUEUE|IFF_VNET_HDR);
+	if (flags & IFF_PERSIST)
+		print_string(PRINT_ANY, NULL, " %s", "persist");
+
+	if (!(flags & IFF_NOFILTER))
+		print_string(PRINT_ANY, NULL, " %s", "filter");
+
+	flags &= ~(IFF_TUN | IFF_TAP | IFF_NO_PI | IFF_ONE_QUEUE |
+		   IFF_VNET_HDR | IFF_PERSIST | IFF_NOFILTER);
 	if (flags)
-		printf(" UNKNOWN_FLAGS:%lx", flags);
+		print_0xhex(PRINT_ANY, NULL, "%#x", flags);
+
+	close_json_array(PRINT_JSON, NULL);
 }
 
 static char *pid_name(pid_t pid)
@@ -316,6 +298,8 @@ static void show_processes(const char *name)
 		   NULL, &globbuf);
 	if (err)
 		return;
+
+	open_json_array(PRINT_JSON, "processes");
 
 	fd_path = globbuf.gl_pathv;
 	while (*fd_path) {
@@ -363,7 +347,11 @@ static void show_processes(const char *name)
 				   !strcmp(name, value)) {
 				char *pname = pid_name(pid);
 
-				printf(" %s(%d)", pname ? : "<NULL>", pid);
+				print_string(PRINT_ANY, "name",
+					     "%s", pname ? : "<NULL>");
+
+				print_uint(PRINT_ANY, "pid",
+					   "(%d)", pid);
 				free(pname);
 			}
 
@@ -376,47 +364,117 @@ static void show_processes(const char *name)
 next:
 		++fd_path;
 	}
+	close_json_array(PRINT_JSON, NULL);
 
 	globfree(&globbuf);
 }
 
+static int tuntap_filter_req(struct nlmsghdr *nlh, int reqlen)
+{
+	struct rtattr *linkinfo;
+	int err;
+
+	linkinfo = addattr_nest(nlh, reqlen, IFLA_LINKINFO);
+
+	err = addattr_l(nlh, reqlen, IFLA_INFO_KIND,
+			drv_name, sizeof(drv_name) - 1);
+	if (err)
+		return err;
+
+	addattr_nest_end(nlh, linkinfo);
+
+	return 0;
+}
+
+static int print_tuntap(const struct sockaddr_nl *who,
+			struct nlmsghdr *n, void *arg)
+{
+	struct ifinfomsg *ifi = NLMSG_DATA(n);
+	struct rtattr *tb[IFLA_MAX+1];
+	struct rtattr *linkinfo[IFLA_INFO_MAX+1];
+	const char *name, *kind;
+	long flags, owner = -1, group = -1;
+
+	if (n->nlmsg_type != RTM_NEWLINK && n->nlmsg_type != RTM_DELLINK)
+		return 0;
+
+	if (n->nlmsg_len < NLMSG_LENGTH(sizeof(*ifi)))
+		return -1;
+
+	switch (ifi->ifi_type) {
+	case ARPHRD_NONE:
+	case ARPHRD_ETHER:
+		break;
+	default:
+		return 0;
+	}
+
+	parse_rtattr(tb, IFLA_MAX, IFLA_RTA(ifi), IFLA_PAYLOAD(n));
+
+	if (!tb[IFLA_IFNAME])
+		return 0;
+
+	if (!tb[IFLA_LINKINFO])
+		return 0;
+
+	parse_rtattr_nested(linkinfo, IFLA_INFO_MAX, tb[IFLA_LINKINFO]);
+
+	if (!linkinfo[IFLA_INFO_KIND])
+		return 0;
+
+	kind = rta_getattr_str(linkinfo[IFLA_INFO_KIND]);
+	if (strcmp(kind, drv_name))
+		return 0;
+
+	name = rta_getattr_str(tb[IFLA_IFNAME]);
+
+	if (read_prop(name, "tun_flags", &flags))
+		return 0;
+	if (read_prop(name, "owner", &owner))
+		return 0;
+	if (read_prop(name, "group", &group))
+		return 0;
+
+	open_json_object(NULL);
+	print_color_string(PRINT_ANY, COLOR_IFNAME,
+			   "ifname", "%s:", name);
+	print_flags(flags);
+	if (owner != -1)
+		print_u64(PRINT_ANY, "user",
+			   " user %ld", owner);
+	if (group != -1)
+		print_u64(PRINT_ANY, "group",
+			   " group %ld", group);
+
+	if (show_details) {
+		print_string(PRINT_FP, NULL,
+			     "%s\tAttached to processes:", _SL_);
+		show_processes(name);
+	}
+	close_json_object();
+	print_string(PRINT_FP, NULL, "%s", "\n");
+
+	return 0;
+}
 
 static int do_show(int argc, char **argv)
 {
-	DIR *dir;
-	struct dirent *d;
-	long flags, owner = -1, group = -1;
-
-	dir = opendir("/sys/class/net");
-	if (!dir) {
-		perror("opendir");
+	if (rtnl_wilddump_req_filter_fn(&rth, AF_UNSPEC, RTM_GETLINK,
+					tuntap_filter_req) < 0) {
+		perror("Cannot send dump request\n");
 		return -1;
 	}
-	while ((d = readdir(dir))) {
-		if (d->d_name[0] == '.' &&
-		    (d->d_name[1] == 0 || d->d_name[1] == '.'))
-			continue;
 
-		if (read_prop(d->d_name, "tun_flags", &flags))
-			continue;
+	new_json_obj(json);
 
-		read_prop(d->d_name, "owner", &owner);
-		read_prop(d->d_name, "group", &group);
-
-		printf("%s:", d->d_name);
-		print_flags(flags);
-		if (owner != -1)
-			printf(" user %ld", owner);
-		if (group != -1)
-			printf(" group %ld", group);
-		printf("\n");
-		if (show_details) {
-			printf("\tAttached to processes:");
-			show_processes(d->d_name);
-			printf("\n");
-		}
+	if (rtnl_dump_filter(&rth, print_tuntap, NULL) < 0) {
+		fprintf(stderr, "Dump terminated\n");
+		return -1;
 	}
-	closedir(dir);
+
+	delete_json_obj();
+	fflush(stdout);
+
 	return 0;
 }
 
@@ -440,3 +498,102 @@ int do_iptuntap(int argc, char **argv)
 		*argv);
 	exit(-1);
 }
+
+static void print_owner(FILE *f, uid_t uid)
+{
+	struct passwd *pw = getpwuid(uid);
+
+	if (pw)
+		print_string(PRINT_ANY, "user", "user %s ", pw->pw_name);
+	else
+		print_uint(PRINT_ANY, "user", "user %u ", uid);
+}
+
+static void print_group(FILE *f, gid_t gid)
+{
+	struct group *group = getgrgid(gid);
+
+	if (group)
+		print_string(PRINT_ANY, "group", "group %s ", group->gr_name);
+	else
+		print_uint(PRINT_ANY, "group", "group %u ", gid);
+}
+
+static void print_mq(FILE *f, struct rtattr *tb[])
+{
+	if (!tb[IFLA_TUN_MULTI_QUEUE] ||
+	    !rta_getattr_u8(tb[IFLA_TUN_MULTI_QUEUE])) {
+		if (is_json_context())
+			print_bool(PRINT_JSON, "multi_queue", NULL, false);
+		return;
+	}
+
+	print_bool(PRINT_ANY, "multi_queue", "multi_queue ", true);
+
+	if (tb[IFLA_TUN_NUM_QUEUES]) {
+		print_uint(PRINT_ANY, "numqueues", "numqueues %u ",
+			   rta_getattr_u32(tb[IFLA_TUN_NUM_QUEUES]));
+	}
+
+	if (tb[IFLA_TUN_NUM_DISABLED_QUEUES]) {
+		print_uint(PRINT_ANY, "numdisabled", "numdisabled %u ",
+			   rta_getattr_u32(tb[IFLA_TUN_NUM_DISABLED_QUEUES]));
+	}
+}
+
+static void print_onoff(FILE *f, const char *flag, __u8 val)
+{
+	if (is_json_context())
+		print_bool(PRINT_JSON, flag, NULL, !!val);
+	else
+		fprintf(f, "%s %s ", flag, val ? "on" : "off");
+}
+
+static void print_type(FILE *f, __u8 type)
+{
+	SPRINT_BUF(buf);
+	const char *str = buf;
+
+	if (type == IFF_TUN)
+		str = "tun";
+	else if (type == IFF_TAP)
+		str = "tap";
+	else
+		snprintf(buf, sizeof(buf), "UNKNOWN:%hhu", type);
+
+	print_string(PRINT_ANY, "type", "type %s ", str);
+}
+
+static void tun_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
+{
+	if (!tb)
+		return;
+
+	if (tb[IFLA_TUN_TYPE])
+		print_type(f, rta_getattr_u8(tb[IFLA_TUN_TYPE]));
+
+	if (tb[IFLA_TUN_PI])
+		print_onoff(f, "pi", rta_getattr_u8(tb[IFLA_TUN_PI]));
+
+	if (tb[IFLA_TUN_VNET_HDR]) {
+		print_onoff(f, "vnet_hdr",
+			    rta_getattr_u8(tb[IFLA_TUN_VNET_HDR]));
+	}
+
+	print_mq(f, tb);
+
+	if (tb[IFLA_TUN_PERSIST])
+		print_onoff(f, "persist", rta_getattr_u8(tb[IFLA_TUN_PERSIST]));
+
+	if (tb[IFLA_TUN_OWNER])
+		print_owner(f, rta_getattr_u32(tb[IFLA_TUN_OWNER]));
+
+	if (tb[IFLA_TUN_GROUP])
+		print_group(f, rta_getattr_u32(tb[IFLA_TUN_GROUP]));
+}
+
+struct link_util tun_link_util = {
+	.id = "tun",
+	.maxattr = IFLA_TUN_MAX,
+	.print_opt = tun_print_opt,
+};

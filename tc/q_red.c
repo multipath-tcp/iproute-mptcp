@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -33,7 +32,8 @@ static void explain(void)
 	fprintf(stderr, "               [ecn] [harddrop]\n");
 }
 
-static int red_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
+static int red_parse_opt(struct qdisc_util *qu, int argc, char **argv,
+			 struct nlmsghdr *n, const char *dev)
 {
 	struct tc_red_qopt opt = {};
 	unsigned int burst = 0;
@@ -84,7 +84,12 @@ static int red_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nl
 			}
 		} else if (strcmp(*argv, "bandwidth") == 0) {
 			NEXT_ARG();
-			if (get_rate(&rate, *argv)) {
+			if (strchr(*argv, '%')) {
+				if (get_percent_rate(&rate, *argv, dev)) {
+					fprintf(stderr, "Illegal \"bandwidth\"\n");
+					return -1;
+				}
+			} else if (get_rate(&rate, *argv)) {
 				fprintf(stderr, "Illegal \"bandwidth\"\n");
 				return -1;
 			}
@@ -143,13 +148,12 @@ static int red_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nl
 	}
 	opt.Scell_log = parm;
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, 1024, TCA_OPTIONS, NULL, 0);
+	tail = addattr_nest(n, 1024, TCA_OPTIONS);
 	addattr_l(n, 1024, TCA_RED_PARMS, &opt, sizeof(opt));
 	addattr_l(n, 1024, TCA_RED_STAB, sbuf, 256);
 	max_P = probability * pow(2, 32);
 	addattr_l(n, 1024, TCA_RED_MAX_P, &max_P, sizeof(max_P));
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_nest_end(n, tail);
 	return 0;
 }
 
@@ -178,23 +182,34 @@ static int red_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	    RTA_PAYLOAD(tb[TCA_RED_MAX_P]) >= sizeof(__u32))
 		max_P = rta_getattr_u32(tb[TCA_RED_MAX_P]);
 
-	fprintf(f, "limit %s min %s max %s ",
-		sprint_size(qopt->limit, b1),
-		sprint_size(qopt->qth_min, b2),
-		sprint_size(qopt->qth_max, b3));
+	print_uint(PRINT_JSON, "limit", NULL, qopt->limit);
+	print_string(PRINT_FP, NULL, "limit %s ", sprint_size(qopt->limit, b1));
+	print_uint(PRINT_JSON, "min", NULL, qopt->qth_min);
+	print_string(PRINT_FP, NULL, "min %s ", sprint_size(qopt->qth_min, b2));
+	print_uint(PRINT_JSON, "max", NULL, qopt->qth_max);
+	print_string(PRINT_FP, NULL, "max %s ", sprint_size(qopt->qth_max, b3));
+
 	if (qopt->flags & TC_RED_ECN)
-		fprintf(f, "ecn ");
+		print_bool(PRINT_ANY, "ecn", "ecn ", true);
+	else
+		print_bool(PRINT_ANY, "ecn", NULL, false);
 	if (qopt->flags & TC_RED_HARDDROP)
-		fprintf(f, "harddrop ");
+		print_bool(PRINT_ANY, "harddrop", "harddrop ", true);
+	else
+		print_bool(PRINT_ANY, "harddrop", NULL, false);
 	if (qopt->flags & TC_RED_ADAPTATIVE)
-		fprintf(f, "adaptive ");
+		print_bool(PRINT_ANY, "adaptive", "adaptive ", true);
+	else
+		print_bool(PRINT_ANY, "adaptive", NULL, false);
 	if (show_details) {
-		fprintf(f, "ewma %u ", qopt->Wlog);
+		print_uint(PRINT_ANY, "ewma", "ewma %u ", qopt->Wlog);
 		if (max_P)
-			fprintf(f, "probability %lg ", max_P / pow(2, 32));
+			print_float(PRINT_ANY, "probability",
+				    "probability %lg ", max_P / pow(2, 32));
 		else
-			fprintf(f, "Plog %u ", qopt->Plog);
-		fprintf(f, "Scell_log %u", qopt->Scell_log);
+			print_uint(PRINT_ANY, "Plog", "Plog %u ", qopt->Plog);
+		print_uint(PRINT_ANY, "Scell_log", "Scell_log %u",
+			   qopt->Scell_log);
 	}
 	return 0;
 }
@@ -211,10 +226,10 @@ static int red_print_xstats(struct qdisc_util *qu, FILE *f, struct rtattr *xstat
 		return -1;
 
 	st = RTA_DATA(xstats);
-	fprintf(f, "  marked %u early %u pdrop %u other %u",
-		st->marked, st->early, st->pdrop, st->other);
-	return 0;
-
+	print_uint(PRINT_ANY, "marked", "  marked %u ", st->marked);
+	print_uint(PRINT_ANY, "early", "early %u ", st->early);
+	print_uint(PRINT_ANY, "pdrop", "pdrop %u ", st->pdrop);
+	print_uint(PRINT_ANY, "other", "other %u ", st->other);
 #endif
 	return 0;
 }

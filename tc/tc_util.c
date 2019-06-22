@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/param.h>
@@ -191,6 +190,69 @@ static const struct rate_suffix {
 	{ NULL }
 };
 
+int parse_percent_rate(char *rate, const char *str, const char *dev)
+{
+	long dev_mbit;
+	int ret;
+	double perc, rate_mbit;
+	char *str_perc;
+
+	if (!dev[0]) {
+		fprintf(stderr, "No device specified; specify device to rate limit by percentage\n");
+		return -1;
+	}
+
+	if (read_prop(dev, "speed", &dev_mbit))
+		return -1;
+
+	ret = sscanf(str, "%m[0-9.%]", &str_perc);
+	if (ret != 1)
+		goto malf;
+
+	if (parse_percent(&perc, str_perc))
+		goto malf;
+
+	free(str_perc);
+
+	if (perc > 1.0 || perc < 0.0) {
+		fprintf(stderr, "Invalid rate specified; should be between [0,100]%% but is %s\n", str);
+		return -1;
+	}
+
+	rate_mbit = perc * dev_mbit;
+
+	ret = snprintf(rate, 20, "%lf", rate_mbit);
+	if (ret <= 0 || ret >= 20) {
+		fprintf(stderr, "Unable to parse calculated rate\n");
+		return -1;
+	}
+
+	return 0;
+
+malf:
+	fprintf(stderr, "Specified rate value could not be read or is malformed\n");
+	return -1;
+}
+
+int get_percent_rate(unsigned int *rate, const char *str, const char *dev)
+{
+	char r_str[20];
+
+	if (parse_percent_rate(r_str, str, dev))
+		return -1;
+
+	return get_rate(rate, r_str);
+}
+
+int get_percent_rate64(__u64 *rate, const char *str, const char *dev)
+{
+	char r_str[20];
+
+	if (parse_percent_rate(r_str, str, dev))
+		return -1;
+
+	return get_rate64(rate, r_str);
+}
 
 int get_rate(unsigned int *rate, const char *str)
 {
@@ -382,6 +444,17 @@ int get_size_and_cell(unsigned int *size, int *cell_log, char *str)
 	return 0;
 }
 
+void print_devname(enum output_type type, int ifindex)
+{
+	const char *ifname = ll_index_to_name(ifindex);
+
+	if (!is_json_context())
+		printf("dev ");
+
+	print_color_string(type, COLOR_IFNAME,
+			   "dev", "%s ", ifname);
+}
+
 void print_size(char *buf, int len, __u32 sz)
 {
 	double tmp = sz;
@@ -449,7 +522,7 @@ static const char *action_n2a(int action)
  *
  * In error case, returns -1 and does not touch @result. Otherwise returns 0.
  */
-static int action_a2n(char *arg, int *result, bool allow_num)
+int action_a2n(char *arg, int *result, bool allow_num)
 {
 	int n;
 	char dummy;
@@ -473,13 +546,15 @@ static int action_a2n(char *arg, int *result, bool allow_num)
 	for (iter = a2n; iter->a; iter++) {
 		if (matches(arg, iter->a) != 0)
 			continue;
-		*result = iter->n;
-		return 0;
+		n = iter->n;
+		goto out_ok;
 	}
 	if (!allow_num || sscanf(arg, "%d%c", &n, &dummy) != 1)
 		return -1;
 
-	*result = n;
+out_ok:
+	if (result)
+		*result = n;
 	return 0;
 }
 
@@ -573,7 +648,7 @@ static int parse_action_control_slash_spaces(int *argc_p, char ***argv_p,
 {
 	int argc = *argc_p;
 	char **argv = *argv_p;
-	int result1, result2;
+	int result1 = -1, result2;
 	int *result_p = &result1;
 	int ok = 0;
 	int ret;
@@ -621,8 +696,8 @@ out:
 int parse_action_control_slash(int *argc_p, char ***argv_p,
 			       int *result1_p, int *result2_p, bool allow_num)
 {
+	int result1, result2, argc = *argc_p;
 	char **argv = *argv_p;
-	int result1, result2;
 	char *p = strchr(*argv, '/');
 
 	if (!p)
@@ -631,8 +706,7 @@ int parse_action_control_slash(int *argc_p, char ***argv_p,
 							 allow_num);
 	*p = 0;
 	if (action_a2n(*argv, &result1, allow_num)) {
-		if (p)
-			*p = '/';
+		*p = '/';
 		return -1;
 	}
 
@@ -642,18 +716,26 @@ int parse_action_control_slash(int *argc_p, char ***argv_p,
 
 	*result1_p = result1;
 	*result2_p = result2;
+	NEXT_ARG_FWD();
+	*argc_p = argc;
+	*argv_p = argv;
 	return 0;
 }
 
 void print_action_control(FILE *f, const char *prefix,
 			  int action, const char *suffix)
 {
-	fprintf(f, "%s%s", prefix, action_n2a(action));
+	print_string(PRINT_FP, NULL, "%s", prefix);
+	open_json_object("control_action");
+	print_string(PRINT_ANY, "type", "%s", action_n2a(action));
 	if (TC_ACT_EXT_CMP(action, TC_ACT_GOTO_CHAIN))
-		fprintf(f, " chain %u", action & TC_ACT_EXT_VAL_MASK);
+		print_uint(PRINT_ANY, "chain", " chain %u",
+			   action & TC_ACT_EXT_VAL_MASK);
 	if (TC_ACT_EXT_CMP(action, TC_ACT_JUMP))
-		fprintf(f, " %u", action & TC_ACT_EXT_VAL_MASK);
-	fprintf(f, "%s", suffix);
+		print_uint(PRINT_ANY, "jump", " %u",
+			   action & TC_ACT_EXT_VAL_MASK);
+	close_json_object();
+	print_string(PRINT_FP, NULL, "%s", suffix);
 }
 
 int get_linklayer(unsigned int *val, const char *arg)
@@ -701,12 +783,21 @@ void print_tm(FILE *f, const struct tcf_t *tm)
 {
 	int hz = get_user_hz();
 
-	if (tm->install != 0)
-		fprintf(f, " installed %u sec", (unsigned int)(tm->install/hz));
-	if (tm->lastuse != 0)
-		fprintf(f, " used %u sec", (unsigned int)(tm->lastuse/hz));
-	if (tm->expires != 0)
-		fprintf(f, " expires %u sec", (unsigned int)(tm->expires/hz));
+	if (tm->install != 0) {
+		print_uint(PRINT_JSON, "installed", NULL, tm->install);
+		print_uint(PRINT_FP, NULL, " installed %u sec",
+			   (unsigned int)(tm->install/hz));
+	}
+	if (tm->lastuse != 0) {
+		print_uint(PRINT_JSON, "last_used", NULL, tm->lastuse);
+		print_uint(PRINT_FP, NULL, " used %u sec",
+			   (unsigned int)(tm->lastuse/hz));
+	}
+	if (tm->expires != 0) {
+		print_uint(PRINT_JSON, "expires", NULL, tm->expires);
+		print_uint(PRINT_FP, NULL, " expires %u sec",
+			   (unsigned int)(tm->expires/hz));
+	}
 }
 
 void print_tcstats2_attr(FILE *fp, struct rtattr *rta, char *prefix, struct rtattr **xstats)
@@ -720,16 +811,19 @@ void print_tcstats2_attr(FILE *fp, struct rtattr *rta, char *prefix, struct rtat
 		struct gnet_stats_basic bs = {0};
 
 		memcpy(&bs, RTA_DATA(tbs[TCA_STATS_BASIC]), MIN(RTA_PAYLOAD(tbs[TCA_STATS_BASIC]), sizeof(bs)));
-		fprintf(fp, "%sSent %llu bytes %u pkt",
-			prefix, (unsigned long long) bs.bytes, bs.packets);
+		print_string(PRINT_FP, NULL, "%s", prefix);
+		print_lluint(PRINT_ANY, "bytes", "Sent %llu bytes", bs.bytes);
+		print_uint(PRINT_ANY, "packets", " %u pkt", bs.packets);
 	}
 
 	if (tbs[TCA_STATS_QUEUE]) {
 		struct gnet_stats_queue q = {0};
 
 		memcpy(&q, RTA_DATA(tbs[TCA_STATS_QUEUE]), MIN(RTA_PAYLOAD(tbs[TCA_STATS_QUEUE]), sizeof(q)));
-		fprintf(fp, " (dropped %u, overlimits %u requeues %u) ",
-			q.drops, q.overlimits, q.requeues);
+		print_uint(PRINT_ANY, "drops", " (dropped %u", q.drops);
+		print_uint(PRINT_ANY, "overlimits", ", overlimits %u",
+			   q.overlimits);
+		print_uint(PRINT_ANY, "requeues", " requeues %u) ", q.requeues);
 	}
 
 	if (tbs[TCA_STATS_RATE_EST64]) {
@@ -738,15 +832,21 @@ void print_tcstats2_attr(FILE *fp, struct rtattr *rta, char *prefix, struct rtat
 		memcpy(&re, RTA_DATA(tbs[TCA_STATS_RATE_EST64]),
 		       MIN(RTA_PAYLOAD(tbs[TCA_STATS_RATE_EST64]),
 			   sizeof(re)));
-		fprintf(fp, "\n%srate %s %llupps ",
-			prefix, sprint_rate(re.bps, b1), re.pps);
+		print_string(PRINT_FP, NULL, "\n%s", prefix);
+		print_lluint(PRINT_JSON, "rate", NULL, re.bps);
+		print_string(PRINT_FP, NULL, "rate %s",
+			     sprint_rate(re.bps, b1));
+		print_lluint(PRINT_ANY, "pps", " %llupps", re.pps);
 	} else if (tbs[TCA_STATS_RATE_EST]) {
 		struct gnet_stats_rate_est re = {0};
 
 		memcpy(&re, RTA_DATA(tbs[TCA_STATS_RATE_EST]),
 		       MIN(RTA_PAYLOAD(tbs[TCA_STATS_RATE_EST]), sizeof(re)));
-		fprintf(fp, "\n%srate %s %upps ",
-			prefix, sprint_rate(re.bps, b1), re.pps);
+		print_string(PRINT_FP, NULL, "\n%s", prefix);
+		print_uint(PRINT_JSON, "rate", NULL, re.bps);
+		print_string(PRINT_FP, NULL, "rate %s",
+			     sprint_rate(re.bps, b1));
+		print_uint(PRINT_ANY, "pps", " %upps", re.pps);
 	}
 
 	if (tbs[TCA_STATS_QUEUE]) {
@@ -754,9 +854,12 @@ void print_tcstats2_attr(FILE *fp, struct rtattr *rta, char *prefix, struct rtat
 
 		memcpy(&q, RTA_DATA(tbs[TCA_STATS_QUEUE]), MIN(RTA_PAYLOAD(tbs[TCA_STATS_QUEUE]), sizeof(q)));
 		if (!tbs[TCA_STATS_RATE_EST])
-			fprintf(fp, "\n%s", prefix);
-		fprintf(fp, "backlog %s %up requeues %u ",
-			sprint_size(q.backlog, b1), q.qlen, q.requeues);
+			print_string(PRINT_FP, NULL, "\n%s", prefix);
+		print_uint(PRINT_JSON, "backlog", NULL, q.backlog);
+		print_string(PRINT_FP, NULL, "backlog %s",
+			     sprint_size(q.backlog, b1));
+		print_uint(PRINT_ANY, "qlen", " %up", q.qlen);
+		print_uint(PRINT_FP, NULL, " requeues %u", q.requeues);
 	}
 
 	if (xstats)

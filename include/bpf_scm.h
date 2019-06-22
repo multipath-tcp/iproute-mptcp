@@ -1,8 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __BPF_SCM__
 #define __BPF_SCM__
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 
 #include "utils.h"
 #include "bpf_elf.h"

@@ -50,6 +50,8 @@ ip-tunnel - tunnel configuration
 .br
 .RB "[ [" no "]" pmtudisc " ]"
 .RB "[ [" no "]" ignore-df " ]"
+.RB "[ [" no "]" allow-localremote " ]"
+.br
 .RB "[ " dev
 .IR PHYS_DEV " ]"
 
@@ -181,7 +183,7 @@ discovery.
 enable IPv4 DF suppression on this tunnel.
 Normally datagrams that exceed the MTU will be fragmented; the presence
 of the DF flag inhibits this, resulting instead in an ICMP Unreachable
-(Fragmentation Required) message.  Enabling this attribute casues the
+(Fragmentation Required) message.  Enabling this attribute causes the
 DF flag to be ignored.
 
 .TP
@@ -241,6 +243,11 @@ set a fixed encapsulation limit. Default is 4.
 .BI flowlabel " FLOWLABEL"
 .RB ( " only IPv6 tunnels " )
 set a fixed flowlabel.
+
+.TP
+.BI allow-localremote
+.RB ( " only IPv6 tunnels " )
+allow remote endpoint on the local host.
 .RE
 
 .TP

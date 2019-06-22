@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -95,9 +94,7 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 			} else if (matches(*argv, "tcindex") == 0) {
 				ife_tcindex = IFE_META_TCINDEX;
 			} else {
-				fprintf(stderr, "Illegal meta define <%s>\n",
-					*argv);
-				return -1;
+				invarg("Illegal meta define", *argv);
 			}
 		} else if (matches(*argv, "use") == 0) {
 			NEXT_ARG();
@@ -117,9 +114,7 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 					invarg("ife tcindex val is invalid",
 					       *argv);
 			} else {
-				fprintf(stderr, "Illegal meta use type <%s>\n",
-					*argv);
-				return -1;
+				invarg("Illegal meta use type", *argv);
 			}
 		} else if (matches(*argv, "type") == 0) {
 			NEXT_ARG();
@@ -133,8 +128,7 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 			if (sscanf(daddr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
 				   dbuf, dbuf + 1, dbuf + 2,
 				   dbuf + 3, dbuf + 4, dbuf + 5) != 6) {
-				fprintf(stderr, "Invalid mac address %s\n",
-					daddr);
+				invarg("Invalid mac address", *argv);
 			}
 			fprintf(stderr, "dst MAC address <%s>\n", daddr);
 
@@ -144,8 +138,7 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 			if (sscanf(saddr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
 				   sbuf, sbuf + 1, sbuf + 2,
 				   sbuf + 3, sbuf + 4, sbuf + 5) != 6) {
-				fprintf(stderr, "Invalid mac address %s\n",
-					saddr);
+				invarg("Invalid mac address", *argv);
 			}
 			fprintf(stderr, "src MAC address <%s>\n", saddr);
 		} else if (matches(*argv, "help") == 0) {
@@ -178,8 +171,7 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 		ife_usage();
 	}
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, MAX_MSG, tca_id, NULL, 0);
+	tail = addattr_nest(n, MAX_MSG, tca_id);
 	addattr_l(n, MAX_MSG, TCA_IFE_PARMS, &p, sizeof(p));
 
 	if (!(p.flags & IFE_ENCODE))
@@ -194,8 +186,7 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 	if (saddr)
 		addattr_l(n, MAX_MSG, TCA_IFE_SMAC, sbuf, ETH_ALEN);
 
-	tail2 = NLMSG_TAIL(n);
-	addattr_l(n, MAX_MSG, TCA_IFE_METALST, NULL, 0);
+	tail2 = addattr_nest(n, MAX_MSG, TCA_IFE_METALST);
 	if (ife_mark || ife_mark_v) {
 		if (ife_mark_v)
 			addattr_l(n, MAX_MSG, IFE_META_SKBMARK, &ife_mark_v, 4);
@@ -216,10 +207,10 @@ static int parse_ife(struct action_util *a, int *argc_p, char ***argv_p,
 			addattr_l(n, MAX_MSG, IFE_META_TCINDEX, NULL, 0);
 	}
 
-	tail2->rta_len = (void *)NLMSG_TAIL(n) - (void *)tail2;
+	addattr_nest_end(n, tail2);
 
 skip_encode:
-	tail->rta_len = (void *)NLMSG_TAIL(n) - (void *)tail;
+	addattr_nest_end(n, tail);
 
 	*argc_p = argc;
 	*argv_p = argv;
@@ -243,22 +234,24 @@ static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 	parse_rtattr_nested(tb, TCA_IFE_MAX, arg);
 
 	if (tb[TCA_IFE_PARMS] == NULL) {
-		fprintf(f, "[NULL ife parameters]");
+		print_string(PRINT_FP, NULL, "%s", "[NULL ife parameters]");
 		return -1;
 	}
 	p = RTA_DATA(tb[TCA_IFE_PARMS]);
 
-	fprintf(f, "ife %s ", p->flags & IFE_ENCODE ? "encode" : "decode");
+	print_string(PRINT_ANY, "kind", "%s ", "ife");
+	print_string(PRINT_ANY, "mode", "%s ",
+		     p->flags & IFE_ENCODE ? "encode" : "decode");
 	print_action_control(f, "action ", p->action, " ");
 
 	if (tb[TCA_IFE_TYPE]) {
 		ife_type = rta_getattr_u16(tb[TCA_IFE_TYPE]);
 		has_optional = 1;
-		fprintf(f, "type 0x%X ", ife_type);
+		print_0xhex(PRINT_ANY, "type", "type 0x%X ", ife_type);
 	}
 
 	if (has_optional)
-		fprintf(f, "\n\t ");
+		print_string(PRINT_FP, NULL, "%s\t", _SL_);
 
 	if (tb[TCA_IFE_METALST]) {
 		struct rtattr *metalist[IFE_META_MAX + 1];
@@ -271,9 +264,11 @@ static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 			len = RTA_PAYLOAD(metalist[IFE_META_SKBMARK]);
 			if (len) {
 				mmark = rta_getattr_u32(metalist[IFE_META_SKBMARK]);
-				fprintf(f, "use mark %u ", mmark);
+				print_uint(PRINT_ANY, "mark", "use mark %u ",
+					   mmark);
 			} else
-				fprintf(f, "allow mark ");
+				print_string(PRINT_ANY, "mark", "%s mark ",
+					     "allow");
 		}
 
 		if (metalist[IFE_META_TCINDEX]) {
@@ -281,41 +276,47 @@ static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 			if (len) {
 				mtcindex =
 					rta_getattr_u16(metalist[IFE_META_TCINDEX]);
-				fprintf(f, "use tcindex %d ", mtcindex);
+				print_uint(PRINT_ANY, "tcindex",
+					   "use tcindex %u ", mtcindex);
 			} else
-				fprintf(f, "allow tcindex ");
+				print_string(PRINT_ANY, "tcindex",
+					     "%s tcindex ", "allow");
 		}
 
 		if (metalist[IFE_META_PRIO]) {
 			len = RTA_PAYLOAD(metalist[IFE_META_PRIO]);
 			if (len) {
 				mprio = rta_getattr_u32(metalist[IFE_META_PRIO]);
-				fprintf(f, "use prio %u ", mprio);
+				print_uint(PRINT_ANY, "prio", "use prio %u ",
+					   mprio);
 			} else
-				fprintf(f, "allow prio ");
+				print_string(PRINT_ANY, "prio", "%s prio ",
+					     "allow");
 		}
 
 	}
 
 	if (tb[TCA_IFE_DMAC]) {
 		has_optional = 1;
-		fprintf(f, "dst %s ",
-			ll_addr_n2a(RTA_DATA(tb[TCA_IFE_DMAC]),
-				    RTA_PAYLOAD(tb[TCA_IFE_DMAC]), 0, b2,
-				    sizeof(b2)));
-
+		print_string(PRINT_ANY, "dst", "dst %s ",
+			     ll_addr_n2a(RTA_DATA(tb[TCA_IFE_DMAC]),
+					 RTA_PAYLOAD(tb[TCA_IFE_DMAC]), 0, b2,
+					 sizeof(b2)));
 	}
 
 	if (tb[TCA_IFE_SMAC]) {
 		has_optional = 1;
-		fprintf(f, "src %s ",
-			ll_addr_n2a(RTA_DATA(tb[TCA_IFE_SMAC]),
-				    RTA_PAYLOAD(tb[TCA_IFE_SMAC]), 0, b2,
-				    sizeof(b2)));
+		print_string(PRINT_ANY, "src", "src %s ",
+			     ll_addr_n2a(RTA_DATA(tb[TCA_IFE_SMAC]),
+					 RTA_PAYLOAD(tb[TCA_IFE_SMAC]), 0, b2,
+					 sizeof(b2)));
 	}
 
-	fprintf(f, "\n\t index %u ref %d bind %d", p->index, p->refcnt,
-		p->bindcnt);
+	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_uint(PRINT_ANY, "index", "\t index %u", p->index);
+	print_int(PRINT_ANY, "ref", " ref %d", p->refcnt);
+	print_int(PRINT_ANY, "bind", " bind %d", p->bindcnt);
+
 	if (show_stats) {
 		if (tb[TCA_IFE_TM]) {
 			struct tcf_t *tm = RTA_DATA(tb[TCA_IFE_TM]);
@@ -324,7 +325,7 @@ static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 		}
 	}
 
-	fprintf(f, "\n");
+	print_string(PRINT_FP, NULL, "%s", _SL_);
 
 	return 0;
 }

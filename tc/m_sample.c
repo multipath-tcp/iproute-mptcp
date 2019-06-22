@@ -65,7 +65,7 @@ static int parse_sample(struct action_util *a, int *argc_p, char ***argv_p,
 	while (argc > 0) {
 		if (matches(*argv, "rate") == 0) {
 			NEXT_ARG();
-			if (get_unsigned(&rate, *argv, 10) != 0) {
+			if (get_u32(&rate, *argv, 10) != 0) {
 				fprintf(stderr, "Illegal rate %s\n", *argv);
 				usage();
 				return -1;
@@ -73,7 +73,7 @@ static int parse_sample(struct action_util *a, int *argc_p, char ***argv_p,
 			rate_set = true;
 		} else if (matches(*argv, "group") == 0) {
 			NEXT_ARG();
-			if (get_unsigned(&group, *argv, 10) != 0) {
+			if (get_u32(&group, *argv, 10) != 0) {
 				fprintf(stderr, "Illegal group num %s\n",
 					*argv);
 				usage();
@@ -82,7 +82,7 @@ static int parse_sample(struct action_util *a, int *argc_p, char ***argv_p,
 			group_set = true;
 		} else if (matches(*argv, "trunc") == 0) {
 			NEXT_ARG();
-			if (get_unsigned(&trunc, *argv, 10) != 0) {
+			if (get_u32(&trunc, *argv, 10) != 0) {
 				fprintf(stderr, "Illegal truncation size %s\n",
 					*argv);
 				usage();
@@ -121,8 +121,7 @@ static int parse_sample(struct action_util *a, int *argc_p, char ***argv_p,
 		usage();
 	}
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, MAX_MSG, tca_id, NULL, 0);
+	tail = addattr_nest(n, MAX_MSG, tca_id);
 	addattr_l(n, MAX_MSG, TCA_SAMPLE_PARMS, &p, sizeof(p));
 	if (rate_set)
 		addattr32(n, MAX_MSG, TCA_SAMPLE_RATE, rate);
@@ -131,7 +130,7 @@ static int parse_sample(struct action_util *a, int *argc_p, char ***argv_p,
 	if (trunc_set)
 		addattr32(n, MAX_MSG, TCA_SAMPLE_TRUNC_SIZE, trunc);
 
-	tail->rta_len = (char *)NLMSG_TAIL(n) - (char *)tail;
+	addattr_nest_end(n, tail);
 
 	*argc_p = argc;
 	*argv_p = argv;
@@ -150,21 +149,27 @@ static int print_sample(struct action_util *au, FILE *f, struct rtattr *arg)
 
 	if (!tb[TCA_SAMPLE_PARMS] || !tb[TCA_SAMPLE_RATE] ||
 	    !tb[TCA_SAMPLE_PSAMPLE_GROUP]) {
-		fprintf(f, "[NULL sample parameters]");
+		print_string(PRINT_FP, NULL, "%s", "[NULL sample parameters]");
 		return -1;
 	}
 	p = RTA_DATA(tb[TCA_SAMPLE_PARMS]);
 
-	fprintf(f, "sample rate 1/%d group %d",
-		rta_getattr_u32(tb[TCA_SAMPLE_RATE]),
-		rta_getattr_u32(tb[TCA_SAMPLE_PSAMPLE_GROUP]));
+	print_string(PRINT_ANY, "kind", "%s ", "sample");
+	print_uint(PRINT_ANY, "rate", "rate 1/%u ",
+		   rta_getattr_u32(tb[TCA_SAMPLE_RATE]));
+	print_uint(PRINT_ANY, "group", "group %u",
+		   rta_getattr_u32(tb[TCA_SAMPLE_PSAMPLE_GROUP]));
 
 	if (tb[TCA_SAMPLE_TRUNC_SIZE])
-		fprintf(f, " trunc_size %d",
-			rta_getattr_u32(tb[TCA_SAMPLE_TRUNC_SIZE]));
+		print_uint(PRINT_ANY, "trunc_size", " trunc_size %u",
+			   rta_getattr_u32(tb[TCA_SAMPLE_TRUNC_SIZE]));
 
-	fprintf(f, "\n\tindex %d ref %d bind %d", p->index, p->refcnt,
-		p->bindcnt);
+	print_action_control(f, " ", p->action, "");
+
+	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_uint(PRINT_ANY, "index", "\t index %u", p->index);
+	print_int(PRINT_ANY, "ref", " ref %d", p->refcnt);
+	print_int(PRINT_ANY, "bind", " bind %d", p->bindcnt);
 
 	if (show_stats) {
 		if (tb[TCA_SAMPLE_TM]) {
@@ -173,7 +178,7 @@ static int print_sample(struct action_util *au, FILE *f, struct rtattr *arg)
 			print_tm(f, tm);
 		}
 	}
-	fprintf(f, "\n");
+	print_string(PRINT_FP, NULL, "%s", _SL_);
 	return 0;
 }
 

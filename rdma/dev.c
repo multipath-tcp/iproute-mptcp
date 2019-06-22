@@ -53,7 +53,8 @@ static const char *dev_caps_to_str(uint32_t idx)
 	x(SG_GAPS_REG, 32) \
 	x(VIRTUAL_FUNCTION, 33) \
 	x(RAW_SCATTER_FCS, 34) \
-	x(RDMA_NETDEV_OPA_VNIC, 35)
+	x(RDMA_NETDEV_OPA_VNIC, 35) \
+	x(PCI_WRITE_END_PADDING, 36)
 
 	enum { RDMA_DEV_FLAGS(RDMA_BITMAP_ENUM) };
 
@@ -241,33 +242,7 @@ static int dev_one_show(struct rd *rd)
 
 static int dev_show(struct rd *rd)
 {
-	struct dev_map *dev_map;
-	int ret = 0;
-
-	if (rd->json_output)
-		jsonw_start_array(rd->jw);
-	if (rd_no_arg(rd)) {
-		list_for_each_entry(dev_map, &rd->dev_map_list, list) {
-			rd->dev_idx = dev_map->idx;
-			ret = dev_one_show(rd);
-			if (ret)
-				goto out;
-		}
-	} else {
-		dev_map = dev_map_lookup(rd, false);
-		if (!dev_map) {
-			pr_err("Wrong device name\n");
-			ret = -ENOENT;
-			goto out;
-		}
-		rd_arg_inc(rd);
-		rd->dev_idx = dev_map->idx;
-		ret = dev_one_show(rd);
-	}
-out:
-	if (rd->json_output)
-		jsonw_end_array(rd->jw);
-	return ret;
+	return rd_exec_dev(rd, dev_one_show);
 }
 
 int cmd_dev(struct rd *rd)

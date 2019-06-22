@@ -51,7 +51,7 @@ static void print_explain(FILE *f)
 		"Where: VNI   := 0-16777215\n"
 		"       ADDR  := { IP_ADDRESS | any }\n"
 		"       TOS   := { NUMBER | inherit }\n"
-		"       TTL   := { 1..255 | inherit }\n"
+		"       TTL   := { 1..255 | auto | inherit }\n"
 		"       LABEL := 0-1048575\n"
 	);
 }
@@ -74,17 +74,20 @@ static void check_duparg(__u64 *attrs, int type, const char *key,
 static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			  struct nlmsghdr *n)
 {
+	inet_prefix saddr, daddr;
 	__u32 vni = 0;
-	__u32 gaddr = 0;
-	__u32 daddr = 0;
-	struct in6_addr gaddr6 = IN6ADDR_ANY_INIT;
-	struct in6_addr daddr6 = IN6ADDR_ANY_INIT;
 	__u8 learning = 1;
 	__u16 dstport = 0;
 	__u8 metadata = 0;
 	__u64 attrs = 0;
 	bool set_op = (n->nlmsg_type == RTM_NEWLINK &&
 		       !(n->nlmsg_flags & NLM_F_CREATE));
+	bool selected_family = false;
+
+	saddr.family = daddr.family = AF_UNSPEC;
+
+	inet_prefix_reset(&saddr);
+	inet_prefix_reset(&daddr);
 
 	while (argc > 0) {
 		if (!matches(*argv, "id") ||
@@ -98,65 +101,41 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			    vni >= 1u << 24)
 				invarg("invalid id", *argv);
 		} else if (!matches(*argv, "group")) {
-			if (daddr || !IN6_IS_ADDR_UNSPECIFIED(&daddr6)) {
+			if (is_addrtype_inet_not_multi(&daddr)) {
 				fprintf(stderr, "vxlan: both group and remote");
 				fprintf(stderr, " cannot be specified\n");
 				return -1;
 			}
 			NEXT_ARG();
 			check_duparg(&attrs, IFLA_VXLAN_GROUP, "group", *argv);
-			if (!inet_get_addr(*argv, &gaddr, &gaddr6)) {
-				fprintf(stderr, "Invalid address \"%s\"\n", *argv);
-				return -1;
-			}
-			if (!IN6_IS_ADDR_MULTICAST(&gaddr6) && !IN_MULTICAST(ntohl(gaddr)))
+			get_addr(&daddr, *argv, saddr.family);
+			if (!is_addrtype_inet_multi(&daddr))
 				invarg("invalid group address", *argv);
 		} else if (!matches(*argv, "remote")) {
-			if (gaddr || !IN6_IS_ADDR_UNSPECIFIED(&gaddr6)) {
+			if (is_addrtype_inet_multi(&daddr)) {
 				fprintf(stderr, "vxlan: both group and remote");
 				fprintf(stderr, " cannot be specified\n");
 				return -1;
 			}
 			NEXT_ARG();
 			check_duparg(&attrs, IFLA_VXLAN_GROUP, "remote", *argv);
-			if (!inet_get_addr(*argv, &daddr, &daddr6)) {
-				fprintf(stderr, "Invalid address \"%s\"\n", *argv);
-				return -1;
-			}
-			if (IN6_IS_ADDR_MULTICAST(&daddr6) || IN_MULTICAST(ntohl(daddr)))
+			get_addr(&daddr, *argv, saddr.family);
+			if (!is_addrtype_inet_not_multi(&daddr))
 				invarg("invalid remote address", *argv);
 		} else if (!matches(*argv, "local")) {
-			__u32 saddr = 0;
-			struct in6_addr saddr6 = IN6ADDR_ANY_INIT;
-
 			NEXT_ARG();
 			check_duparg(&attrs, IFLA_VXLAN_LOCAL, "local", *argv);
-			if (strcmp(*argv, "any")) {
-				if (!inet_get_addr(*argv, &saddr, &saddr6)) {
-					fprintf(stderr, "Invalid address \"%s\"\n", *argv);
-					return -1;
-				}
-			}
-
-			if (IN_MULTICAST(ntohl(saddr)) || IN6_IS_ADDR_MULTICAST(&saddr6))
+			get_addr(&saddr, *argv, daddr.family);
+			if (!is_addrtype_inet_not_multi(&saddr))
 				invarg("invalid local address", *argv);
-
-			if (saddr)
-				addattr_l(n, 1024, IFLA_VXLAN_LOCAL, &saddr, 4);
-			else if (!IN6_IS_ADDR_UNSPECIFIED(&saddr6))
-				addattr_l(n, 1024, IFLA_VXLAN_LOCAL6, &saddr6,
-					  sizeof(struct in6_addr));
 		} else if (!matches(*argv, "dev")) {
 			unsigned int link;
 
 			NEXT_ARG();
 			check_duparg(&attrs, IFLA_VXLAN_LINK, "dev", *argv);
-			link = if_nametoindex(*argv);
-			if (link == 0) {
-				fprintf(stderr, "Cannot find device \"%s\"\n",
-					*argv);
-				exit(-1);
-			}
+			link = ll_name_to_index(*argv);
+			if (!link)
+				exit(nodev(*argv));
 			addattr32(n, 1024, IFLA_VXLAN_LINK, link);
 		} else if (!matches(*argv, "ttl") ||
 			   !matches(*argv, "hoplimit")) {
@@ -165,14 +144,18 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 
 			NEXT_ARG();
 			check_duparg(&attrs, IFLA_VXLAN_TTL, "ttl", *argv);
-			if (strcmp(*argv, "inherit") != 0) {
+			if (strcmp(*argv, "inherit") == 0) {
+				addattr(n, 1024, IFLA_VXLAN_TTL_INHERIT);
+			} else if (strcmp(*argv, "auto") == 0) {
+				addattr8(n, 1024, IFLA_VXLAN_TTL, ttl);
+			} else {
 				if (get_unsigned(&uval, *argv, 0))
 					invarg("invalid TTL", *argv);
 				if (uval > 255)
 					invarg("TTL must be <= 255", *argv);
 				ttl = uval;
+				addattr8(n, 1024, IFLA_VXLAN_TTL, ttl);
 			}
-			addattr8(n, 1024, IFLA_VXLAN_TTL, ttl);
 		} else if (!matches(*argv, "tos") ||
 			   !matches(*argv, "dsfield")) {
 			__u32 uval;
@@ -345,12 +328,12 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 		return -1;
 	}
 
-	if (!metadata && !VXLAN_ATTRSET(attrs, IFLA_VXLAN_ID)) {
+	if (!metadata && !VXLAN_ATTRSET(attrs, IFLA_VXLAN_ID) && !set_op) {
 		fprintf(stderr, "vxlan: missing virtual network identifier\n");
 		return -1;
 	}
 
-	if ((gaddr || !IN6_IS_ADDR_UNSPECIFIED(&gaddr6)) &&
+	if (is_addrtype_inet_multi(&daddr) &&
 	    !VXLAN_ATTRSET(attrs, IFLA_VXLAN_LINK)) {
 		fprintf(stderr, "vxlan: 'group' requires 'dev' to be specified\n");
 		return -1;
@@ -367,19 +350,34 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 			"Use 'dstport 0' to get default and quiet this message\n");
 	}
 
-	addattr32(n, 1024, IFLA_VXLAN_ID, vni);
-	if (gaddr)
-		addattr_l(n, 1024, IFLA_VXLAN_GROUP, &gaddr, 4);
-	else if (daddr)
-		addattr_l(n, 1024, IFLA_VXLAN_GROUP, &daddr, 4);
-	else if (!IN6_IS_ADDR_UNSPECIFIED(&gaddr6))
-		addattr_l(n, 1024, IFLA_VXLAN_GROUP6, &gaddr6, sizeof(struct in6_addr));
-	else if (!IN6_IS_ADDR_UNSPECIFIED(&daddr6))
-		addattr_l(n, 1024, IFLA_VXLAN_GROUP6, &daddr6, sizeof(struct in6_addr));
-	else if (preferred_family == AF_INET)
-		addattr_l(n, 1024, IFLA_VXLAN_GROUP, &daddr, 4);
-	else if (preferred_family == AF_INET6)
-		addattr_l(n, 1024, IFLA_VXLAN_GROUP6, &daddr6, sizeof(struct in6_addr));
+	if (VXLAN_ATTRSET(attrs, IFLA_VXLAN_ID))
+		addattr32(n, 1024, IFLA_VXLAN_ID, vni);
+
+	if (is_addrtype_inet(&saddr)) {
+		int type = (saddr.family == AF_INET) ? IFLA_VXLAN_LOCAL
+						     : IFLA_VXLAN_LOCAL6;
+		addattr_l(n, 1024, type, saddr.data, saddr.bytelen);
+		selected_family = true;
+	}
+
+	if (is_addrtype_inet(&daddr)) {
+		int type = (daddr.family == AF_INET) ? IFLA_VXLAN_GROUP
+						     : IFLA_VXLAN_GROUP6;
+		addattr_l(n, 1024, type, daddr.data, daddr.bytelen);
+		selected_family = true;
+	}
+
+	if (!selected_family) {
+		if (preferred_family == AF_INET) {
+			get_addr(&daddr, "default", AF_INET);
+			addattr_l(n, 1024, IFLA_VXLAN_GROUP,
+				  daddr.data, daddr.bytelen);
+		} else if (preferred_family == AF_INET6) {
+			get_addr(&daddr, "default", AF_INET6);
+			addattr_l(n, 1024, IFLA_VXLAN_GROUP6,
+				  daddr.data, daddr.bytelen);
+		}
+	}
 
 	if (!set_op || VXLAN_ATTRSET(attrs, IFLA_VXLAN_LEARNING))
 		addattr8(n, 1024, IFLA_VXLAN_LEARNING, learning);
@@ -393,13 +391,18 @@ static int vxlan_parse_opt(struct link_util *lu, int argc, char **argv,
 static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 {
 	__u32 vni;
-	unsigned int link;
-	__u8 tos;
+	__u8 ttl = 0;
+	__u8 tos = 0;
 	__u32 maxaddr;
-	char s2[64];
 
 	if (!tb)
 		return;
+
+	if (tb[IFLA_VXLAN_COLLECT_METADATA] &&
+	    rta_getattr_u8(tb[IFLA_VXLAN_COLLECT_METADATA])) {
+		print_bool(PRINT_ANY, "external", "external", true);
+		return;
+	}
 
 	if (!tb[IFLA_VXLAN_ID] ||
 	    RTA_PAYLOAD(tb[IFLA_VXLAN_ID]) < sizeof(__u32))
@@ -466,14 +469,13 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 						 &addr));
 	}
 
-	if (tb[IFLA_VXLAN_LINK] &&
-	    (link = rta_getattr_u32(tb[IFLA_VXLAN_LINK]))) {
-		const char *n = if_indextoname(link, s2);
+	if (tb[IFLA_VXLAN_LINK]) {
+		unsigned int link = rta_getattr_u32(tb[IFLA_VXLAN_LINK]);
 
-		if (n)
-			print_string(PRINT_ANY, "link", "dev %s ", n);
-		else
-			print_uint(PRINT_ANY, "link_index", "dev %u ", link);
+		if (link) {
+			print_string(PRINT_ANY, "link", "dev %s ",
+				     ll_index_to_name(link));
+		}
 	}
 
 	if (tb[IFLA_VXLAN_PORT_RANGE]) {
@@ -516,25 +518,24 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 	if (tb[IFLA_VXLAN_L3MISS] && rta_getattr_u8(tb[IFLA_VXLAN_L3MISS]))
 		print_bool(PRINT_ANY, "l3miss", "l3miss ", true);
 
-	if (tb[IFLA_VXLAN_TOS] &&
-	    (tos = rta_getattr_u8(tb[IFLA_VXLAN_TOS]))) {
-		if (is_json_context()) {
-			print_0xhex(PRINT_JSON, "tos", "%#x", tos);
-		} else {
-			if (tos == 1)
-				fprintf(f, "tos %s ", "inherit");
-			else
-				fprintf(f, "tos %#x ", tos);
-		}
+	if (tb[IFLA_VXLAN_TOS])
+		tos = rta_getattr_u8(tb[IFLA_VXLAN_TOS]);
+	if (tos) {
+		if (is_json_context() || tos != 1)
+			print_0xhex(PRINT_ANY, "tos", "tos 0x%x ", tos);
+		else
+			print_string(PRINT_FP, NULL, "tos %s ", "inherit");
 	}
 
-	if (tb[IFLA_VXLAN_TTL]) {
-		__u8 ttl = rta_getattr_u8(tb[IFLA_VXLAN_TTL]);
-
-		if (ttl)
-			print_int(PRINT_ANY, "ttl", "ttl %d ", ttl);
+	if (tb[IFLA_VXLAN_TTL_INHERIT] &&
+	    rta_getattr_u8(tb[IFLA_VXLAN_TTL_INHERIT])) {
+		print_string(PRINT_FP, NULL, "ttl %s ", "inherit");
+	} else if (tb[IFLA_VXLAN_TTL]) {
+		ttl = rta_getattr_u8(tb[IFLA_VXLAN_TTL]);
+		if (is_json_context() || ttl)
+			print_uint(PRINT_ANY, "ttl", "ttl %u ", ttl);
 		else
-			print_int(PRINT_JSON, "ttl", NULL, ttl);
+			print_string(PRINT_FP, NULL, "ttl %s ", "auto");
 	}
 
 	if (tb[IFLA_VXLAN_LABEL]) {
@@ -607,10 +608,6 @@ static void vxlan_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 	if (tb[IFLA_VXLAN_REMCSUM_RX] &&
 	    rta_getattr_u8(tb[IFLA_VXLAN_REMCSUM_RX]))
 		print_bool(PRINT_ANY, "remcsum_rx", "remcsumrx ", true);
-
-	if (tb[IFLA_VXLAN_COLLECT_METADATA] &&
-	    rta_getattr_u8(tb[IFLA_VXLAN_COLLECT_METADATA]))
-		print_bool(PRINT_ANY, "collect_metadata", "external ", true);
 
 	if (tb[IFLA_VXLAN_GBP])
 		print_bool(PRINT_ANY, "gbp", "gbp ", true);

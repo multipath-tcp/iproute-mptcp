@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -28,7 +27,8 @@ static void explain(void)
 	fprintf(stderr, "Usage: ... prio bands NUMBER priomap P1 P2...[multiqueue]\n");
 }
 
-static int prio_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
+static int prio_parse_opt(struct qdisc_util *qu, int argc, char **argv,
+			  struct nlmsghdr *n, const char *dev)
 {
 	int pmap_mode = 0;
 	int idx = 0;
@@ -107,13 +107,17 @@ int prio_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 					sizeof(*qopt)))
 		return -1;
 
-	fprintf(f, "bands %u priomap ", qopt->bands);
+	print_uint(PRINT_ANY, "bands", "bands %u ", qopt->bands);
+	open_json_array(PRINT_ANY, "priomap ");
 	for (i = 0; i <= TC_PRIO_MAX; i++)
-		fprintf(f, " %d", qopt->priomap[i]);
+		print_uint(PRINT_ANY, NULL, " %d", qopt->priomap[i]);
+	close_json_array(PRINT_ANY, "");
 
 	if (tb[TCA_PRIO_MQ])
-		fprintf(f, " multiqueue: %s ",
-			rta_getattr_u8(tb[TCA_PRIO_MQ]) ? "on" : "off");
+		print_string(PRINT_FP, NULL, " multiqueue: %s ",
+			     rta_getattr_u8(tb[TCA_PRIO_MQ]) ? "on" : "off");
+	print_bool(PRINT_JSON, "multiqueue", NULL,
+		   tb[TCA_PRIO_MQ] && rta_getattr_u8(tb[TCA_PRIO_MQ]));
 
 	return 0;
 }

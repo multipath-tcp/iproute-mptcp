@@ -44,12 +44,26 @@ ip-rule \- routing policy database management
 .IR STRING " ] [ "
 .B  pref
 .IR NUMBER " ] [ "
-.BR l3mdev " ]"
+.IR l3mdev " ] [ "
+.B uidrange
+.IR NUMBER "-" NUMBER " ] [ "
+.B ipproto
+.IR PROTOCOL " ] [ "
+.BR sport " [ "
+.IR NUMBER " | "
+.IR NUMBER "-" NUMBER " ] ] [ "
+.BR dport " [ "
+.IR NUMBER " | "
+.IR NUMBER "-" NUMBER " ] ]"
+.BR
+
 
 .ti -8
 .IR ACTION " := [ "
 .B  table
 .IR TABLE_ID " ] [ "
+.B  protocol
+.IR PROTO " ] [ "
 .B  nat
 .IR ADDRESS " ] [ "
 .B realms
@@ -225,6 +239,24 @@ select the
 value to match.
 
 .TP
+.BI uidrange " NUMBER-NUMBER"
+select the
+.B uid
+value to match.
+
+.TP
+.BI ipproto " PROTOCOL"
+select the ip protocol value to match.
+
+.TP
+.BI sport " NUMBER | NUMBER-NUMBER"
+select the source port value to match. supports port range.
+
+.TP
+.BI dport " NUMBER | NUMBER-NUMBER"
+select the destination port value to match. supports port range.
+
+.TP
 .BI priority " PREFERENCE"
 the priority of this rule.
 .I PREFERENCE
@@ -239,6 +271,10 @@ The options preference and order are synonyms with priority.
 .BI table " TABLEID"
 the routing table identifier to lookup if the rule selector matches.
 It is also possible to use lookup instead of table.
+
+.TP
+.BI protocol " PROTO"
+the routing protocol who installed the rule in question.  As an example when zebra installs a rule it would get RTPROT_ZEBRA as the installing protocol.
 
 .TP
 .BI suppress_prefixlength " NUMBER"
@@ -275,7 +311,11 @@ updates, it flushes the routing cache with
 .RE
 .TP
 .B ip rule flush - also dumps all the deleted rules.
-This command has no arguments.
+.RS
+.TP
+.BI protocol " PROTO"
+Select the originating protocol.
+.RE
 .TP
 .B ip rule show - list rules
 This command has no arguments.
@@ -283,6 +323,12 @@ The options list or lst are synonyms with show.
 
 .TP
 .B ip rule save
+.RS
+.TP
+.BI protocol " PROTO"
+Select the originating protocol.
+.RE
+.TP
 save rules table information to stdout
 .RS
 This command behaves like

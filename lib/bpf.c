@@ -95,7 +95,17 @@ static const struct bpf_prog_meta __bpf_prog_meta[] = {
 		.subdir		= "ip",
 		.section	= ELF_SECTION_PROG,
 	},
+	[BPF_PROG_TYPE_LWT_SEG6LOCAL] = {
+		.type		= "lwt_seg6local",
+		.subdir		= "ip",
+		.section	= ELF_SECTION_PROG,
+	},
 };
+
+static bool bpf_map_offload_neutral(enum bpf_map_type type)
+{
+	return type == BPF_MAP_TYPE_PERF_EVENT_ARRAY;
+}
 
 static const char *bpf_prog_to_subdir(enum bpf_prog_type type)
 {
@@ -113,10 +123,10 @@ const char *bpf_prog_to_default_section(enum bpf_prog_type type)
 
 #ifdef HAVE_ELF
 static int bpf_obj_open(const char *path, enum bpf_prog_type type,
-			const char *sec, bool verbose);
+			const char *sec, __u32 ifindex, bool verbose);
 #else
 static int bpf_obj_open(const char *path, enum bpf_prog_type type,
-			const char *sec, bool verbose)
+			const char *sec, __u32 ifindex, bool verbose)
 {
 	fprintf(stderr, "No ELF library support compiled in.\n");
 	errno = ENOSYS;
@@ -383,6 +393,8 @@ struct bpf_prog_data {
 
 struct bpf_map_ext {
 	struct bpf_prog_data owner;
+	unsigned int btf_id_key;
+	unsigned int btf_id_val;
 };
 
 static int bpf_derive_elf_map_from_fdinfo(int fd, struct bpf_elf_map *map,
@@ -634,7 +646,7 @@ static int bpf_gen_global(const char *bpf_sub_dir)
 
 static int bpf_gen_master(const char *base, const char *name)
 {
-	char bpf_sub_dir[PATH_MAX];
+	char bpf_sub_dir[PATH_MAX + NAME_MAX + 1];
 	int ret;
 
 	snprintf(bpf_sub_dir, sizeof(bpf_sub_dir), "%s%s/", base, name);
@@ -675,8 +687,8 @@ static int bpf_slave_via_bind_mnt(const char *full_name,
 static int bpf_gen_slave(const char *base, const char *name,
 			 const char *link)
 {
-	char bpf_lnk_dir[PATH_MAX];
-	char bpf_sub_dir[PATH_MAX];
+	char bpf_lnk_dir[PATH_MAX + NAME_MAX + 1];
+	char bpf_sub_dir[PATH_MAX + NAME_MAX];
 	struct stat sb = {};
 	int ret;
 
@@ -805,16 +817,7 @@ static int bpf_obj_pinned(const char *pathname, enum bpf_prog_type type)
 	return prog_fd;
 }
 
-enum bpf_mode {
-	CBPF_BYTECODE,
-	CBPF_FILE,
-	EBPF_OBJECT,
-	EBPF_PINNED,
-	BPF_MODE_MAX,
-};
-
-static int bpf_parse(enum bpf_prog_type *type, enum bpf_mode *mode,
-		     struct bpf_cfg_in *cfg, const bool *opt_tbl)
+static int bpf_do_parse(struct bpf_cfg_in *cfg, const bool *opt_tbl)
 {
 	const char *file, *section, *uds_name;
 	bool verbose = false;
@@ -827,20 +830,20 @@ static int bpf_parse(enum bpf_prog_type *type, enum bpf_mode *mode,
 	if (opt_tbl[CBPF_BYTECODE] &&
 	    (matches(*argv, "bytecode") == 0 ||
 	     strcmp(*argv, "bc") == 0)) {
-		*mode = CBPF_BYTECODE;
+		cfg->mode = CBPF_BYTECODE;
 	} else if (opt_tbl[CBPF_FILE] &&
 		   (matches(*argv, "bytecode-file") == 0 ||
 		    strcmp(*argv, "bcf") == 0)) {
-		*mode = CBPF_FILE;
+		cfg->mode = CBPF_FILE;
 	} else if (opt_tbl[EBPF_OBJECT] &&
 		   (matches(*argv, "object-file") == 0 ||
 		    strcmp(*argv, "obj") == 0)) {
-		*mode = EBPF_OBJECT;
+		cfg->mode = EBPF_OBJECT;
 	} else if (opt_tbl[EBPF_PINNED] &&
 		   (matches(*argv, "object-pinned") == 0 ||
 		    matches(*argv, "pinned") == 0 ||
 		    matches(*argv, "fd") == 0)) {
-		*mode = EBPF_PINNED;
+		cfg->mode = EBPF_PINNED;
 	} else {
 		fprintf(stderr, "What mode is \"%s\"?\n", *argv);
 		return -1;
@@ -848,11 +851,11 @@ static int bpf_parse(enum bpf_prog_type *type, enum bpf_mode *mode,
 
 	NEXT_ARG();
 	file = section = uds_name = NULL;
-	if (*mode == EBPF_OBJECT || *mode == EBPF_PINNED) {
+	if (cfg->mode == EBPF_OBJECT || cfg->mode == EBPF_PINNED) {
 		file = *argv;
 		NEXT_ARG_FWD();
 
-		if (*type == BPF_PROG_TYPE_UNSPEC) {
+		if (cfg->type == BPF_PROG_TYPE_UNSPEC) {
 			if (argc > 0 && matches(*argv, "type") == 0) {
 				NEXT_ARG();
 				for (i = 0; i < ARRAY_SIZE(__bpf_prog_meta);
@@ -861,30 +864,30 @@ static int bpf_parse(enum bpf_prog_type *type, enum bpf_mode *mode,
 						continue;
 					if (!matches(*argv,
 						     __bpf_prog_meta[i].type)) {
-						*type = i;
+						cfg->type = i;
 						break;
 					}
 				}
 
-				if (*type == BPF_PROG_TYPE_UNSPEC) {
+				if (cfg->type == BPF_PROG_TYPE_UNSPEC) {
 					fprintf(stderr, "What type is \"%s\"?\n",
 						*argv);
 					return -1;
 				}
 				NEXT_ARG_FWD();
 			} else {
-				*type = BPF_PROG_TYPE_SCHED_CLS;
+				cfg->type = BPF_PROG_TYPE_SCHED_CLS;
 			}
 		}
 
-		section = bpf_prog_to_default_section(*type);
+		section = bpf_prog_to_default_section(cfg->type);
 		if (argc > 0 && matches(*argv, "section") == 0) {
 			NEXT_ARG();
 			section = *argv;
 			NEXT_ARG_FWD();
 		}
 
-		if (__bpf_prog_meta[*type].may_uds_export) {
+		if (__bpf_prog_meta[cfg->type].may_uds_export) {
 			uds_name = getenv(BPF_ENV_UDS);
 			if (argc > 0 && !uds_name &&
 			    matches(*argv, "export") == 0) {
@@ -902,53 +905,63 @@ static int bpf_parse(enum bpf_prog_type *type, enum bpf_mode *mode,
 		PREV_ARG();
 	}
 
-	if (*mode == CBPF_BYTECODE || *mode == CBPF_FILE)
-		ret = bpf_ops_parse(argc, argv, cfg->ops, *mode == CBPF_FILE);
-	else if (*mode == EBPF_OBJECT)
-		ret = bpf_obj_open(file, *type, section, verbose);
-	else if (*mode == EBPF_PINNED)
-		ret = bpf_obj_pinned(file, *type);
-	else
+	if (cfg->mode == CBPF_BYTECODE || cfg->mode == CBPF_FILE) {
+		ret = bpf_ops_parse(argc, argv, cfg->opcodes,
+				    cfg->mode == CBPF_FILE);
+		cfg->n_opcodes = ret;
+	} else if (cfg->mode == EBPF_OBJECT) {
+		ret = 0; /* program will be loaded by load stage */
+	} else if (cfg->mode == EBPF_PINNED) {
+		ret = bpf_obj_pinned(file, cfg->type);
+		cfg->prog_fd = ret;
+	} else {
 		return -1;
+	}
 
 	cfg->object  = file;
 	cfg->section = section;
 	cfg->uds     = uds_name;
 	cfg->argc    = argc;
 	cfg->argv    = argv;
+	cfg->verbose = verbose;
 
 	return ret;
 }
 
-static int bpf_parse_opt_tbl(enum bpf_prog_type type, struct bpf_cfg_in *cfg,
-			     const struct bpf_cfg_ops *ops, void *nl,
-			     const bool *opt_tbl)
+static int bpf_do_load(struct bpf_cfg_in *cfg)
 {
-	struct sock_filter opcodes[BPF_MAXINSNS];
+	if (cfg->mode == EBPF_OBJECT) {
+		cfg->prog_fd = bpf_obj_open(cfg->object, cfg->type,
+					    cfg->section, cfg->ifindex,
+					    cfg->verbose);
+		return cfg->prog_fd;
+	}
+	return 0;
+}
+
+int bpf_load_common(struct bpf_cfg_in *cfg, const struct bpf_cfg_ops *ops,
+		    void *nl)
+{
 	char annotation[256];
-	enum bpf_mode mode;
 	int ret;
 
-	cfg->ops = opcodes;
-	ret = bpf_parse(&type, &mode, cfg, opt_tbl);
-	cfg->ops = NULL;
+	ret = bpf_do_load(cfg);
 	if (ret < 0)
 		return ret;
 
-	if (mode == CBPF_BYTECODE || mode == CBPF_FILE)
-		ops->cbpf_cb(nl, opcodes, ret);
-	if (mode == EBPF_OBJECT || mode == EBPF_PINNED) {
+	if (cfg->mode == CBPF_BYTECODE || cfg->mode == CBPF_FILE)
+		ops->cbpf_cb(nl, cfg->opcodes, cfg->n_opcodes);
+	if (cfg->mode == EBPF_OBJECT || cfg->mode == EBPF_PINNED) {
 		snprintf(annotation, sizeof(annotation), "%s:[%s]",
-			 basename(cfg->object), mode == EBPF_PINNED ?
+			 basename(cfg->object), cfg->mode == EBPF_PINNED ?
 			 "*fsobj" : cfg->section);
-		ops->ebpf_cb(nl, ret, annotation);
+		ops->ebpf_cb(nl, cfg->prog_fd, annotation);
 	}
 
 	return 0;
 }
 
-int bpf_parse_common(enum bpf_prog_type type, struct bpf_cfg_in *cfg,
-		     const struct bpf_cfg_ops *ops, void *nl)
+int bpf_parse_common(struct bpf_cfg_in *cfg, const struct bpf_cfg_ops *ops)
 {
 	bool opt_tbl[BPF_MODE_MAX] = {};
 
@@ -962,12 +975,23 @@ int bpf_parse_common(enum bpf_prog_type type, struct bpf_cfg_in *cfg,
 		opt_tbl[EBPF_PINNED]   = true;
 	}
 
-	return bpf_parse_opt_tbl(type, cfg, ops, nl, opt_tbl);
+	return bpf_do_parse(cfg, opt_tbl);
+}
+
+int bpf_parse_and_load_common(struct bpf_cfg_in *cfg,
+			      const struct bpf_cfg_ops *ops, void *nl)
+{
+	int ret;
+
+	ret = bpf_parse_common(cfg, ops);
+	if (ret < 0)
+		return ret;
+
+	return bpf_load_common(cfg, ops, nl);
 }
 
 int bpf_graft_map(const char *map_path, uint32_t *key, int argc, char **argv)
 {
-	enum bpf_prog_type type = BPF_PROG_TYPE_UNSPEC;
 	const bool opt_tbl[BPF_MODE_MAX] = {
 		[EBPF_OBJECT]	= true,
 		[EBPF_PINNED]	= true,
@@ -978,17 +1002,24 @@ int bpf_graft_map(const char *map_path, uint32_t *key, int argc, char **argv)
 		.size_value	= sizeof(int),
 	};
 	struct bpf_cfg_in cfg = {
+		.type		= BPF_PROG_TYPE_UNSPEC,
 		.argc		= argc,
 		.argv		= argv,
 	};
 	struct bpf_map_ext ext = {};
 	int ret, prog_fd, map_fd;
-	enum bpf_mode mode;
 	uint32_t map_key;
 
-	prog_fd = bpf_parse(&type, &mode, &cfg, opt_tbl);
-	if (prog_fd < 0)
-		return prog_fd;
+	ret = bpf_do_parse(&cfg, opt_tbl);
+	if (ret < 0)
+		return ret;
+
+	ret = bpf_do_load(&cfg);
+	if (ret < 0)
+		return ret;
+
+	prog_fd = cfg.prog_fd;
+
 	if (key) {
 		map_key = *key;
 	} else {
@@ -1000,7 +1031,7 @@ int bpf_graft_map(const char *map_path, uint32_t *key, int argc, char **argv)
 		}
 	}
 
-	map_fd = bpf_obj_get(map_path, type);
+	map_fd = bpf_obj_get(map_path, cfg.type);
 	if (map_fd < 0) {
 		fprintf(stderr, "Couldn\'t retrieve pinned map \'%s\': %s\n",
 			map_path, strerror(errno));
@@ -1010,7 +1041,7 @@ int bpf_graft_map(const char *map_path, uint32_t *key, int argc, char **argv)
 
 	ret = bpf_map_selfcheck_pinned(map_fd, &test, &ext,
 				       offsetof(struct bpf_elf_map, max_elem),
-				       type);
+				       cfg.type);
 	if (ret < 0) {
 		fprintf(stderr, "Map \'%s\' self-check failed!\n", map_path);
 		goto out_map;
@@ -1047,9 +1078,10 @@ int bpf_prog_detach_fd(int target_fd, enum bpf_attach_type type)
 	return bpf(BPF_PROG_DETACH, &attr, sizeof(attr));
 }
 
-int bpf_prog_load(enum bpf_prog_type type, const struct bpf_insn *insns,
-		  size_t size_insns, const char *license, char *log,
-		  size_t size_log)
+static int bpf_prog_load_dev(enum bpf_prog_type type,
+			     const struct bpf_insn *insns, size_t size_insns,
+			     const char *license, __u32 ifindex,
+			     char *log, size_t size_log)
 {
 	union bpf_attr attr = {};
 
@@ -1057,6 +1089,7 @@ int bpf_prog_load(enum bpf_prog_type type, const struct bpf_insn *insns,
 	attr.insns = bpf_ptr_to_u64(insns);
 	attr.insn_cnt = size_insns / sizeof(struct bpf_insn);
 	attr.license = bpf_ptr_to_u64(license);
+	attr.prog_ifindex = ifindex;
 
 	if (size_log > 0) {
 		attr.log_buf = bpf_ptr_to_u64(log);
@@ -1067,10 +1100,19 @@ int bpf_prog_load(enum bpf_prog_type type, const struct bpf_insn *insns,
 	return bpf(BPF_PROG_LOAD, &attr, sizeof(attr));
 }
 
+int bpf_prog_load(enum bpf_prog_type type, const struct bpf_insn *insns,
+		  size_t size_insns, const char *license, char *log,
+		  size_t size_log)
+{
+	return bpf_prog_load_dev(type, insns, size_insns, license, 0,
+				 log, size_log);
+}
+
 #ifdef HAVE_ELF
 struct bpf_elf_prog {
 	enum bpf_prog_type	type;
-	const struct bpf_insn	*insns;
+	struct bpf_insn		*insns;
+	unsigned int		insns_num;
 	size_t			size;
 	const char		*license;
 };
@@ -1085,24 +1127,41 @@ struct bpf_config {
 	unsigned int		jit_enabled;
 };
 
+struct bpf_btf {
+	const struct btf_header	*hdr;
+	const void		*raw;
+	const char		*strings;
+	const struct btf_type	**types;
+	int			types_num;
+};
+
 struct bpf_elf_ctx {
 	struct bpf_config	cfg;
 	Elf			*elf_fd;
 	GElf_Ehdr		elf_hdr;
 	Elf_Data		*sym_tab;
 	Elf_Data		*str_tab;
+	Elf_Data		*btf_data;
+	char			obj_uid[64];
 	int			obj_fd;
+	int			btf_fd;
 	int			map_fds[ELF_MAX_MAPS];
 	struct bpf_elf_map	maps[ELF_MAX_MAPS];
 	struct bpf_map_ext	maps_ext[ELF_MAX_MAPS];
+	struct bpf_elf_prog	prog_text;
+	struct bpf_btf		btf;
 	int			sym_num;
 	int			map_num;
 	int			map_len;
 	bool			*sec_done;
 	int			sec_maps;
+	int			sec_text;
+	int			sec_btf;
 	char			license[ELF_MAX_LICENSE_LEN];
 	enum bpf_prog_type	type;
+	__u32			ifindex;
 	bool			verbose;
+	bool			noafalg;
 	struct bpf_elf_st	stat;
 	struct bpf_hash_entry	*ht[256];
 	char			*log;
@@ -1122,6 +1181,11 @@ struct bpf_map_data {
 	struct bpf_elf_map	*ent;
 };
 
+static bool bpf_log_has_data(struct bpf_elf_ctx *ctx)
+{
+	return ctx->log && ctx->log[0];
+}
+
 static __check_format_string(2, 3) void
 bpf_dump_error(struct bpf_elf_ctx *ctx, const char *format, ...)
 {
@@ -1131,7 +1195,7 @@ bpf_dump_error(struct bpf_elf_ctx *ctx, const char *format, ...)
 	vfprintf(stderr, format, vl);
 	va_end(vl);
 
-	if (ctx->log && ctx->log[0]) {
+	if (bpf_log_has_data(ctx)) {
 		if (ctx->verbose) {
 			fprintf(stderr, "%s\n", ctx->log);
 		} else {
@@ -1153,7 +1217,7 @@ static int bpf_log_realloc(struct bpf_elf_ctx *ctx)
 {
 	const size_t log_max = UINT_MAX >> 8;
 	size_t log_size = ctx->log_size;
-	void *ptr;
+	char *ptr;
 
 	if (!ctx->log) {
 		log_size = 65536;
@@ -1169,6 +1233,7 @@ static int bpf_log_realloc(struct bpf_elf_ctx *ctx)
 	if (!ptr)
 		return -ENOMEM;
 
+	ptr[0] = 0;
 	ctx->log = ptr;
 	ctx->log_size = log_size;
 
@@ -1177,7 +1242,9 @@ static int bpf_log_realloc(struct bpf_elf_ctx *ctx)
 
 static int bpf_map_create(enum bpf_map_type type, uint32_t size_key,
 			  uint32_t size_value, uint32_t max_elem,
-			  uint32_t flags, int inner_fd)
+			  uint32_t flags, int inner_fd, int btf_fd,
+			  uint32_t ifindex, uint32_t btf_id_key,
+			  uint32_t btf_id_val)
 {
 	union bpf_attr attr = {};
 
@@ -1187,8 +1254,29 @@ static int bpf_map_create(enum bpf_map_type type, uint32_t size_key,
 	attr.max_entries = max_elem;
 	attr.map_flags = flags;
 	attr.inner_map_fd = inner_fd;
+	attr.map_ifindex = ifindex;
+	attr.btf_fd = btf_fd;
+	attr.btf_key_type_id = btf_id_key;
+	attr.btf_value_type_id = btf_id_val;
 
 	return bpf(BPF_MAP_CREATE, &attr, sizeof(attr));
+}
+
+static int bpf_btf_load(void *btf, size_t size_btf,
+			char *log, size_t size_log)
+{
+	union bpf_attr attr = {};
+
+	attr.btf = bpf_ptr_to_u64(btf);
+	attr.btf_size = size_btf;
+
+	if (size_log > 0) {
+		attr.btf_log_buf = bpf_ptr_to_u64(log);
+		attr.btf_log_size = size_log;
+		attr.btf_log_level = 1;
+	}
+
+	return bpf(BPF_BTF_LOAD, &attr, sizeof(attr));
 }
 
 static int bpf_obj_pin(int fd, const char *pathname)
@@ -1216,22 +1304,15 @@ static int bpf_obj_hash(const char *object, uint8_t *out, size_t len)
 		return -EINVAL;
 
 	cfd = socket(AF_ALG, SOCK_SEQPACKET, 0);
-	if (cfd < 0) {
-		fprintf(stderr, "Cannot get AF_ALG socket: %s\n",
-			strerror(errno));
+	if (cfd < 0)
 		return cfd;
-	}
 
 	ret = bind(cfd, (struct sockaddr *)&alg, sizeof(alg));
-	if (ret < 0) {
-		fprintf(stderr, "Error binding socket: %s\n", strerror(errno));
+	if (ret < 0)
 		goto out_cfd;
-	}
 
 	ofd = accept(cfd, NULL, 0);
 	if (ofd < 0) {
-		fprintf(stderr, "Error accepting socket: %s\n",
-			strerror(errno));
 		ret = ofd;
 		goto out_cfd;
 	}
@@ -1276,29 +1357,7 @@ out_cfd:
 	return ret;
 }
 
-static const char *bpf_get_obj_uid(const char *pathname)
-{
-	static bool bpf_uid_cached;
-	static char bpf_uid[64];
-	uint8_t tmp[20];
-	int ret;
-
-	if (bpf_uid_cached)
-		goto done;
-
-	ret = bpf_obj_hash(pathname, tmp, sizeof(tmp));
-	if (ret) {
-		fprintf(stderr, "Object hashing failed!\n");
-		return NULL;
-	}
-
-	hexstring_n2a(tmp, sizeof(tmp), bpf_uid, sizeof(bpf_uid));
-	bpf_uid_cached = true;
-done:
-	return bpf_uid;
-}
-
-static int bpf_init_env(const char *pathname)
+static void bpf_init_env(void)
 {
 	struct rlimit limit = {
 		.rlim_cur = RLIM_INFINITY,
@@ -1308,15 +1367,8 @@ static int bpf_init_env(const char *pathname)
 	/* Don't bother in case we fail! */
 	setrlimit(RLIMIT_MEMLOCK, &limit);
 
-	if (!bpf_get_work_dir(BPF_PROG_TYPE_UNSPEC)) {
+	if (!bpf_get_work_dir(BPF_PROG_TYPE_UNSPEC))
 		fprintf(stderr, "Continuing without mounted eBPF fs. Too old kernel?\n");
-		return 0;
-	}
-
-	if (!bpf_get_obj_uid(pathname))
-		return -1;
-
-	return 0;
 }
 
 static const char *bpf_custom_pinning(const struct bpf_elf_ctx *ctx,
@@ -1352,7 +1404,7 @@ static void bpf_make_pathname(char *pathname, size_t len, const char *name,
 	case PIN_OBJECT_NS:
 		snprintf(pathname, len, "%s/%s/%s",
 			 bpf_get_work_dir(ctx->type),
-			 bpf_get_obj_uid(NULL), name);
+			 ctx->obj_uid, name);
 		break;
 	case PIN_GLOBAL_NS:
 		snprintf(pathname, len, "%s/%s/%s",
@@ -1385,7 +1437,7 @@ static int bpf_make_obj_path(const struct bpf_elf_ctx *ctx)
 	int ret;
 
 	snprintf(tmp, sizeof(tmp), "%s/%s", bpf_get_work_dir(ctx->type),
-		 bpf_get_obj_uid(NULL));
+		 ctx->obj_uid);
 
 	ret = mkdir(tmp, S_IRWXU);
 	if (ret && errno != EEXIST) {
@@ -1473,8 +1525,9 @@ static int bpf_prog_attach(const char *section,
 	int tries = 0, fd;
 retry:
 	errno = 0;
-	fd = bpf_prog_load(prog->type, prog->insns, prog->size,
-			   prog->license, ctx->log, ctx->log_size);
+	fd = bpf_prog_load_dev(prog->type, prog->insns, prog->size,
+			       prog->license, ctx->ifindex,
+			       ctx->log, ctx->log_size);
 	if (fd < 0 || ctx->verbose) {
 		/* The verifier log is pretty chatty, sometimes so chatty
 		 * on larger programs, that we could fail to dump everything
@@ -1561,7 +1614,7 @@ static int bpf_map_attach(const char *name, struct bpf_elf_ctx *ctx,
 			  const struct bpf_elf_map *map, struct bpf_map_ext *ext,
 			  int *have_map_in_map)
 {
-	int fd, ret, map_inner_fd = 0;
+	int fd, ifindex, ret, map_inner_fd = 0;
 
 	fd = bpf_probe_pinned(name, ctx, map->pinning);
 	if (fd > 0) {
@@ -1598,9 +1651,12 @@ static int bpf_map_attach(const char *name, struct bpf_elf_ctx *ctx,
 		}
 	}
 
+	ifindex = bpf_map_offload_neutral(map->type) ? 0 : ctx->ifindex;
 	errno = 0;
 	fd = bpf_map_create(map->type, map->size_key, map->size_value,
-			    map->max_elem, map->flags, map_inner_fd);
+			    map->max_elem, map->flags, map_inner_fd, ctx->btf_fd,
+			    ifindex, ext->btf_id_key, ext->btf_id_val);
+
 	if (fd < 0 || ctx->verbose) {
 		bpf_map_report(fd, name, map, ctx, map_inner_fd);
 		if (fd < 0)
@@ -1624,8 +1680,80 @@ static const char *bpf_str_tab_name(const struct bpf_elf_ctx *ctx,
 	return ctx->str_tab->d_buf + sym->st_name;
 }
 
+static int bpf_btf_find(struct bpf_elf_ctx *ctx, const char *name)
+{
+	const struct btf_type *type;
+	const char *res;
+	int id;
+
+	for (id = 1; id < ctx->btf.types_num; id++) {
+		type = ctx->btf.types[id];
+		if (type->name_off >= ctx->btf.hdr->str_len)
+			continue;
+		res = &ctx->btf.strings[type->name_off];
+		if (!strcmp(res, name))
+			return id;
+	}
+
+	return -ENOENT;
+}
+
+static int bpf_btf_find_kv(struct bpf_elf_ctx *ctx, const struct bpf_elf_map *map,
+			   const char *name, uint32_t *id_key, uint32_t *id_val)
+{
+	const struct btf_member *key, *val;
+	const struct btf_type *type;
+	char btf_name[512];
+	const char *res;
+	int id;
+
+	snprintf(btf_name, sizeof(btf_name), "____btf_map_%s", name);
+	id = bpf_btf_find(ctx, btf_name);
+	if (id < 0)
+		return id;
+
+	type = ctx->btf.types[id];
+	if (BTF_INFO_KIND(type->info) != BTF_KIND_STRUCT)
+		return -EINVAL;
+	if (BTF_INFO_VLEN(type->info) != 2)
+		return -EINVAL;
+
+	key = ((void *) type) + sizeof(*type);
+	val = key + 1;
+	if (!key->type || key->type >= ctx->btf.types_num ||
+	    !val->type || val->type >= ctx->btf.types_num)
+		return -EINVAL;
+
+	if (key->name_off >= ctx->btf.hdr->str_len ||
+	    val->name_off >= ctx->btf.hdr->str_len)
+		return -EINVAL;
+
+	res = &ctx->btf.strings[key->name_off];
+	if (strcmp(res, "key"))
+		return -EINVAL;
+
+	res = &ctx->btf.strings[val->name_off];
+	if (strcmp(res, "value"))
+		return -EINVAL;
+
+	*id_key = key->type;
+	*id_val = val->type;
+	return 0;
+}
+
+static void bpf_btf_annotate(struct bpf_elf_ctx *ctx, int which, const char *name)
+{
+	uint32_t id_key = 0, id_val = 0;
+
+	if (!bpf_btf_find_kv(ctx, &ctx->maps[which], name, &id_key, &id_val)) {
+		ctx->maps_ext[which].btf_id_key = id_key;
+		ctx->maps_ext[which].btf_id_val = id_val;
+	}
+}
+
 static const char *bpf_map_fetch_name(struct bpf_elf_ctx *ctx, int which)
 {
+	const char *name;
 	GElf_Sym sym;
 	int i;
 
@@ -1639,7 +1767,9 @@ static const char *bpf_map_fetch_name(struct bpf_elf_ctx *ctx, int which)
 		    sym.st_value / ctx->map_len != which)
 			continue;
 
-		return bpf_str_tab_name(ctx, &sym);
+		name = bpf_str_tab_name(ctx, &sym);
+		bpf_btf_annotate(ctx, which, name);
+		return name;
 	}
 
 	return NULL;
@@ -1651,6 +1781,12 @@ static int bpf_maps_attach_all(struct bpf_elf_ctx *ctx)
 	const char *map_name;
 
 	for (i = 0; i < ctx->map_num; i++) {
+		if (ctx->maps[i].pinning == PIN_OBJECT_NS &&
+		    ctx->noafalg) {
+			fprintf(stderr, "Missing kernel AF_ALG support for PIN_OBJECT_NS!\n");
+			return -ENOTSUP;
+		}
+
 		map_name = bpf_map_fetch_name(ctx, i);
 		if (!map_name)
 			return -EIO;
@@ -1853,9 +1989,9 @@ static int bpf_fetch_maps_end(struct bpf_elf_ctx *ctx)
 	}
 
 	memcpy(ctx->maps, fixup, sizeof(fixup));
-
-	printf("Note: %zu bytes struct bpf_elf_map fixup performed due to size mismatch!\n",
-	       sizeof(struct bpf_elf_map) - ctx->map_len);
+	if (ctx->verbose)
+		printf("%zu bytes struct bpf_elf_map fixup performed due to size mismatch!\n",
+		       sizeof(struct bpf_elf_map) - ctx->map_len);
 	return 0;
 }
 
@@ -1887,12 +2023,224 @@ static int bpf_fetch_strtab(struct bpf_elf_ctx *ctx, int section,
 	return 0;
 }
 
+static int bpf_fetch_text(struct bpf_elf_ctx *ctx, int section,
+			  struct bpf_elf_sec_data *data)
+{
+	ctx->sec_text = section;
+	ctx->sec_done[section] = true;
+	return 0;
+}
+
+static void bpf_btf_report(int fd, struct bpf_elf_ctx *ctx)
+{
+	fprintf(stderr, "\nBTF debug data section \'.BTF\' %s%s (%d)!\n",
+		fd < 0 ? "rejected: " : "loaded",
+		fd < 0 ? strerror(errno) : "",
+		fd < 0 ? errno : fd);
+
+	fprintf(stderr, " - Length:       %zu\n", ctx->btf_data->d_size);
+
+	bpf_dump_error(ctx, "Verifier analysis:\n\n");
+}
+
+static int bpf_btf_attach(struct bpf_elf_ctx *ctx)
+{
+	int tries = 0, fd;
+retry:
+	errno = 0;
+	fd = bpf_btf_load(ctx->btf_data->d_buf, ctx->btf_data->d_size,
+			  ctx->log, ctx->log_size);
+	if (fd < 0 || ctx->verbose) {
+		if (fd < 0 && (errno == ENOSPC || !ctx->log_size)) {
+			if (tries++ < 10 && !bpf_log_realloc(ctx))
+				goto retry;
+
+			fprintf(stderr, "Log buffer too small to dump verifier log %zu bytes (%d tries)!\n",
+				ctx->log_size, tries);
+			return fd;
+		}
+
+		if (bpf_log_has_data(ctx))
+			bpf_btf_report(fd, ctx);
+	}
+
+	return fd;
+}
+
+static int bpf_fetch_btf_begin(struct bpf_elf_ctx *ctx, int section,
+			       struct bpf_elf_sec_data *data)
+{
+	ctx->btf_data = data->sec_data;
+	ctx->sec_btf = section;
+	ctx->sec_done[section] = true;
+	return 0;
+}
+
+static int bpf_btf_check_header(struct bpf_elf_ctx *ctx)
+{
+	const struct btf_header *hdr = ctx->btf_data->d_buf;
+	const char *str_start, *str_end;
+	unsigned int data_len;
+
+	if (hdr->magic != BTF_MAGIC) {
+		fprintf(stderr, "Object has wrong BTF magic: %x, expected: %x!\n",
+			hdr->magic, BTF_MAGIC);
+		return -EINVAL;
+	}
+
+	if (hdr->version != BTF_VERSION) {
+		fprintf(stderr, "Object has wrong BTF version: %u, expected: %u!\n",
+			hdr->version, BTF_VERSION);
+		return -EINVAL;
+	}
+
+	if (hdr->flags) {
+		fprintf(stderr, "Object has unsupported BTF flags %x!\n",
+			hdr->flags);
+		return -EINVAL;
+	}
+
+	data_len = ctx->btf_data->d_size - sizeof(*hdr);
+	if (data_len < hdr->type_off ||
+	    data_len < hdr->str_off ||
+	    data_len < hdr->type_len + hdr->str_len ||
+	    hdr->type_off >= hdr->str_off ||
+	    hdr->type_off + hdr->type_len != hdr->str_off ||
+	    hdr->str_off + hdr->str_len != data_len ||
+	    (hdr->type_off & (sizeof(uint32_t) - 1))) {
+		fprintf(stderr, "Object has malformed BTF data!\n");
+		return -EINVAL;
+	}
+
+	ctx->btf.hdr = hdr;
+	ctx->btf.raw = hdr + 1;
+
+	str_start = ctx->btf.raw + hdr->str_off;
+	str_end = str_start + hdr->str_len;
+	if (!hdr->str_len ||
+	    hdr->str_len - 1 > BTF_MAX_NAME_OFFSET ||
+	    str_start[0] || str_end[-1]) {
+		fprintf(stderr, "Object has malformed BTF string data!\n");
+		return -EINVAL;
+	}
+
+	ctx->btf.strings = str_start;
+	return 0;
+}
+
+static int bpf_btf_register_type(struct bpf_elf_ctx *ctx,
+				 const struct btf_type *type)
+{
+	int cur = ctx->btf.types_num, num = cur + 1;
+	const struct btf_type **types;
+
+	types = realloc(ctx->btf.types, num * sizeof(type));
+	if (!types) {
+		free(ctx->btf.types);
+		ctx->btf.types = NULL;
+		ctx->btf.types_num = 0;
+		return -ENOMEM;
+	}
+
+	ctx->btf.types = types;
+	ctx->btf.types[cur] = type;
+	ctx->btf.types_num = num;
+	return 0;
+}
+
+static struct btf_type btf_type_void;
+
+static int bpf_btf_prep_type_data(struct bpf_elf_ctx *ctx)
+{
+	const void *type_cur = ctx->btf.raw + ctx->btf.hdr->type_off;
+	const void *type_end = ctx->btf.raw + ctx->btf.hdr->str_off;
+	const struct btf_type *type;
+	uint16_t var_len;
+	int ret, kind;
+
+	ret = bpf_btf_register_type(ctx, &btf_type_void);
+	if (ret < 0)
+		return ret;
+
+	while (type_cur < type_end) {
+		type = type_cur;
+		type_cur += sizeof(*type);
+
+		var_len = BTF_INFO_VLEN(type->info);
+		kind = BTF_INFO_KIND(type->info);
+
+		switch (kind) {
+		case BTF_KIND_INT:
+			type_cur += sizeof(int);
+			break;
+		case BTF_KIND_ARRAY:
+			type_cur += sizeof(struct btf_array);
+			break;
+		case BTF_KIND_STRUCT:
+		case BTF_KIND_UNION:
+			type_cur += var_len * sizeof(struct btf_member);
+			break;
+		case BTF_KIND_ENUM:
+			type_cur += var_len * sizeof(struct btf_enum);
+			break;
+		case BTF_KIND_TYPEDEF:
+		case BTF_KIND_PTR:
+		case BTF_KIND_FWD:
+		case BTF_KIND_VOLATILE:
+		case BTF_KIND_CONST:
+		case BTF_KIND_RESTRICT:
+			break;
+		default:
+			fprintf(stderr, "Object has unknown BTF type: %u!\n", kind);
+			return -EINVAL;
+		}
+
+		ret = bpf_btf_register_type(ctx, type);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int bpf_btf_prep_data(struct bpf_elf_ctx *ctx)
+{
+	int ret = bpf_btf_check_header(ctx);
+
+	if (!ret)
+		return bpf_btf_prep_type_data(ctx);
+	return ret;
+}
+
+static void bpf_fetch_btf_end(struct bpf_elf_ctx *ctx)
+{
+	int fd = bpf_btf_attach(ctx);
+
+	if (fd < 0)
+		return;
+	ctx->btf_fd = fd;
+	if (bpf_btf_prep_data(ctx) < 0) {
+		close(ctx->btf_fd);
+		ctx->btf_fd = 0;
+	}
+}
+
 static bool bpf_has_map_data(const struct bpf_elf_ctx *ctx)
 {
 	return ctx->sym_tab && ctx->str_tab && ctx->sec_maps;
 }
 
-static int bpf_fetch_ancillary(struct bpf_elf_ctx *ctx)
+static bool bpf_has_btf_data(const struct bpf_elf_ctx *ctx)
+{
+	return ctx->sec_btf;
+}
+
+static bool bpf_has_call_data(const struct bpf_elf_ctx *ctx)
+{
+	return ctx->sec_text;
+}
+
+static int bpf_fetch_ancillary(struct bpf_elf_ctx *ctx, bool check_text_sec)
 {
 	struct bpf_elf_sec_data data;
 	int i, ret = -1;
@@ -1908,12 +2256,20 @@ static int bpf_fetch_ancillary(struct bpf_elf_ctx *ctx)
 		else if (data.sec_hdr.sh_type == SHT_PROGBITS &&
 			 !strcmp(data.sec_name, ELF_SECTION_LICENSE))
 			ret = bpf_fetch_license(ctx, i, &data);
+		else if (data.sec_hdr.sh_type == SHT_PROGBITS &&
+			 (data.sec_hdr.sh_flags & SHF_EXECINSTR) &&
+			 !strcmp(data.sec_name, ".text") &&
+			 check_text_sec)
+			ret = bpf_fetch_text(ctx, i, &data);
 		else if (data.sec_hdr.sh_type == SHT_SYMTAB &&
 			 !strcmp(data.sec_name, ".symtab"))
 			ret = bpf_fetch_symtab(ctx, i, &data);
 		else if (data.sec_hdr.sh_type == SHT_STRTAB &&
 			 !strcmp(data.sec_name, ".strtab"))
 			ret = bpf_fetch_strtab(ctx, i, &data);
+		else if (data.sec_hdr.sh_type == SHT_PROGBITS &&
+			 !strcmp(data.sec_name, ".BTF"))
+			ret = bpf_fetch_btf_begin(ctx, i, &data);
 		if (ret < 0) {
 			fprintf(stderr, "Error parsing section %d! Perhaps check with readelf -a?\n",
 				i);
@@ -1921,6 +2277,8 @@ static int bpf_fetch_ancillary(struct bpf_elf_ctx *ctx)
 		}
 	}
 
+	if (bpf_has_btf_data(ctx))
+		bpf_fetch_btf_end(ctx);
 	if (bpf_has_map_data(ctx)) {
 		ret = bpf_fetch_maps_end(ctx);
 		if (ret < 0) {
@@ -1952,17 +2310,18 @@ static int bpf_fetch_prog(struct bpf_elf_ctx *ctx, const char *section,
 		ret = bpf_fill_section_data(ctx, i, &data);
 		if (ret < 0 ||
 		    !(data.sec_hdr.sh_type == SHT_PROGBITS &&
-		      data.sec_hdr.sh_flags & SHF_EXECINSTR &&
+		      (data.sec_hdr.sh_flags & SHF_EXECINSTR) &&
 		      !strcmp(data.sec_name, section)))
 			continue;
 
 		*sseen = true;
 
 		memset(&prog, 0, sizeof(prog));
-		prog.type    = ctx->type;
-		prog.insns   = data.sec_data->d_buf;
-		prog.size    = data.sec_data->d_size;
-		prog.license = ctx->license;
+		prog.type      = ctx->type;
+		prog.license   = ctx->license;
+		prog.size      = data.sec_data->d_size;
+		prog.insns_num = prog.size / sizeof(struct bpf_insn);
+		prog.insns     = data.sec_data->d_buf;
 
 		fd = bpf_prog_attach(section, &prog, ctx);
 		if (fd < 0)
@@ -1975,83 +2334,120 @@ static int bpf_fetch_prog(struct bpf_elf_ctx *ctx, const char *section,
 	return fd;
 }
 
-struct bpf_tail_call_props {
-	unsigned int total;
-	unsigned int jited;
+struct bpf_relo_props {
+	struct bpf_tail_call {
+		unsigned int total;
+		unsigned int jited;
+	} tc;
+	int main_num;
 };
+
+static int bpf_apply_relo_map(struct bpf_elf_ctx *ctx, struct bpf_elf_prog *prog,
+			      GElf_Rel *relo, GElf_Sym *sym,
+			      struct bpf_relo_props *props)
+{
+	unsigned int insn_off = relo->r_offset / sizeof(struct bpf_insn);
+	unsigned int map_idx = sym->st_value / ctx->map_len;
+
+	if (insn_off >= prog->insns_num)
+		return -EINVAL;
+	if (prog->insns[insn_off].code != (BPF_LD | BPF_IMM | BPF_DW)) {
+		fprintf(stderr, "ELF contains relo data for non ld64 instruction at offset %u! Compiler bug?!\n",
+			insn_off);
+		return -EINVAL;
+	}
+
+	if (map_idx >= ARRAY_SIZE(ctx->map_fds))
+		return -EINVAL;
+	if (!ctx->map_fds[map_idx])
+		return -EINVAL;
+	if (ctx->maps[map_idx].type == BPF_MAP_TYPE_PROG_ARRAY) {
+		props->tc.total++;
+		if (ctx->maps_ext[map_idx].owner.jited ||
+		    (ctx->maps_ext[map_idx].owner.type == 0 &&
+		     ctx->cfg.jit_enabled))
+			props->tc.jited++;
+	}
+
+	prog->insns[insn_off].src_reg = BPF_PSEUDO_MAP_FD;
+	prog->insns[insn_off].imm = ctx->map_fds[map_idx];
+	return 0;
+}
+
+static int bpf_apply_relo_call(struct bpf_elf_ctx *ctx, struct bpf_elf_prog *prog,
+			       GElf_Rel *relo, GElf_Sym *sym,
+			       struct bpf_relo_props *props)
+{
+	unsigned int insn_off = relo->r_offset / sizeof(struct bpf_insn);
+	struct bpf_elf_prog *prog_text = &ctx->prog_text;
+
+	if (insn_off >= prog->insns_num)
+		return -EINVAL;
+	if (prog->insns[insn_off].code != (BPF_JMP | BPF_CALL) &&
+	    prog->insns[insn_off].src_reg != BPF_PSEUDO_CALL) {
+		fprintf(stderr, "ELF contains relo data for non call instruction at offset %u! Compiler bug?!\n",
+			insn_off);
+		return -EINVAL;
+	}
+
+	if (!props->main_num) {
+		struct bpf_insn *insns = realloc(prog->insns,
+						 prog->size + prog_text->size);
+		if (!insns)
+			return -ENOMEM;
+
+		memcpy(insns + prog->insns_num, prog_text->insns,
+		       prog_text->size);
+		props->main_num = prog->insns_num;
+		prog->insns = insns;
+		prog->insns_num += prog_text->insns_num;
+		prog->size += prog_text->size;
+	}
+
+	prog->insns[insn_off].imm += props->main_num - insn_off;
+	return 0;
+}
 
 static int bpf_apply_relo_data(struct bpf_elf_ctx *ctx,
 			       struct bpf_elf_sec_data *data_relo,
-			       struct bpf_elf_sec_data *data_insn,
-			       struct bpf_tail_call_props *props)
+			       struct bpf_elf_prog *prog,
+			       struct bpf_relo_props *props)
 {
-	Elf_Data *idata = data_insn->sec_data;
 	GElf_Shdr *rhdr = &data_relo->sec_hdr;
 	int relo_ent, relo_num = rhdr->sh_size / rhdr->sh_entsize;
-	struct bpf_insn *insns = idata->d_buf;
-	unsigned int num_insns = idata->d_size / sizeof(*insns);
 
 	for (relo_ent = 0; relo_ent < relo_num; relo_ent++) {
-		unsigned int ioff, rmap;
 		GElf_Rel relo;
 		GElf_Sym sym;
+		int ret = -EIO;
 
 		if (gelf_getrel(data_relo->sec_data, relo_ent, &relo) != &relo)
 			return -EIO;
-
-		ioff = relo.r_offset / sizeof(struct bpf_insn);
-		if (ioff >= num_insns ||
-		    insns[ioff].code != (BPF_LD | BPF_IMM | BPF_DW)) {
-			fprintf(stderr, "ELF contains relo data for non ld64 instruction at offset %u! Compiler bug?!\n",
-				ioff);
-			if (ioff < num_insns &&
-			    insns[ioff].code == (BPF_JMP | BPF_CALL))
-				fprintf(stderr, " - Try to annotate functions with always_inline attribute!\n");
-			return -EINVAL;
-		}
-
 		if (gelf_getsym(ctx->sym_tab, GELF_R_SYM(relo.r_info), &sym) != &sym)
 			return -EIO;
-		if (sym.st_shndx != ctx->sec_maps) {
-			fprintf(stderr, "ELF contains non-map related relo data in entry %u pointing to section %u! Compiler bug?!\n",
+
+		if (sym.st_shndx == ctx->sec_maps)
+			ret = bpf_apply_relo_map(ctx, prog, &relo, &sym, props);
+		else if (sym.st_shndx == ctx->sec_text)
+			ret = bpf_apply_relo_call(ctx, prog, &relo, &sym, props);
+		else
+			fprintf(stderr, "ELF contains non-{map,call} related relo data in entry %u pointing to section %u! Compiler bug?!\n",
 				relo_ent, sym.st_shndx);
-			return -EIO;
-		}
-
-		rmap = sym.st_value / ctx->map_len;
-		if (rmap >= ARRAY_SIZE(ctx->map_fds))
-			return -EINVAL;
-		if (!ctx->map_fds[rmap])
-			return -EINVAL;
-		if (ctx->maps[rmap].type == BPF_MAP_TYPE_PROG_ARRAY) {
-			props->total++;
-			if (ctx->maps_ext[rmap].owner.jited ||
-			    (ctx->maps_ext[rmap].owner.type == 0 &&
-			     ctx->cfg.jit_enabled))
-				props->jited++;
-		}
-
-		if (ctx->verbose)
-			fprintf(stderr, "Map \'%s\' (%d) injected into prog section \'%s\' at offset %u!\n",
-				bpf_str_tab_name(ctx, &sym), ctx->map_fds[rmap],
-				data_insn->sec_name, ioff);
-
-		insns[ioff].src_reg = BPF_PSEUDO_MAP_FD;
-		insns[ioff].imm     = ctx->map_fds[rmap];
+		if (ret < 0)
+			return ret;
 	}
 
 	return 0;
 }
 
 static int bpf_fetch_prog_relo(struct bpf_elf_ctx *ctx, const char *section,
-			       bool *lderr, bool *sseen)
+			       bool *lderr, bool *sseen, struct bpf_elf_prog *prog)
 {
 	struct bpf_elf_sec_data data_relo, data_insn;
-	struct bpf_elf_prog prog;
 	int ret, idx, i, fd = -1;
 
 	for (i = 1; i < ctx->elf_hdr.e_shnum; i++) {
-		struct bpf_tail_call_props props = {};
+		struct bpf_relo_props props = {};
 
 		ret = bpf_fill_section_data(ctx, i, &data_relo);
 		if (ret < 0 || data_relo.sec_hdr.sh_type != SHT_REL)
@@ -2062,40 +2458,54 @@ static int bpf_fetch_prog_relo(struct bpf_elf_ctx *ctx, const char *section,
 		ret = bpf_fill_section_data(ctx, idx, &data_insn);
 		if (ret < 0 ||
 		    !(data_insn.sec_hdr.sh_type == SHT_PROGBITS &&
-		      data_insn.sec_hdr.sh_flags & SHF_EXECINSTR &&
+		      (data_insn.sec_hdr.sh_flags & SHF_EXECINSTR) &&
 		      !strcmp(data_insn.sec_name, section)))
 			continue;
+		if (sseen)
+			*sseen = true;
 
-		*sseen = true;
-
-		ret = bpf_apply_relo_data(ctx, &data_relo, &data_insn, &props);
-		if (ret < 0) {
+		memset(prog, 0, sizeof(*prog));
+		prog->type = ctx->type;
+		prog->license = ctx->license;
+		prog->size = data_insn.sec_data->d_size;
+		prog->insns_num = prog->size / sizeof(struct bpf_insn);
+		prog->insns = malloc(prog->size);
+		if (!prog->insns) {
 			*lderr = true;
-			return ret;
+			return -ENOMEM;
 		}
 
-		memset(&prog, 0, sizeof(prog));
-		prog.type    = ctx->type;
-		prog.insns   = data_insn.sec_data->d_buf;
-		prog.size    = data_insn.sec_data->d_size;
-		prog.license = ctx->license;
+		memcpy(prog->insns, data_insn.sec_data->d_buf, prog->size);
 
-		fd = bpf_prog_attach(section, &prog, ctx);
+		ret = bpf_apply_relo_data(ctx, &data_relo, prog, &props);
+		if (ret < 0) {
+			*lderr = true;
+			if (ctx->sec_text != idx)
+				free(prog->insns);
+			return ret;
+		}
+		if (ctx->sec_text == idx) {
+			fd = 0;
+			goto out;
+		}
+
+		fd = bpf_prog_attach(section, prog, ctx);
+		free(prog->insns);
 		if (fd < 0) {
 			*lderr = true;
-			if (props.total) {
+			if (props.tc.total) {
 				if (ctx->cfg.jit_enabled &&
-				    props.total != props.jited)
+				    props.tc.total != props.tc.jited)
 					fprintf(stderr, "JIT enabled, but only %u/%u tail call maps in the program have JITed owner!\n",
-						props.jited, props.total);
+						props.tc.jited, props.tc.total);
 				if (!ctx->cfg.jit_enabled &&
-				    props.jited)
+				    props.tc.jited)
 					fprintf(stderr, "JIT disabled, but %u/%u tail call maps in the program have JITed owner!\n",
-						props.jited, props.total);
+						props.tc.jited, props.tc.total);
 			}
 			return fd;
 		}
-
+out:
 		ctx->sec_done[i]   = true;
 		ctx->sec_done[idx] = true;
 		break;
@@ -2107,10 +2517,18 @@ static int bpf_fetch_prog_relo(struct bpf_elf_ctx *ctx, const char *section,
 static int bpf_fetch_prog_sec(struct bpf_elf_ctx *ctx, const char *section)
 {
 	bool lderr = false, sseen = false;
+	struct bpf_elf_prog prog;
 	int ret = -1;
 
-	if (bpf_has_map_data(ctx))
-		ret = bpf_fetch_prog_relo(ctx, section, &lderr, &sseen);
+	if (bpf_has_call_data(ctx)) {
+		ret = bpf_fetch_prog_relo(ctx, ".text", &lderr, NULL,
+					  &ctx->prog_text);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (bpf_has_map_data(ctx) || bpf_has_call_data(ctx))
+		ret = bpf_fetch_prog_relo(ctx, section, &lderr, &sseen, &prog);
 	if (ret < 0 && !lderr)
 		ret = bpf_fetch_prog(ctx, section, &sseen);
 	if (ret < 0 && !sseen)
@@ -2402,18 +2820,30 @@ static void bpf_get_cfg(struct bpf_elf_ctx *ctx)
 }
 
 static int bpf_elf_ctx_init(struct bpf_elf_ctx *ctx, const char *pathname,
-			    enum bpf_prog_type type, bool verbose)
+			    enum bpf_prog_type type, __u32 ifindex,
+			    bool verbose)
 {
-	int ret = -EINVAL;
+	uint8_t tmp[20];
+	int ret;
 
-	if (elf_version(EV_CURRENT) == EV_NONE ||
-	    bpf_init_env(pathname))
-		return ret;
+	if (elf_version(EV_CURRENT) == EV_NONE)
+		return -EINVAL;
+
+	bpf_init_env();
 
 	memset(ctx, 0, sizeof(*ctx));
 	bpf_get_cfg(ctx);
+
+	ret = bpf_obj_hash(pathname, tmp, sizeof(tmp));
+	if (ret)
+		ctx->noafalg = true;
+	else
+		hexstring_n2a(tmp, sizeof(tmp), ctx->obj_uid,
+			      sizeof(ctx->obj_uid));
+
 	ctx->verbose = verbose;
 	ctx->type    = type;
+	ctx->ifindex = ifindex;
 
 	ctx->obj_fd = open(pathname, O_RDONLY);
 	if (ctx->obj_fd < 0)
@@ -2486,6 +2916,10 @@ static void bpf_maps_teardown(struct bpf_elf_ctx *ctx)
 		if (ctx->map_fds[i])
 			close(ctx->map_fds[i]);
 	}
+
+	if (ctx->btf_fd)
+		close(ctx->btf_fd);
+	free(ctx->btf.types);
 }
 
 static void bpf_elf_ctx_destroy(struct bpf_elf_ctx *ctx, bool failure)
@@ -2495,6 +2929,7 @@ static void bpf_elf_ctx_destroy(struct bpf_elf_ctx *ctx, bool failure)
 
 	bpf_hash_destroy(ctx);
 
+	free(ctx->prog_text.insns);
 	free(ctx->sec_done);
 	free(ctx->log);
 
@@ -2505,18 +2940,18 @@ static void bpf_elf_ctx_destroy(struct bpf_elf_ctx *ctx, bool failure)
 static struct bpf_elf_ctx __ctx;
 
 static int bpf_obj_open(const char *pathname, enum bpf_prog_type type,
-			const char *section, bool verbose)
+			const char *section, __u32 ifindex, bool verbose)
 {
 	struct bpf_elf_ctx *ctx = &__ctx;
 	int fd = 0, ret;
 
-	ret = bpf_elf_ctx_init(ctx, pathname, type, verbose);
+	ret = bpf_elf_ctx_init(ctx, pathname, type, ifindex, verbose);
 	if (ret < 0) {
 		fprintf(stderr, "Cannot initialize ELF context!\n");
 		return ret;
 	}
 
-	ret = bpf_fetch_ancillary(ctx);
+	ret = bpf_fetch_ancillary(ctx, strcmp(section, ".text"));
 	if (ret < 0) {
 		fprintf(stderr, "Error fetching ELF ancillary data!\n");
 		goto out;
@@ -2555,7 +2990,7 @@ bpf_map_set_send(int fd, struct sockaddr_un *addr, unsigned int addr_len,
 	char *amsg_buf;
 	int i;
 
-	strncpy(msg.aux.obj_name, aux->obj, sizeof(msg.aux.obj_name));
+	strlcpy(msg.aux.obj_name, aux->obj, sizeof(msg.aux.obj_name));
 	memcpy(&msg.aux.obj_st, aux->st, sizeof(msg.aux.obj_st));
 
 	cmsg_buf = bpf_map_set_init(&msg, addr, addr_len);
@@ -2644,7 +3079,7 @@ int bpf_send_map_fds(const char *path, const char *obj)
 		return -1;
 	}
 
-	strncpy(addr.sun_path, path, sizeof(addr.sun_path));
+	strlcpy(addr.sun_path, path, sizeof(addr.sun_path));
 
 	ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
 	if (ret < 0) {
@@ -2677,7 +3112,7 @@ int bpf_recv_map_fds(const char *path, int *fds, struct bpf_map_aux *aux,
 		return -1;
 	}
 
-	strncpy(addr.sun_path, path, sizeof(addr.sun_path));
+	strlcpy(addr.sun_path, path, sizeof(addr.sun_path));
 
 	ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
 	if (ret < 0) {

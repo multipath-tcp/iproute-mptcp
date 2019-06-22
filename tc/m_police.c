@@ -16,7 +16,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -151,15 +150,18 @@ int act_parse_police(struct action_util *a, int *argc_p, char ***argv_p,
 			   matches(*argv, "shot") == 0 ||
 			   matches(*argv, "continue") == 0 ||
 			   matches(*argv, "pass") == 0 ||
+			   matches(*argv, "ok") == 0 ||
 			   matches(*argv, "pipe") == 0 ||
 			   matches(*argv, "goto") == 0) {
-			if (parse_action_control(&argc, &argv, &p.action, false))
-				return -1;
+			if (!parse_action_control(&argc, &argv, &p.action, false))
+				goto action_ctrl_ok;
+			return -1;
 		} else if (strcmp(*argv, "conform-exceed") == 0) {
 			NEXT_ARG();
-			if (parse_action_control_slash(&argc, &argv, &p.action,
-						       &presult, true))
-				return -1;
+			if (!parse_action_control_slash(&argc, &argv, &p.action,
+							&presult, true))
+				goto action_ctrl_ok;
+			return -1;
 		} else if (matches(*argv, "overhead") == 0) {
 			NEXT_ARG();
 			if (get_u16(&overhead, *argv, 10)) {
@@ -175,8 +177,9 @@ int act_parse_police(struct action_util *a, int *argc_p, char ***argv_p,
 		} else {
 			break;
 		}
+		NEXT_ARG_FWD();
+action_ctrl_ok:
 		ok++;
-		argc--; argv++;
 	}
 
 	if (!ok)
@@ -229,8 +232,7 @@ int act_parse_police(struct action_util *a, int *argc_p, char ***argv_p,
 		}
 	}
 
-	tail = NLMSG_TAIL(n);
-	addattr_l(n, MAX_MSG, tca_id, NULL, 0);
+	tail = addattr_nest(n, MAX_MSG, tca_id);
 	addattr_l(n, MAX_MSG, TCA_POLICE_TBF, &p, sizeof(p));
 	if (p.rate.rate)
 		addattr_l(n, MAX_MSG, TCA_POLICE_RATE, rtab, 1024);
@@ -241,7 +243,7 @@ int act_parse_police(struct action_util *a, int *argc_p, char ***argv_p,
 	if (presult)
 		addattr32(n, MAX_MSG, TCA_POLICE_RESULT, presult);
 
-	tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+	addattr_nest_end(n, tail);
 	res = 0;
 
 	*argc_p = argc;

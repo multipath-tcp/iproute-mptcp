@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -35,7 +34,7 @@ static void explain(void)
 	fprintf(stderr, "               [ ecn ] [ harddrop ]\n");
 }
 
-static int sfq_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n)
+static int sfq_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n, const char *dev)
 {
 	int ok = 0, red = 0;
 	struct tc_sfq_qopt_v1 opt = {};

@@ -18,6 +18,8 @@
 #include <libmnl/libmnl.h>
 #include <linux/genetlink.h>
 
+#include "libnetlink.h"
+#include "utils.h"
 #include "mnlg.h"
 
 struct mnlg_socket {
@@ -60,6 +62,39 @@ int mnlg_socket_send(struct mnlg_socket *nlg, const struct nlmsghdr *nlh)
 	return mnl_socket_sendto(nlg->nl, nlh, nlh->nlmsg_len);
 }
 
+static int mnlg_cb_noop(const struct nlmsghdr *nlh, void *data)
+{
+	return MNL_CB_OK;
+}
+
+static int mnlg_cb_error(const struct nlmsghdr *nlh, void *data)
+{
+	const struct nlmsgerr *err = mnl_nlmsg_get_payload(nlh);
+
+	/* Netlink subsystems returns the errno value with different signess */
+	if (err->error < 0)
+		errno = -err->error;
+	else
+		errno = err->error;
+
+	if (nl_dump_ext_ack(nlh, NULL))
+		return MNL_CB_ERROR;
+
+	return err->error == 0 ? MNL_CB_STOP : MNL_CB_ERROR;
+}
+
+static int mnlg_cb_stop(const struct nlmsghdr *nlh, void *data)
+{
+	return MNL_CB_STOP;
+}
+
+static mnl_cb_t mnlg_cb_array[NLMSG_MIN_TYPE] = {
+	[NLMSG_NOOP]	= mnlg_cb_noop,
+	[NLMSG_ERROR]	= mnlg_cb_error,
+	[NLMSG_DONE]	= mnlg_cb_stop,
+	[NLMSG_OVERRUN]	= mnlg_cb_noop,
+};
+
 int mnlg_socket_recv_run(struct mnlg_socket *nlg, mnl_cb_t data_cb, void *data)
 {
 	int err;
@@ -69,8 +104,9 @@ int mnlg_socket_recv_run(struct mnlg_socket *nlg, mnl_cb_t data_cb, void *data)
 					  MNL_SOCKET_BUFFER_SIZE);
 		if (err <= 0)
 			break;
-		err = mnl_cb_run(nlg->buf, err, nlg->seq, nlg->portid,
-				 data_cb, data);
+		err = mnl_cb_run2(nlg->buf, err, nlg->seq, nlg->portid,
+				  data_cb, data, mnlg_cb_array,
+				  ARRAY_SIZE(mnlg_cb_array));
 	} while (err > 0);
 
 	return err;
@@ -163,7 +199,7 @@ int mnlg_socket_group_add(struct mnlg_socket *nlg, const char *group_name)
 
 	nlh = __mnlg_msg_prepare(nlg, CTRL_CMD_GETFAMILY,
 				 NLM_F_REQUEST | NLM_F_ACK, GENL_ID_CTRL, 1);
-	mnl_attr_put_u32(nlh, CTRL_ATTR_FAMILY_ID, nlg->id);
+	mnl_attr_put_u16(nlh, CTRL_ATTR_FAMILY_ID, nlg->id);
 
 	err = mnlg_socket_send(nlg, nlh);
 	if (err < 0)
@@ -220,6 +256,7 @@ struct mnlg_socket *mnlg_socket_open(const char *family_name, uint8_t version)
 {
 	struct mnlg_socket *nlg;
 	struct nlmsghdr *nlh;
+	int one = 1;
 	int err;
 
 	nlg = malloc(sizeof(*nlg));
@@ -233,6 +270,10 @@ struct mnlg_socket *mnlg_socket_open(const char *family_name, uint8_t version)
 	nlg->nl = mnl_socket_open(NETLINK_GENERIC);
 	if (!nlg->nl)
 		goto err_mnl_socket_open;
+
+	/* Older kernels may no support capped/extended ACK reporting */
+	mnl_socket_setsockopt(nlg->nl, NETLINK_CAP_ACK, &one, sizeof(one));
+	mnl_socket_setsockopt(nlg->nl, NETLINK_EXT_ACK, &one, sizeof(one));
 
 	err = mnl_socket_bind(nlg->nl, 0, MNL_SOCKET_AUTOPID);
 	if (err < 0)
