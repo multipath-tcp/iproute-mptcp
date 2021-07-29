@@ -18,15 +18,16 @@
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: sample SAMPLE_CONF\n");
-	fprintf(stderr, "where:\n");
-	fprintf(stderr, "\tSAMPLE_CONF := SAMPLE_PARAMS | SAMPLE_INDEX\n");
-	fprintf(stderr, "\tSAMPLE_PARAMS := rate RATE group GROUP [trunc SIZE] [SAMPLE_INDEX]\n");
-	fprintf(stderr, "\tSAMPLE_INDEX := index INDEX\n");
-	fprintf(stderr, "\tRATE := The ratio of packets observed at the data source to the samples generated.\n");
-	fprintf(stderr, "\tGROUP := the psample sampling group\n");
-	fprintf(stderr, "\tSIZE := the truncation size\n");
-	fprintf(stderr, "\tINDEX := integer index of the sample action\n");
+	fprintf(stderr,
+		"Usage: sample SAMPLE_CONF\n"
+		"where:\n"
+		"\tSAMPLE_CONF := SAMPLE_PARAMS | SAMPLE_INDEX\n"
+		"\tSAMPLE_PARAMS := rate RATE group GROUP [trunc SIZE] [SAMPLE_INDEX]\n"
+		"\tSAMPLE_INDEX := index INDEX\n"
+		"\tRATE := The ratio of packets observed at the data source to the samples generated.\n"
+		"\tGROUP := the psample sampling group\n"
+		"\tSIZE := the truncation size\n"
+		"\tINDEX := integer index of the sample action\n");
 }
 
 static void usage(void)
@@ -149,7 +150,7 @@ static int print_sample(struct action_util *au, FILE *f, struct rtattr *arg)
 
 	if (!tb[TCA_SAMPLE_PARMS] || !tb[TCA_SAMPLE_RATE] ||
 	    !tb[TCA_SAMPLE_PSAMPLE_GROUP]) {
-		print_string(PRINT_FP, NULL, "%s", "[NULL sample parameters]");
+		fprintf(stderr, "Missing sample parameters\n");
 		return -1;
 	}
 	p = RTA_DATA(tb[TCA_SAMPLE_PARMS]);

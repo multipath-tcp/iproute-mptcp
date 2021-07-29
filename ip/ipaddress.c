@@ -26,6 +26,7 @@
 
 #include <linux/netdevice.h>
 #include <linux/if_arp.h>
+#include <linux/if_infiniband.h>
 #include <linux/sockios.h>
 #include <linux/net_namespace.h>
 
@@ -52,32 +53,33 @@ static void usage(void)
 	if (do_link)
 		iplink_usage();
 
-	fprintf(stderr, "Usage: ip address {add|change|replace} IFADDR dev IFNAME [ LIFETIME ]\n");
-	fprintf(stderr, "                                                      [ CONFFLAG-LIST ]\n");
-	fprintf(stderr, "       ip address del IFADDR dev IFNAME [mngtmpaddr]\n");
-	fprintf(stderr, "       ip address {save|flush} [ dev IFNAME ] [ scope SCOPE-ID ]\n");
-	fprintf(stderr, "                            [ to PREFIX ] [ FLAG-LIST ] [ label LABEL ] [up]\n");
-	fprintf(stderr, "       ip address [ show [ dev IFNAME ] [ scope SCOPE-ID ] [ master DEVICE ]\n");
-	fprintf(stderr, "                         [ type TYPE ] [ to PREFIX ] [ FLAG-LIST ]\n");
-	fprintf(stderr, "                         [ label LABEL ] [up] [ vrf NAME ] ]\n");
-	fprintf(stderr, "       ip address {showdump|restore}\n");
-	fprintf(stderr, "IFADDR := PREFIX | ADDR peer PREFIX\n");
-	fprintf(stderr, "          [ broadcast ADDR ] [ anycast ADDR ]\n");
-	fprintf(stderr, "          [ label IFNAME ] [ scope SCOPE-ID ] [ metric METRIC ]\n");
-	fprintf(stderr, "SCOPE-ID := [ host | link | global | NUMBER ]\n");
-	fprintf(stderr, "FLAG-LIST := [ FLAG-LIST ] FLAG\n");
-	fprintf(stderr, "FLAG  := [ permanent | dynamic | secondary | primary |\n");
-	fprintf(stderr, "           [-]tentative | [-]deprecated | [-]dadfailed | temporary |\n");
-	fprintf(stderr, "           CONFFLAG-LIST ]\n");
-	fprintf(stderr, "CONFFLAG-LIST := [ CONFFLAG-LIST ] CONFFLAG\n");
-	fprintf(stderr, "CONFFLAG  := [ home | nodad | mngtmpaddr | noprefixroute | autojoin ]\n");
-	fprintf(stderr, "LIFETIME := [ valid_lft LFT ] [ preferred_lft LFT ]\n");
-	fprintf(stderr, "LFT := forever | SECONDS\n");
-	fprintf(stderr, "TYPE := { vlan | veth | vcan | vxcan | dummy | ifb | macvlan | macvtap |\n");
-	fprintf(stderr, "          bridge | bond | ipoib | ip6tnl | ipip | sit | vxlan | lowpan |\n");
-	fprintf(stderr, "          gre | gretap | erspan | ip6gre | ip6gretap | ip6erspan | vti |\n");
-	fprintf(stderr, "          nlmon | can | bond_slave | ipvlan | geneve | bridge_slave |\n");
-	fprintf(stderr, "          hsr | macsec | netdevsim }\n");
+	fprintf(stderr,
+		"Usage: ip address {add|change|replace} IFADDR dev IFNAME [ LIFETIME ]\n"
+		"                                                      [ CONFFLAG-LIST ]\n"
+		"       ip address del IFADDR dev IFNAME [mngtmpaddr]\n"
+		"       ip address {save|flush} [ dev IFNAME ] [ scope SCOPE-ID ]\n"
+		"                            [ to PREFIX ] [ FLAG-LIST ] [ label LABEL ] [up]\n"
+		"       ip address [ show [ dev IFNAME ] [ scope SCOPE-ID ] [ master DEVICE ]\n"
+		"                         [ type TYPE ] [ to PREFIX ] [ FLAG-LIST ]\n"
+		"                         [ label LABEL ] [up] [ vrf NAME ] ]\n"
+		"       ip address {showdump|restore}\n"
+		"IFADDR := PREFIX | ADDR peer PREFIX\n"
+		"          [ broadcast ADDR ] [ anycast ADDR ]\n"
+		"          [ label IFNAME ] [ scope SCOPE-ID ] [ metric METRIC ]\n"
+		"SCOPE-ID := [ host | link | global | NUMBER ]\n"
+		"FLAG-LIST := [ FLAG-LIST ] FLAG\n"
+		"FLAG  := [ permanent | dynamic | secondary | primary |\n"
+		"           [-]tentative | [-]deprecated | [-]dadfailed | temporary |\n"
+		"           CONFFLAG-LIST ]\n"
+		"CONFFLAG-LIST := [ CONFFLAG-LIST ] CONFFLAG\n"
+		"CONFFLAG  := [ home | nodad | mngtmpaddr | noprefixroute | autojoin ]\n"
+		"LIFETIME := [ valid_lft LFT ] [ preferred_lft LFT ]\n"
+		"LFT := forever | SECONDS\n"
+		"TYPE := { vlan | veth | vcan | vxcan | dummy | ifb | macvlan | macvtap |\n"
+		"          bridge | bond | ipoib | ip6tnl | ipip | sit | vxlan | lowpan |\n"
+		"          gre | gretap | erspan | ip6gre | ip6gretap | ip6erspan | vti |\n"
+		"          nlmon | can | bond_slave | ipvlan | geneve | bridge_slave |\n"
+		"          hsr | macsec | netdevsim }\n");
 
 	exit(-1);
 }
@@ -131,7 +133,7 @@ static void print_operstate(FILE *f, __u8 state)
 		if (is_json_context())
 			print_uint(PRINT_JSON, "operstate_index", NULL, state);
 		else
-			print_0xhex(PRINT_FP, NULL, "state %#x", state);
+			print_0xhex(PRINT_FP, NULL, "state %#llx", state);
 	} else if (brief) {
 		print_color_string(PRINT_ANY,
 				   oper_state_color(state),
@@ -176,7 +178,9 @@ static void print_queuelen(FILE *f, struct rtattr *tb[IFLA_MAX + 1])
 
 		strcpy(ifr.ifr_name, rta_getattr_str(tb[IFLA_IFNAME]));
 		if (ioctl(s, SIOCGIFTXQLEN, &ifr) < 0) {
-			fprintf(f, "ioctl(SIOCGIFTXQLEN) failed: %s\n", strerror(errno));
+			fprintf(stderr,
+				"ioctl(SIOCGIFTXQLEN) failed: %s\n",
+				strerror(errno));
 			close(s);
 			return;
 		}
@@ -349,9 +353,10 @@ static void print_af_spec(FILE *fp, struct rtattr *af_spec_attr)
 
 static void print_vf_stats64(FILE *fp, struct rtattr *vfstats);
 
-static void print_vfinfo(FILE *fp, struct rtattr *vfinfo)
+static void print_vfinfo(FILE *fp, struct ifinfomsg *ifi, struct rtattr *vfinfo)
 {
 	struct ifla_vf_mac *vf_mac;
+	struct ifla_vf_broadcast *vf_broadcast;
 	struct ifla_vf_tx_rate *vf_tx_rate;
 	struct rtattr *vf[IFLA_VF_MAX + 1] = {};
 
@@ -365,13 +370,41 @@ static void print_vfinfo(FILE *fp, struct rtattr *vfinfo)
 	parse_rtattr_nested(vf, IFLA_VF_MAX, vfinfo);
 
 	vf_mac = RTA_DATA(vf[IFLA_VF_MAC]);
+	vf_broadcast = RTA_DATA(vf[IFLA_VF_BROADCAST]);
 	vf_tx_rate = RTA_DATA(vf[IFLA_VF_TX_RATE]);
 
 	print_string(PRINT_FP, NULL, "%s    ", _SL_);
 	print_int(PRINT_ANY, "vf", "vf %d ", vf_mac->vf);
-	print_string(PRINT_ANY, "mac", "MAC %s",
-		     ll_addr_n2a((unsigned char *) &vf_mac->mac,
-				 ETH_ALEN, 0, b1, sizeof(b1)));
+
+	print_string(PRINT_ANY,
+		     "link_type",
+		     "    link/%s ",
+		     ll_type_n2a(ifi->ifi_type, b1, sizeof(b1)));
+
+	print_color_string(PRINT_ANY, COLOR_MAC,
+			   "address", "%s",
+			   ll_addr_n2a((unsigned char *) &vf_mac->mac,
+				       ifi->ifi_type == ARPHRD_ETHER ?
+				       ETH_ALEN : INFINIBAND_ALEN,
+				       ifi->ifi_type,
+				       b1, sizeof(b1)));
+
+	if (vf[IFLA_VF_BROADCAST]) {
+		if (ifi->ifi_flags&IFF_POINTOPOINT) {
+			print_string(PRINT_FP, NULL, " peer ", NULL);
+			print_bool(PRINT_JSON,
+				   "link_pointtopoint", NULL, true);
+		} else
+			print_string(PRINT_FP, NULL, " brd ", NULL);
+
+		print_color_string(PRINT_ANY, COLOR_MAC,
+				   "broadcast", "%s",
+				   ll_addr_n2a((unsigned char *) &vf_broadcast->broadcast,
+					       ifi->ifi_type == ARPHRD_ETHER ?
+					       ETH_ALEN : INFINIBAND_ALEN,
+					       ifi->ifi_type,
+					       b1, sizeof(b1)));
+	}
 
 	if (vf[IFLA_VF_VLAN_LIST]) {
 		struct rtattr *i, *vfvlanlist = vf[IFLA_VF_VLAN_LIST];
@@ -549,7 +582,7 @@ static void print_vf_stats64(FILE *fp, struct rtattr *vfstats)
 		return;
 	}
 
-	parse_rtattr_nested(vf, IFLA_VF_MAX, vfstats);
+	parse_rtattr_nested(vf, IFLA_VF_STATS_MAX, vfstats);
 
 	if (is_json_context()) {
 		open_json_object("stats");
@@ -826,8 +859,7 @@ static void print_link_event(FILE *f, __u32 event)
 	}
 }
 
-int print_linkinfo(const struct sockaddr_nl *who,
-		   struct nlmsghdr *n, void *arg)
+int print_linkinfo(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
 	struct ifinfomsg *ifi = NLMSG_DATA(n);
@@ -1103,7 +1135,7 @@ int print_linkinfo(const struct sockaddr_nl *who,
 		open_json_array(PRINT_JSON, "vfinfo_list");
 		for (i = RTA_DATA(vflist); RTA_OK(i, rem); i = RTA_NEXT(i, rem)) {
 			open_json_object(NULL);
-			print_vfinfo(fp, i);
+			print_vfinfo(fp, ifi, i);
 			close_json_object();
 		}
 		close_json_array(PRINT_JSON, NULL);
@@ -1152,7 +1184,7 @@ static unsigned int get_ifa_flags(struct ifaddrmsg *ifa,
 }
 
 /* Mapping from argument to address flag mask */
-struct {
+static const struct {
 	const char *name;
 	unsigned long value;
 } ifa_flag_names[] = {
@@ -1214,38 +1246,35 @@ static void print_ifa_flags(FILE *fp, const struct ifaddrmsg *ifa,
 
 static int get_filter(const char *arg)
 {
+	bool inv = false;
 	unsigned int i;
+
+	if (arg[0] == '-') {
+		inv = true;
+		arg++;
+	}
 
 	/* Special cases */
 	if (strcmp(arg, "dynamic") == 0) {
-		filter.flags &= ~IFA_F_PERMANENT;
-		filter.flagmask |= IFA_F_PERMANENT;
+		inv = !inv;
+		arg = "permanent";
 	} else if (strcmp(arg, "primary") == 0) {
-		filter.flags &= ~IFA_F_SECONDARY;
-		filter.flagmask |= IFA_F_SECONDARY;
-	} else if (*arg == '-') {
-		for (i = 0; i < ARRAY_SIZE(ifa_flag_names); i++) {
-			if (strcmp(arg + 1, ifa_flag_names[i].name))
-				continue;
-
-			filter.flags &= ifa_flag_names[i].value;
-			filter.flagmask |= ifa_flag_names[i].value;
-			return 0;
-		}
-
-		return -1;
-	} else {
-		for (i = 0; i < ARRAY_SIZE(ifa_flag_names); i++) {
-			if (strcmp(arg, ifa_flag_names[i].name))
-				continue;
-			filter.flags |= ifa_flag_names[i].value;
-			filter.flagmask |= ifa_flag_names[i].value;
-			return 0;
-		}
-		return -1;
+		inv = !inv;
+		arg = "secondary";
 	}
 
-	return 0;
+	for (i = 0; i < ARRAY_SIZE(ifa_flag_names); i++) {
+		if (strcmp(arg, ifa_flag_names[i].name))
+			continue;
+
+		if (inv)
+			filter.flags &= ~ifa_flag_names[i].value;
+		else
+			filter.flags |= ifa_flag_names[i].value;
+		filter.flagmask |= ifa_flag_names[i].value;
+		return 0;
+	}
+	return -1;
 }
 
 static int ifa_label_match_rta(int ifindex, const struct rtattr *rta)
@@ -1263,8 +1292,7 @@ static int ifa_label_match_rta(int ifindex, const struct rtattr *rta)
 	return fnmatch(filter.label, label, 0);
 }
 
-int print_addrinfo(const struct sockaddr_nl *who, struct nlmsghdr *n,
-		   void *arg)
+int print_addrinfo(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = arg;
 	struct ifaddrmsg *ifa = NLMSG_DATA(n);
@@ -1480,7 +1508,7 @@ static int print_selected_addrinfo(struct ifinfomsg *ifi,
 			continue;
 
 		open_json_object(NULL);
-		print_addrinfo(NULL, n, fp);
+		print_addrinfo(n, fp);
 		close_json_object();
 	}
 	close_json_array(PRINT_JSON, NULL);
@@ -1493,8 +1521,7 @@ static int print_selected_addrinfo(struct ifinfomsg *ifi,
 }
 
 
-static int store_nlmsg(const struct sockaddr_nl *who, struct nlmsghdr *n,
-		       void *arg)
+static int store_nlmsg(struct nlmsghdr *n, void *arg)
 {
 	struct nlmsg_chain *lchain = (struct nlmsg_chain *)arg;
 	struct nlmsg_list *h;
@@ -1512,7 +1539,7 @@ static int store_nlmsg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 		lchain->head = h;
 	lchain->tail = h;
 
-	ll_remember_index(who, n, NULL);
+	ll_remember_index(n, NULL);
 	return 0;
 }
 
@@ -1555,8 +1582,7 @@ static int ipadd_dump_check_magic(void)
 	return 0;
 }
 
-static int save_nlmsg(const struct sockaddr_nl *who, struct nlmsghdr *n,
-		       void *arg)
+static int save_nlmsg(struct nlmsghdr *n, void *arg)
 {
 	int ret;
 
@@ -1569,15 +1595,14 @@ static int save_nlmsg(const struct sockaddr_nl *who, struct nlmsghdr *n,
 	return ret == n->nlmsg_len ? 0 : ret;
 }
 
-static int show_handler(const struct sockaddr_nl *nl,
-			struct rtnl_ctrl_data *ctrl,
+static int show_handler(struct rtnl_ctrl_data *ctrl,
 			struct nlmsghdr *n, void *arg)
 {
 	struct ifaddrmsg *ifa = NLMSG_DATA(n);
 
 	open_json_object(NULL);
 	print_int(PRINT_ANY, "index", "if%d:\n", ifa->ifa_index);
-	print_addrinfo(NULL, n, stdout);
+	print_addrinfo(n, stdout);
 	close_json_object();
 	return 0;
 }
@@ -1602,8 +1627,7 @@ static int ipaddr_showdump(void)
 	exit(err);
 }
 
-static int restore_handler(const struct sockaddr_nl *nl,
-			   struct rtnl_ctrl_data *ctrl,
+static int restore_handler(struct rtnl_ctrl_data *ctrl,
 			   struct nlmsghdr *n, void *arg)
 {
 	int ret;
@@ -1690,6 +1714,15 @@ static void ipaddr_filter(struct nlmsg_chain *linfo, struct nlmsg_chain *ainfo)
 	}
 }
 
+static int ipaddr_dump_filter(struct nlmsghdr *nlh, int reqlen)
+{
+	struct ifaddrmsg *ifa = NLMSG_DATA(nlh);
+
+	ifa->ifa_index = filter.ifindex;
+
+	return 0;
+}
+
 static int ipaddr_flush(void)
 {
 	int round = 0;
@@ -1700,7 +1733,8 @@ static int ipaddr_flush(void)
 	filter.flushe = sizeof(flushb);
 
 	while ((max_flush_loops == 0) || (round < max_flush_loops)) {
-		if (rtnl_wilddump_request(&rth, filter.family, RTM_GETADDR) < 0) {
+		if (rtnl_addrdump_req(&rth, filter.family,
+				      ipaddr_dump_filter) < 0) {
 			perror("Cannot send dump request");
 			exit(1);
 		}
@@ -1773,14 +1807,43 @@ static int iplink_filter_req(struct nlmsghdr *nlh, int reqlen)
 	return 0;
 }
 
+static int ipaddr_link_get(int index, struct nlmsg_chain *linfo)
+{
+	struct iplink_req req = {
+		.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
+		.n.nlmsg_flags = NLM_F_REQUEST,
+		.n.nlmsg_type = RTM_GETLINK,
+		.i.ifi_family = filter.family,
+		.i.ifi_index = index,
+	};
+	__u32 filt_mask = RTEXT_FILTER_VF;
+	struct nlmsghdr *answer;
+
+	if (!show_stats)
+		filt_mask |= RTEXT_FILTER_SKIP_STATS;
+
+	addattr32(&req.n, sizeof(req), IFLA_EXT_MASK, filt_mask);
+
+	if (rtnl_talk(&rth, &req.n, &answer) < 0) {
+		perror("Cannot send link request");
+		return 1;
+	}
+
+	if (store_nlmsg(answer, linfo) < 0) {
+		fprintf(stderr, "Failed to process link information\n");
+		return 1;
+	}
+
+	return 0;
+}
+
 /* fills in linfo with link data and optionally ainfo with address info
  * caller can walk lists as desired and must call free_nlmsg_chain for
  * both when done
  */
-int ip_linkaddr_list(int family, req_filter_fn_t filter_fn,
-		     struct nlmsg_chain *linfo, struct nlmsg_chain *ainfo)
+int ip_link_list(req_filter_fn_t filter_fn, struct nlmsg_chain *linfo)
 {
-	if (rtnl_wilddump_req_filter_fn(&rth, preferred_family, RTM_GETLINK,
+	if (rtnl_linkdump_req_filter_fn(&rth, preferred_family,
 					filter_fn) < 0) {
 		perror("Cannot send dump request");
 		return 1;
@@ -1791,16 +1854,19 @@ int ip_linkaddr_list(int family, req_filter_fn_t filter_fn,
 		return 1;
 	}
 
-	if (ainfo) {
-		if (rtnl_wilddump_request(&rth, family, RTM_GETADDR) < 0) {
-			perror("Cannot send dump request");
-			return 1;
-		}
+	return 0;
+}
 
-		if (rtnl_dump_filter(&rth, store_nlmsg, ainfo) < 0) {
-			fprintf(stderr, "Dump terminated\n");
-			return 1;
-		}
+static int ip_addr_list(struct nlmsg_chain *ainfo)
+{
+	if (rtnl_addrdump_req(&rth, filter.family, ipaddr_dump_filter) < 0) {
+		perror("Cannot send dump request");
+		return 1;
+	}
+
+	if (rtnl_dump_filter(&rth, store_nlmsg, ainfo) < 0) {
+		fprintf(stderr, "Dump terminated\n");
+		return 1;
 	}
 
 	return 0;
@@ -1809,7 +1875,7 @@ int ip_linkaddr_list(int family, req_filter_fn_t filter_fn,
 static int ipaddr_list_flush_or_save(int argc, char **argv, int action)
 {
 	struct nlmsg_chain linfo = { NULL, NULL};
-	struct nlmsg_chain _ainfo = { NULL, NULL}, *ainfo = NULL;
+	struct nlmsg_chain _ainfo = { NULL, NULL}, *ainfo = &_ainfo;
 	struct nlmsg_list *l;
 	char *filter_dev = NULL;
 	int no_link = 0;
@@ -1817,7 +1883,6 @@ static int ipaddr_list_flush_or_save(int argc, char **argv, int action)
 	ipaddr_reset_filter(oneline, 0);
 	filter.showqueue = 1;
 	filter.family = preferred_family;
-	filter.group = -1;
 
 	if (action == IPADD_FLUSH) {
 		if (argc <= 0) {
@@ -1917,7 +1982,8 @@ static int ipaddr_list_flush_or_save(int argc, char **argv, int action)
 		if (ipadd_save_prep())
 			exit(1);
 
-		if (rtnl_wilddump_request(&rth, preferred_family, RTM_GETADDR) < 0) {
+		if (rtnl_addrdump_req(&rth, preferred_family,
+				      ipaddr_dump_filter) < 0) {
 			perror("Cannot send dump request");
 			exit(1);
 		}
@@ -1942,7 +2008,7 @@ static int ipaddr_list_flush_or_save(int argc, char **argv, int action)
 	 * the link device
 	 */
 	if (filter_dev && filter.group == -1 && do_link == 1) {
-		if (iplink_get(0, filter_dev, RTEXT_FILTER_VF) < 0) {
+		if (iplink_get(filter_dev, RTEXT_FILTER_VF) < 0) {
 			perror("Cannot send link get request");
 			delete_json_obj();
 			exit(1);
@@ -1951,19 +2017,23 @@ static int ipaddr_list_flush_or_save(int argc, char **argv, int action)
 		goto out;
 	}
 
-	if (filter.family != AF_PACKET) {
-		ainfo = &_ainfo;
-
-		if (filter.oneline)
-			no_link = 1;
+	if (filter.ifindex) {
+		if (ipaddr_link_get(filter.ifindex, &linfo) != 0)
+			goto out;
+	} else {
+		if (ip_link_list(iplink_filter_req, &linfo) != 0)
+			goto out;
 	}
 
-	if (ip_linkaddr_list(filter.family, iplink_filter_req,
-			     &linfo, ainfo) != 0)
-		goto out;
+	if (filter.family != AF_PACKET) {
+		if (filter.oneline)
+			no_link = 1;
 
-	if (filter.family != AF_PACKET)
+		if (ip_addr_list(ainfo) != 0)
+			goto out;
+
 		ipaddr_filter(&linfo, ainfo);
+	}
 
 	for (l = linfo.head; l; l = l->next) {
 		struct nlmsghdr *n = &l->h;
@@ -1972,7 +2042,7 @@ static int ipaddr_list_flush_or_save(int argc, char **argv, int action)
 
 		open_json_object(NULL);
 		if (brief || !no_link)
-			res = print_linkinfo(NULL, n, stdout);
+			res = print_linkinfo(n, stdout);
 		if (res >= 0 && filter.family != AF_PACKET)
 			print_selected_addrinfo(ifi, ainfo->head, stdout);
 		if (res > 0 && !do_link && show_stats)
@@ -1982,8 +2052,7 @@ static int ipaddr_list_flush_or_save(int argc, char **argv, int action)
 	fflush(stdout);
 
 out:
-	if (ainfo)
-		free_nlmsg_chain(ainfo);
+	free_nlmsg_chain(ainfo);
 	free_nlmsg_chain(&linfo);
 	delete_json_obj();
 	return 0;
@@ -2033,7 +2102,7 @@ void ipaddr_get_vf_rate(int vfnum, int *min, int *max, const char *dev)
 		exit(1);
 	}
 
-	if (rtnl_wilddump_request(&rth, AF_UNSPEC, RTM_GETLINK) < 0) {
+	if (rtnl_linkdump_req(&rth, AF_UNSPEC) < 0) {
 		perror("Cannot send dump request");
 		exit(1);
 	}
@@ -2070,6 +2139,7 @@ void ipaddr_reset_filter(int oneline, int ifindex)
 	memset(&filter, 0, sizeof(filter));
 	filter.oneline = oneline;
 	filter.ifindex = ifindex;
+	filter.group = -1;
 }
 
 static int default_scope(inet_prefix *lcl)
@@ -2210,11 +2280,20 @@ static int ipaddr_modify(int cmd, int flags, int argc, char **argv)
 			if (set_lifetime(&preferred_lft, *argv))
 				invarg("preferred_lft value", *argv);
 		} else if (strcmp(*argv, "home") == 0) {
-			ifa_flags |= IFA_F_HOMEADDRESS;
+			if (req.ifa.ifa_family == AF_INET6)
+				ifa_flags |= IFA_F_HOMEADDRESS;
+			else
+				fprintf(stderr, "Warning: home option can be set only for IPv6 addresses\n");
 		} else if (strcmp(*argv, "nodad") == 0) {
-			ifa_flags |= IFA_F_NODAD;
+			if (req.ifa.ifa_family == AF_INET6)
+				ifa_flags |= IFA_F_NODAD;
+			else
+				fprintf(stderr, "Warning: nodad option can be set only for IPv6 addresses\n");
 		} else if (strcmp(*argv, "mngtmpaddr") == 0) {
-			ifa_flags |= IFA_F_MANAGETEMPADDR;
+			if (req.ifa.ifa_family == AF_INET6)
+				ifa_flags |= IFA_F_MANAGETEMPADDR;
+			else
+				fprintf(stderr, "Warning: mngtmpaddr option can be set only for IPv6 addresses\n");
 		} else if (strcmp(*argv, "noprefixroute") == 0) {
 			ifa_flags |= IFA_F_NOPREFIXROUTE;
 		} else if (strcmp(*argv, "autojoin") == 0) {

@@ -32,18 +32,19 @@ static void usage(void) __attribute__((noreturn));
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: ip tunnel { add | change | del | show | prl | 6rd } [ NAME ]\n");
-	fprintf(stderr, "          [ mode { ipip | gre | sit | isatap | vti } ] [ remote ADDR ] [ local ADDR ]\n");
-	fprintf(stderr, "          [ [i|o]seq ] [ [i|o]key KEY ] [ [i|o]csum ]\n");
-	fprintf(stderr, "          [ prl-default ADDR ] [ prl-nodefault ADDR ] [ prl-delete ADDR ]\n");
-	fprintf(stderr, "          [ 6rd-prefix ADDR ] [ 6rd-relay_prefix ADDR ] [ 6rd-reset ]\n");
-	fprintf(stderr, "          [ ttl TTL ] [ tos TOS ] [ [no]pmtudisc ] [ dev PHYS_DEV ]\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "Where: NAME := STRING\n");
-	fprintf(stderr, "       ADDR := { IP_ADDRESS | any }\n");
-	fprintf(stderr, "       TOS  := { STRING | 00..ff | inherit | inherit/STRING | inherit/00..ff }\n");
-	fprintf(stderr, "       TTL  := { 1..255 | inherit }\n");
-	fprintf(stderr, "       KEY  := { DOTTED_QUAD | NUMBER }\n");
+	fprintf(stderr,
+		"Usage: ip tunnel { add | change | del | show | prl | 6rd } [ NAME ]\n"
+		"	 [ mode { ipip | gre | sit | isatap | vti } ] [ remote ADDR ] [ local ADDR ]\n"
+		"	 [ [i|o]seq ] [ [i|o]key KEY ] [ [i|o]csum ]\n"
+		"	 [ prl-default ADDR ] [ prl-nodefault ADDR ] [ prl-delete ADDR ]\n"
+		"	 [ 6rd-prefix ADDR ] [ 6rd-relay_prefix ADDR ] [ 6rd-reset ]\n"
+		"	 [ ttl TTL ] [ tos TOS ] [ [no]pmtudisc ] [ dev PHYS_DEV ]\n"
+		"\n"
+		"Where:	NAME := STRING\n"
+		"	ADDR := { IP_ADDRESS | any }\n"
+		"	TOS  := { STRING | 00..ff | inherit | inherit/STRING | inherit/00..ff }\n"
+		"	TTL  := { 1..255 | inherit }\n"
+		"	KEY  := { DOTTED_QUAD | NUMBER }\n");
 	exit(-1);
 }
 
@@ -288,17 +289,25 @@ static void print_tunnel(const void *t)
 {
 	const struct ip_tunnel_parm *p = t;
 	struct ip_tunnel_6rd ip6rd = {};
-	char s1[1024];
-	char s2[1024];
+	SPRINT_BUF(b1);
 
 	/* Do not use format_host() for local addr,
 	 * symbolic name will not be useful.
 	 */
-	printf("%s: %s/ip remote %s local %s",
-	       p->name,
-	       tnl_strproto(p->iph.protocol),
-	       p->iph.daddr ? format_host_r(AF_INET, 4, &p->iph.daddr, s1, sizeof(s1)) : "any",
-	       p->iph.saddr ? rt_addr_n2a_r(AF_INET, 4, &p->iph.saddr, s2, sizeof(s2)) : "any");
+	open_json_object(NULL);
+	print_color_string(PRINT_ANY, COLOR_IFNAME, "ifname", "%s: ", p->name);
+	snprintf(b1, sizeof(b1), "%s/ip", tnl_strproto(p->iph.protocol));
+	print_string(PRINT_ANY, "mode", "%s ", b1);
+	print_null(PRINT_FP, NULL, "remote ", NULL);
+	print_color_string(PRINT_ANY, COLOR_INET, "remote", "%s ",
+			   p->iph.daddr || is_json_context()
+				? format_host_r(AF_INET, 4, &p->iph.daddr, b1, sizeof(b1))
+				: "any");
+	print_null(PRINT_FP, NULL, "local ", NULL);
+	print_color_string(PRINT_ANY, COLOR_INET, "local", "%s",
+			   p->iph.saddr || is_json_context()
+				? rt_addr_n2a_r(AF_INET, 4, &p->iph.saddr, b1, sizeof(b1))
+				: "any");
 
 	if (p->iph.protocol == IPPROTO_IPV6 && (p->i_flags & SIT_ISATAP)) {
 		struct ip_tunnel_prl prl[16] = {};
@@ -307,69 +316,70 @@ static void print_tunnel(const void *t)
 		prl[0].datalen = sizeof(prl) - sizeof(prl[0]);
 		prl[0].addr = htonl(INADDR_ANY);
 
-		if (!tnl_prl_ioctl(SIOCGETPRL, p->name, prl))
+		if (!tnl_prl_ioctl(SIOCGETPRL, p->name, prl)) {
 			for (i = 1; i < ARRAY_SIZE(prl); i++) {
-				if (prl[i].addr != htonl(INADDR_ANY)) {
-					printf(" %s %s ",
-					       (prl[i].flags & PRL_DEFAULT) ? "pdr" : "pr",
-					       format_host(AF_INET, 4, &prl[i].addr));
-				}
+				if (prl[i].addr == htonl(INADDR_ANY))
+					continue;
+				if (prl[i].flags & PRL_DEFAULT)
+					print_string(PRINT_ANY, "pdr",
+						     " pdr %s",
+						     format_host(AF_INET, 4, &prl[i].addr));
+				else
+					print_string(PRINT_ANY, "pr", " pr %s",
+						     format_host(AF_INET, 4, &prl[i].addr));
 			}
+		}
 	}
 
 	if (p->link) {
 		const char *n = ll_index_to_name(p->link);
 
 		if (n)
-			printf(" dev %s", n);
+			print_string(PRINT_ANY, "dev", " dev %s", n);
 	}
 
 	if (p->iph.ttl)
-		printf(" ttl %u", p->iph.ttl);
+		print_uint(PRINT_ANY, "ttl", " ttl %u", p->iph.ttl);
 	else
-		printf(" ttl inherit");
+		print_string(PRINT_FP, "ttl", " ttl %s", "inherit");
 
 	if (p->iph.tos) {
-		SPRINT_BUF(b1);
-		printf(" tos");
-		if (p->iph.tos & 1)
-			printf(" inherit");
-		if (p->iph.tos & ~1)
-			printf("%c%s ", p->iph.tos & 1 ? '/' : ' ',
-			       rtnl_dsfield_n2a(p->iph.tos & ~1, b1, sizeof(b1)));
-	}
+		SPRINT_BUF(b2);
 
-	if (!(p->iph.frag_off & htons(IP_DF)))
-		printf(" nopmtudisc");
-
-	if (p->iph.protocol == IPPROTO_IPV6 && !tnl_ioctl_get_6rd(p->name, &ip6rd) && ip6rd.prefixlen) {
-		printf(" 6rd-prefix %s/%u",
-		       inet_ntop(AF_INET6, &ip6rd.prefix, s1, sizeof(s1)),
-		       ip6rd.prefixlen);
-		if (ip6rd.relay_prefix) {
-			printf(" 6rd-relay_prefix %s/%u",
-			       format_host(AF_INET, 4, &ip6rd.relay_prefix),
-			       ip6rd.relay_prefixlen);
+		if (p->iph.tos != 1) {
+			if (!is_json_context() && p->iph.tos & 1)
+				snprintf(b2, sizeof(b2), "%s%s",
+					 p->iph.tos & 1 ? "inherit/" : "",
+					 rtnl_dsfield_n2a(p->iph.tos & ~1, b1, sizeof(b1)));
+			else
+				snprintf(b2, sizeof(b2), "%s",
+					 rtnl_dsfield_n2a(p->iph.tos, b1, sizeof(b1)));
+			print_string(PRINT_ANY, "tos", " tos %s", b2);
+		} else {
+			print_string(PRINT_FP, NULL, " tos %s", "inherit");
 		}
 	}
 
-	if ((p->i_flags & GRE_KEY) && (p->o_flags & GRE_KEY) && p->o_key == p->i_key)
-		printf(" key %u", ntohl(p->i_key));
-	else if ((p->i_flags | p->o_flags) & GRE_KEY) {
-		if (p->i_flags & GRE_KEY)
-			printf(" ikey %u", ntohl(p->i_key));
-		if (p->o_flags & GRE_KEY)
-			printf(" okey %u", ntohl(p->o_key));
+	if (!(p->iph.frag_off & htons(IP_DF)))
+		print_null(PRINT_ANY, "nopmtudisc", " nopmtudisc", NULL);
+
+	if (p->iph.protocol == IPPROTO_IPV6 && !tnl_ioctl_get_6rd(p->name, &ip6rd) && ip6rd.prefixlen) {
+		print_string(PRINT_ANY, "6rd-prefix", " 6rd-prefix %s",
+			     inet_ntop(AF_INET6, &ip6rd.prefix, b1, sizeof(b1)));
+		print_uint(PRINT_ANY, "6rd-prefixlen", "/%u", ip6rd.prefixlen);
+		if (ip6rd.relay_prefix) {
+			print_string(PRINT_ANY, "6rd-relay_prefix",
+				     " 6rd-relay_prefix %s",
+				     format_host(AF_INET, 4, &ip6rd.relay_prefix));
+			print_uint(PRINT_ANY, "6rd-relay_prefixlen", "/%u",
+				   ip6rd.relay_prefixlen);
+		}
 	}
 
-	if (p->i_flags & GRE_SEQ)
-		printf("%s  Drop packets out of sequence.", _SL_);
-	if (p->i_flags & GRE_CSUM)
-		printf("%s  Checksum in received packet is required.", _SL_);
-	if (p->o_flags & GRE_SEQ)
-		printf("%s  Sequence packets on output.", _SL_);
-	if (p->o_flags & GRE_CSUM)
-		printf("%s  Checksum output packets.", _SL_);
+	tnl_print_gre_flags(p->iph.protocol, p->i_flags, p->o_flags,
+			    p->i_key, p->o_key);
+
+	close_json_object();
 }
 
 

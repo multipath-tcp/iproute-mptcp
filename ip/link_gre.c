@@ -26,41 +26,36 @@
 static void gre_print_help(struct link_util *lu, int argc, char **argv, FILE *f)
 {
 	fprintf(f,
-		"Usage: ... %-9s [ remote ADDR ]\n",
-		lu->id
-	);
-	fprintf(f,
-		"                     [ local ADDR ]\n"
-		"                     [ [no][i|o]seq ]\n"
-		"                     [ [i|o]key KEY | no[i|o]key ]\n"
-		"                     [ [no][i|o]csum ]\n"
-		"                     [ ttl TTL ]\n"
-		"                     [ tos TOS ]\n"
-		"                     [ [no]pmtudisc ]\n"
-		"                     [ [no]ignore-df ]\n"
-		"                     [ dev PHYS_DEV ]\n"
-		"                     [ fwmark MARK ]\n"
-		"                     [ external ]\n"
-		"                     [ noencap ]\n"
-		"                     [ encap { fou | gue | none } ]\n"
-		"                     [ encap-sport PORT ]\n"
-		"                     [ encap-dport PORT ]\n"
-		"                     [ [no]encap-csum ]\n"
-		"                     [ [no]encap-csum6 ]\n"
-		"                     [ [no]encap-remcsum ]\n"
-		"                     [ erspan_ver version ]\n"
-		"                     [ erspan IDX ]\n"
-		"                     [ erspan_dir { ingress | egress } ]\n"
-		"                     [ erspan_hwid hwid ]\n"
+		"Usage: ... %-9s	[ remote ADDR ]\n"
+		"			[ local ADDR ]\n"
+		"			[ [no][i|o]seq ]\n"
+		"			[ [i|o]key KEY | no[i|o]key ]\n"
+		"			[ [no][i|o]csum ]\n"
+		"			[ ttl TTL ]\n"
+		"			[ tos TOS ]\n"
+		"			[ [no]pmtudisc ]\n"
+		"			[ [no]ignore-df ]\n"
+		"			[ dev PHYS_DEV ]\n"
+		"			[ fwmark MARK ]\n"
+		"			[ external ]\n"
+		"			[ noencap ]\n"
+		"			[ encap { fou | gue | none } ]\n"
+		"			[ encap-sport PORT ]\n"
+		"			[ encap-dport PORT ]\n"
+		"			[ [no]encap-csum ]\n"
+		"			[ [no]encap-csum6 ]\n"
+		"			[ [no]encap-remcsum ]\n"
+		"			[ erspan_ver version ]\n"
+		"			[ erspan IDX ]\n"
+		"			[ erspan_dir { ingress | egress } ]\n"
+		"			[ erspan_hwid hwid ]\n"
 		"\n"
-	);
-	fprintf(f,
-		"Where: ADDR := { IP_ADDRESS | any }\n"
-		"       TOS  := { NUMBER | inherit }\n"
-		"       TTL  := { 1..255 | inherit }\n"
-		"       KEY  := { DOTTED_QUAD | NUMBER }\n"
-		"       MARK := { 0x0..0xffffffff }\n"
-	);
+		"Where:	ADDR := { IP_ADDRESS | any }\n"
+		"	TOS  := { NUMBER | inherit }\n"
+		"	TTL  := { 1..255 | inherit }\n"
+		"	KEY  := { DOTTED_QUAD | NUMBER }\n"
+		"	MARK := { 0x0..0xffffffff }\n",
+		lu->id);
 }
 
 static int gre_parse_opt(struct link_util *lu, int argc, char **argv,
@@ -436,7 +431,7 @@ static void gre_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		return;
 
 	if (tb[IFLA_GRE_COLLECT_METADATA]) {
-		print_bool(PRINT_ANY, "external", "external", true);
+		print_bool(PRINT_ANY, "external", "external ", true);
 		return;
 	}
 
@@ -463,7 +458,7 @@ static void gre_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		tos = rta_getattr_u8(tb[IFLA_GRE_TOS]);
 	if (tos) {
 		if (is_json_context() || tos != 1)
-			print_0xhex(PRINT_ANY, "tos", "tos 0x%x ", tos);
+			print_0xhex(PRINT_ANY, "tos", "tos %#llx ", tos);
 		else
 			print_string(PRINT_FP, NULL, "tos %s ", "inherit");
 	}
@@ -508,7 +503,7 @@ static void gre_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 
 		if (fwmark) {
 			print_0xhex(PRINT_ANY,
-				    "fwmark", "fwmark 0x%x ", fwmark);
+				    "fwmark", "fwmark %#llx ", fwmark);
 		}
 	}
 
@@ -541,7 +536,7 @@ static void gre_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		__u16 erspan_hwid = rta_getattr_u16(tb[IFLA_GRE_ERSPAN_HWID]);
 
 		print_0xhex(PRINT_ANY,
-			    "erspan_hwid", "erspan_hwid 0x%x ", erspan_hwid);
+			    "erspan_hwid", "erspan_hwid %#llx ", erspan_hwid);
 	}
 
 	tnl_print_encap(tb,

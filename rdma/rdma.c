@@ -1,11 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB
 /*
  * rdma.c	RDMA tool
- *
- *              This program is free software; you can redistribute it and/or
- *              modify it under the terms of the GNU General Public License
- *              as published by the Free Software Foundation; either version
- *              2 of the License, or (at your option) any later version.
- *
  * Authors:     Leon Romanovsky <leonro@mellanox.com>
  */
 
@@ -16,7 +11,7 @@ static void help(char *name)
 {
 	pr_out("Usage: %s [ OPTIONS ] OBJECT { COMMAND | help }\n"
 	       "       %s [ -f[orce] ] -b[atch] filename\n"
-	       "where  OBJECT := { dev | link | resource | help }\n"
+	       "where  OBJECT := { dev | link | resource | system | statistic | help }\n"
 	       "       OPTIONS := { -V[ersion] | -d[etails] | -j[son] | -p[retty]}\n", name, name);
 }
 
@@ -34,6 +29,8 @@ static int rd_cmd(struct rd *rd, int argc, char **argv)
 		{ "dev",	cmd_dev },
 		{ "link",	cmd_link },
 		{ "resource",	cmd_res },
+		{ "system",	cmd_sys },
+		{ "statistic",	cmd_stat },
 		{ 0 }
 	};
 

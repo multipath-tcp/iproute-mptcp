@@ -71,6 +71,7 @@ static struct
 	unsigned int tos, tosmask;
 	unsigned int pref, prefmask;
 	unsigned int fwmark, fwmask;
+	uint64_t tun_id;
 	char iif[IFNAMSIZ];
 	char oif[IFNAMSIZ];
 	struct fib_rule_uid_range range;
@@ -78,6 +79,9 @@ static struct
 	inet_prefix dst;
 	int protocol;
 	int protocolmask;
+	struct fib_rule_port_range sport;
+	struct fib_rule_port_range dport;
+	__u8 ipproto;
 } filter;
 
 static inline int frh_get_table(struct fib_rule_hdr *frh, struct rtattr **tb)
@@ -174,6 +178,51 @@ static bool filter_nlmsg(struct nlmsghdr *n, struct rtattr **tb, int host_len)
 			return false;
 	}
 
+	if (filter.ipproto) {
+		__u8 ipproto = 0;
+
+		if (tb[FRA_IP_PROTO])
+			ipproto = rta_getattr_u8(tb[FRA_IP_PROTO]);
+		if (filter.ipproto != ipproto)
+			return false;
+	}
+
+	if (filter.sport.start) {
+		const struct fib_rule_port_range *r;
+
+		if (!tb[FRA_SPORT_RANGE])
+			return false;
+
+		r = RTA_DATA(tb[FRA_SPORT_RANGE]);
+		if (r->start != filter.sport.start ||
+		    r->end != filter.sport.end)
+			return false;
+	}
+
+	if (filter.dport.start) {
+		const struct fib_rule_port_range *r;
+
+		if (!tb[FRA_DPORT_RANGE])
+			return false;
+
+		r = RTA_DATA(tb[FRA_DPORT_RANGE]);
+		if (r->start != filter.dport.start ||
+		    r->end != filter.dport.end)
+			return false;
+	}
+
+	if (filter.tun_id) {
+		__u64 tun_id = 0;
+
+		if (tb[FRA_TUN_ID]) {
+			tun_id = ntohll(rta_getattr_u64(tb[FRA_TUN_ID]));
+			if (filter.tun_id != tun_id)
+				return false;
+		} else {
+			return false;
+		}
+	}
+
 	table = frh_get_table(frh, tb);
 	if (filter.tb > 0 && filter.tb ^ table)
 		return false;
@@ -181,7 +230,7 @@ static bool filter_nlmsg(struct nlmsghdr *n, struct rtattr **tb, int host_len)
 	return true;
 }
 
-int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
+int print_rule(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = arg;
 	struct fib_rule_hdr *frh = NLMSG_DATA(n);
@@ -224,34 +273,30 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		print_color_string(PRINT_ANY, ifa_family_color(frh->family),
 				   "src", "%s", src);
 		if (frh->src_len != host_len)
-			print_uint(PRINT_ANY, "srclen", "/%u ", frh->src_len);
-		else
-			print_string(PRINT_FP, NULL, " ", NULL);
+			print_uint(PRINT_ANY, "srclen", "/%u", frh->src_len);
 	} else if (frh->src_len) {
 		print_string(PRINT_ANY, "src", "from %s", "0");
-		print_uint(PRINT_ANY, "srclen", "/%u ", frh->src_len);
+		print_uint(PRINT_ANY, "srclen", "/%u", frh->src_len);
 	} else {
-		print_string(PRINT_ANY, "src", "from %s ", "all");
+		print_string(PRINT_ANY, "src", "from %s", "all");
 	}
 
 	if (tb[FRA_DST]) {
 		const char *dst = rt_addr_n2a_rta(frh->family, tb[FRA_DST]);
 
-		print_string(PRINT_FP, NULL, "to ", NULL);
+		print_string(PRINT_FP, NULL, " to ", NULL);
 		print_color_string(PRINT_ANY, ifa_family_color(frh->family),
 				   "dst", "%s", dst);
 		if (frh->dst_len != host_len)
-			print_uint(PRINT_ANY, "dstlen", "/%u ", frh->dst_len);
-		else
-			print_string(PRINT_FP, NULL, " ", NULL);
+			print_uint(PRINT_ANY, "dstlen", "/%u", frh->dst_len);
 	} else if (frh->dst_len) {
-		print_string(PRINT_ANY, "dst", "to %s", "0");
-		print_uint(PRINT_ANY, "dstlen", "/%u ", frh->dst_len);
+		print_string(PRINT_ANY, "dst", " to %s", "0");
+		print_uint(PRINT_ANY, "dstlen", "/%u", frh->dst_len);
 	}
 
 	if (frh->tos) {
 		print_string(PRINT_ANY, "tos",
-			     "tos %s ",
+			     " tos %s",
 			     rtnl_dsfield_n2a(frh->tos, b1, sizeof(b1)));
 	}
 
@@ -263,34 +308,34 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 
 		if (tb[FRA_FWMASK] &&
 		    (mask = rta_getattr_u32(tb[FRA_FWMASK])) != 0xFFFFFFFF) {
-			print_0xhex(PRINT_ANY, "fwmark", "fwmark 0x%x", mark);
-			print_0xhex(PRINT_ANY, "fwmask", "/0x%x ", mask);
+			print_0xhex(PRINT_ANY, "fwmark", " fwmark %#llx", mark);
+			print_0xhex(PRINT_ANY, "fwmask", "/%#llx", mask);
 		} else {
-			print_0xhex(PRINT_ANY, "fwmark", "fwmark 0x%x ", mark);
+			print_0xhex(PRINT_ANY, "fwmark", " fwmark %#llx", mark);
 		}
 	}
 
 	if (tb[FRA_IFNAME]) {
 		if (!is_json_context())
-			fprintf(fp, "iif ");
+			fprintf(fp, " iif ");
 		print_color_string(PRINT_ANY, COLOR_IFNAME,
-				   "iif", "%s ",
+				   "iif", "%s",
 				   rta_getattr_str(tb[FRA_IFNAME]));
 
 		if (frh->flags & FIB_RULE_IIF_DETACHED)
-			print_null(PRINT_ANY, "iif_detached", "[detached] ",
+			print_null(PRINT_ANY, "iif_detached", " [detached]",
 				   NULL);
 	}
 
 	if (tb[FRA_OIFNAME]) {
 		if (!is_json_context())
-			fprintf(fp, "oif ");
+			fprintf(fp, " oif ");
 
-		print_color_string(PRINT_ANY, COLOR_IFNAME, "oif", "%s ",
+		print_color_string(PRINT_ANY, COLOR_IFNAME, "oif", "%s",
 				   rta_getattr_str(tb[FRA_OIFNAME]));
 
 		if (frh->flags & FIB_RULE_OIF_DETACHED)
-			print_null(PRINT_ANY, "oif_detached", "[detached] ",
+			print_null(PRINT_ANY, "oif_detached", " [detached]",
 				   NULL);
 	}
 
@@ -299,19 +344,19 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 
 		if (mdev)
 			print_null(PRINT_ANY, "l3mdev",
-				   "lookup [l3mdev-table] ", NULL);
+				   " lookup [l3mdev-table]", NULL);
 	}
 
 	if (tb[FRA_UID_RANGE]) {
 		struct fib_rule_uid_range *r = RTA_DATA(tb[FRA_UID_RANGE]);
 
-		print_uint(PRINT_ANY, "uid_start", "uidrange %u", r->start);
-		print_uint(PRINT_ANY, "uid_end", "-%u ", r->end);
+		print_uint(PRINT_ANY, "uid_start", " uidrange %u", r->start);
+		print_uint(PRINT_ANY, "uid_end", "-%u", r->end);
 	}
 
 	if (tb[FRA_IP_PROTO]) {
 		SPRINT_BUF(pbuf);
-		print_string(PRINT_ANY, "ipproto", "ipproto %s ",
+		print_string(PRINT_ANY, "ipproto", " ipproto %s",
 			     inet_proto_n2a(rta_getattr_u8(tb[FRA_IP_PROTO]),
 					    pbuf, sizeof(pbuf)));
 	}
@@ -320,11 +365,11 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		struct fib_rule_port_range *r = RTA_DATA(tb[FRA_SPORT_RANGE]);
 
 		if (r->start == r->end) {
-			print_uint(PRINT_ANY, "sport", "sport %u ", r->start);
+			print_uint(PRINT_ANY, "sport", " sport %u", r->start);
 		} else {
-			print_uint(PRINT_ANY, "sport_start", "sport %u",
+			print_uint(PRINT_ANY, "sport_start", " sport %u",
 				   r->start);
-			print_uint(PRINT_ANY, "sport_end", "-%u ", r->end);
+			print_uint(PRINT_ANY, "sport_end", "-%u", r->end);
 		}
 	}
 
@@ -332,18 +377,24 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		struct fib_rule_port_range *r = RTA_DATA(tb[FRA_DPORT_RANGE]);
 
 		if (r->start == r->end) {
-			print_uint(PRINT_ANY, "dport", "dport %u ", r->start);
+			print_uint(PRINT_ANY, "dport", " dport %u", r->start);
 		} else {
-			print_uint(PRINT_ANY, "dport_start", "dport %u",
+			print_uint(PRINT_ANY, "dport_start", " dport %u",
 				   r->start);
-			print_uint(PRINT_ANY, "dport_end", "-%u ", r->end);
+			print_uint(PRINT_ANY, "dport_end", "-%u", r->end);
 		}
+	}
+
+	if (tb[FRA_TUN_ID]) {
+		__u64 tun_id = ntohll(rta_getattr_u64(tb[FRA_TUN_ID]));
+
+		print_u64(PRINT_ANY, "tun_id", " tun_id %llu", tun_id);
 	}
 
 	table = frh_get_table(frh, tb);
 	if (table) {
 		print_string(PRINT_ANY, "table",
-			     "lookup %s ",
+			     " lookup %s",
 			     rtnl_rttable_n2a(table, b1, sizeof(b1)));
 
 		if (tb[FRA_SUPPRESS_PREFIXLEN]) {
@@ -351,7 +402,7 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 
 			if (pl != -1)
 				print_int(PRINT_ANY, "suppress_prefixlen",
-					  "suppress_prefixlength %d ", pl);
+					  " suppress_prefixlength %d", pl);
 		}
 
 		if (tb[FRA_SUPPRESS_IFGROUP]) {
@@ -362,7 +413,7 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 					= rtnl_group_n2a(group, b1, sizeof(b1));
 
 				print_string(PRINT_ANY, "suppress_ifgroup",
-					     "suppress_ifgroup %s ", grname);
+					     " suppress_ifgroup %s", grname);
 			}
 		}
 	}
@@ -374,10 +425,12 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		to &= 0xFFFF;
 		if (from)
 			print_string(PRINT_ANY,
-				     "flow_from", "realms %s/",
+				     "flow_from", " realms %s/",
 				     rtnl_rtrealm_n2a(from, b1, sizeof(b1)));
+		else
+			print_string(PRINT_FP, NULL, " realms ", NULL);
 
-		print_string(PRINT_ANY, "flow_to", "%s ",
+		print_string(PRINT_ANY, "flow_to", "%s",
 			     rtnl_rtrealm_n2a(to, b1, sizeof(b1)));
 	}
 
@@ -388,23 +441,24 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			gateway = format_host_rta(frh->family, tb[RTA_GATEWAY]);
 
 			print_string(PRINT_ANY, "nat_gateway",
-				     "map-to %s ", gateway);
+				     " map-to %s", gateway);
 		} else {
-			print_null(PRINT_ANY, "masquerade", "masquerade", NULL);
+			print_null(PRINT_ANY, "masquerade", " masquerade", NULL);
 		}
 	} else if (frh->action == FR_ACT_GOTO) {
 		if (tb[FRA_GOTO])
-			print_uint(PRINT_ANY, "goto", "goto %u",
+			print_uint(PRINT_ANY, "goto", " goto %u",
 				   rta_getattr_u32(tb[FRA_GOTO]));
 		else
-			print_string(PRINT_ANY, "goto", "goto %s", "none");
+			print_string(PRINT_ANY, "goto", " goto %s", "none");
 
 		if (frh->flags & FIB_RULE_UNRESOLVED)
-			print_null(PRINT_ANY, "unresolved", "unresolved", NULL);
+			print_null(PRINT_ANY, "unresolved",
+				   " [unresolved]", NULL);
 	} else if (frh->action == FR_ACT_NOP) {
-		print_null(PRINT_ANY, "nop", "nop", NULL);
+		print_null(PRINT_ANY, "nop", " nop", NULL);
 	} else if (frh->action != FR_ACT_TO_TBL) {
-		print_string(PRINT_ANY, "to_tbl", "%s",
+		print_string(PRINT_ANY, "action", " %s",
 			     rtnl_rtntype_n2a(frh->action, b1, sizeof(b1)));
 	}
 
@@ -412,7 +466,7 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		__u8 protocol = rta_getattr_u8(tb[FRA_PROTOCOL]);
 
 		if ((protocol && protocol != RTPROT_KERNEL) || show_details > 0) {
-			print_string(PRINT_ANY, "protocol", " proto %s ",
+			print_string(PRINT_ANY, "protocol", " proto %s",
 				     rtnl_rtprot_n2a(protocol, b1, sizeof(b1)));
 		}
 	}
@@ -442,8 +496,7 @@ static int save_rule_prep(void)
 	return 0;
 }
 
-static int save_rule(const struct sockaddr_nl *who,
-		     struct nlmsghdr *n, void *arg)
+static int save_rule(struct nlmsghdr *n, void *arg)
 {
 	int ret;
 
@@ -456,19 +509,23 @@ static int save_rule(const struct sockaddr_nl *who,
 	return ret == n->nlmsg_len ? 0 : ret;
 }
 
-static int flush_rule(const struct sockaddr_nl *who, struct nlmsghdr *n,
-		      void *arg)
+static int flush_rule(struct nlmsghdr *n, void *arg)
 {
 	struct rtnl_handle rth2;
 	struct fib_rule_hdr *frh = NLMSG_DATA(n);
 	int len = n->nlmsg_len;
 	struct rtattr *tb[FRA_MAX+1];
+	int host_len = -1;
 
 	len -= NLMSG_LENGTH(sizeof(*frh));
 	if (len < 0)
 		return -1;
 
 	parse_rtattr(tb, FRA_MAX, RTM_RTA(frh), len);
+
+	host_len = af_bit_len(frh->family);
+	if (!filter_nlmsg(n, tb, host_len))
+		return 0;
 
 	if (tb[FRA_PROTOCOL]) {
 		__u8 protocol = rta_getattr_u8(tb[FRA_PROTOCOL]);
@@ -580,6 +637,13 @@ static int iprule_list_flush_or_save(int argc, char **argv, int action)
 				   &filter.range.end) != 2)
 				invarg("invalid UID range\n", *argv);
 
+		} else if (matches(*argv, "tun_id") == 0) {
+			__u64 tun_id;
+
+			NEXT_ARG();
+			if (get_u64(&tun_id, *argv, 0))
+				invarg("\"tun_id\" value is invalid\n", *argv);
+			filter.tun_id = tun_id;
 		} else if (matches(*argv, "lookup") == 0 ||
 			   matches(*argv, "table") == 0) {
 			__u32 tid;
@@ -604,6 +668,36 @@ static int iprule_list_flush_or_save(int argc, char **argv, int action)
 				filter.protocolmask = 0;
 			}
 			filter.protocol = prot;
+		} else if (strcmp(*argv, "ipproto") == 0) {
+			int ipproto;
+
+			NEXT_ARG();
+			ipproto = inet_proto_a2n(*argv);
+			if (ipproto < 0)
+				invarg("Invalid \"ipproto\" value\n", *argv);
+			filter.ipproto = ipproto;
+		} else if (strcmp(*argv, "sport") == 0) {
+			struct fib_rule_port_range r;
+			int ret;
+
+			NEXT_ARG();
+			ret = sscanf(*argv, "%hu-%hu", &r.start, &r.end);
+			if (ret == 1)
+				r.end = r.start;
+			else if (ret != 2)
+				invarg("invalid port range\n", *argv);
+			filter.sport = r;
+		} else if (strcmp(*argv, "dport") == 0) {
+			struct fib_rule_port_range r;
+			int ret;
+
+			NEXT_ARG();
+			ret = sscanf(*argv, "%hu-%hu", &r.start, &r.end);
+			if (ret == 1)
+				r.end = r.start;
+			else if (ret != 2)
+				invarg("invalid dport range\n", *argv);
+			filter.dport = r;
 		} else{
 			if (matches(*argv, "dst") == 0 ||
 			    matches(*argv, "to") == 0) {
@@ -615,7 +709,7 @@ static int iprule_list_flush_or_save(int argc, char **argv, int action)
 		argc--; argv++;
 	}
 
-	if (rtnl_wilddump_request(&rth, af, RTM_GETRULE) < 0) {
+	if (rtnl_ruledump_req(&rth, af) < 0) {
 		perror("Cannot send dump request");
 		return 1;
 	}
@@ -650,8 +744,7 @@ static int rule_dump_check_magic(void)
 	return 0;
 }
 
-static int restore_handler(const struct sockaddr_nl *nl,
-			   struct rtnl_ctrl_data *ctrl,
+static int restore_handler(struct rtnl_ctrl_data *ctrl,
 			   struct nlmsghdr *n, void *arg)
 {
 	int ret;
@@ -694,6 +787,11 @@ static int iprule_modify(int cmd, int argc, char **argv)
 	};
 
 	if (cmd == RTM_NEWRULE) {
+		if (argc == 0) {
+			fprintf(stderr,
+				"\"ip rule add\" requires arguments.\n");
+			return -1;
+		}
 		req.n.nlmsg_flags |= NLM_F_CREATE|NLM_F_EXCL;
 		req.frh.action = FR_ACT_TO_TBL;
 	}
@@ -772,6 +870,13 @@ static int iprule_modify(int cmd, int argc, char **argv)
 			if (rtnl_rtprot_a2n(&proto, *argv))
 				invarg("\"protocol\" value is invalid\n", *argv);
 			addattr8(&req.n, sizeof(req), FRA_PROTOCOL, proto);
+		} else if (matches(*argv, "tun_id") == 0) {
+			__u64 tun_id;
+
+			NEXT_ARG();
+			if (get_be64(&tun_id, *argv, 0))
+				invarg("\"tun_id\" value is invalid\n", *argv);
+			addattr64(&req.n, sizeof(req), FRA_TUN_ID, tun_id);
 		} else if (matches(*argv, "table") == 0 ||
 			   strcmp(*argv, "lookup") == 0) {
 			NEXT_ARG();

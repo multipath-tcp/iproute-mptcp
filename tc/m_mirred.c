@@ -202,7 +202,8 @@ parse_direction(struct action_util *a, int *argc_p, char ***argv_p,
 
 
 	if (p.eaction == TCA_EGRESS_MIRROR || p.eaction == TCA_INGRESS_MIRROR)
-		parse_action_control(&argc, &argv, &p.action, false);
+		parse_action_control_dflt(&argc, &argv, &p.action, false,
+					  TC_ACT_PIPE);
 
 	if (argc) {
 		if (iok && matches(*argv, "index") == 0) {
@@ -286,7 +287,7 @@ print_mirred(struct action_util *au, FILE *f, struct rtattr *arg)
 	parse_rtattr_nested(tb, TCA_MIRRED_MAX, arg);
 
 	if (tb[TCA_MIRRED_PARMS] == NULL) {
-		print_string(PRINT_FP, NULL, "%s", "[NULL mirred parameters]");
+		fprintf(stderr, "Missing mirred parameters\n");
 		return -1;
 	}
 	p = RTA_DATA(tb[TCA_MIRRED_PARMS]);

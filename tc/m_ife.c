@@ -28,8 +28,7 @@
 static void ife_explain(void)
 {
 	fprintf(stderr,
-		"Usage:... ife {decode|encode} [{ALLOW|USE} ATTR] [dst DMAC] [src SMAC] [type TYPE] [CONTROL] [index INDEX]\n");
-	fprintf(stderr,
+		"Usage:... ife {decode|encode} [{ALLOW|USE} ATTR] [dst DMAC] [src SMAC] [type TYPE] [CONTROL] [index INDEX]\n"
 		"\tALLOW := Encode direction. Allows encoding specified metadata\n"
 		"\t\t e.g \"allow mark\"\n"
 		"\tUSE := Encode direction. Enforce Static encoding of specified metadata\n"
@@ -39,9 +38,9 @@ static void ife_explain(void)
 		"\tSMAC := optional 6 byte Source MAC address to encode\n"
 		"\tTYPE := optional 16 bit ethertype to encode\n"
 		"\tCONTROL := reclassify|pipe|drop|continue|ok\n"
-		"\tINDEX := optional IFE table index value used\n");
-	fprintf(stderr, "encode is used for sending IFE packets\n");
-	fprintf(stderr, "decode is used for receiving IFE packets\n");
+		"\tINDEX := optional IFE table index value used\n"
+		"encode is used for sending IFE packets\n"
+		"decode is used for receiving IFE packets\n");
 }
 
 static void ife_usage(void)
@@ -219,7 +218,7 @@ skip_encode:
 
 static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 {
-	struct tc_ife *p = NULL;
+	struct tc_ife *p;
 	struct rtattr *tb[TCA_IFE_MAX + 1];
 	__u16 ife_type = 0;
 	__u32 mmark = 0;
@@ -234,7 +233,7 @@ static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 	parse_rtattr_nested(tb, TCA_IFE_MAX, arg);
 
 	if (tb[TCA_IFE_PARMS] == NULL) {
-		print_string(PRINT_FP, NULL, "%s", "[NULL ife parameters]");
+		fprintf(stderr, "Missing ife parameters\n");
 		return -1;
 	}
 	p = RTA_DATA(tb[TCA_IFE_PARMS]);
@@ -247,7 +246,7 @@ static int print_ife(struct action_util *au, FILE *f, struct rtattr *arg)
 	if (tb[TCA_IFE_TYPE]) {
 		ife_type = rta_getattr_u16(tb[TCA_IFE_TYPE]);
 		has_optional = 1;
-		print_0xhex(PRINT_ANY, "type", "type 0x%X ", ife_type);
+		print_0xhex(PRINT_ANY, "type", "type %#llX ", ife_type);
 	}
 
 	if (has_optional)

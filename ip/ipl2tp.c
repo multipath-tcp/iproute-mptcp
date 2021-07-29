@@ -237,9 +237,9 @@ static void print_tunnel(const struct l2tp_data *data)
 		print_string(PRINT_FP, NULL,
 			     "  UDP source / dest ports:", NULL);
 
-		print_uint(PRINT_ANY, "local_port", " %hu",
+		print_hu(PRINT_ANY, "local_port", " %hu",
 			   p->local_udp_port);
-		print_uint(PRINT_ANY, "peer_port", "/%hu",
+		print_hu(PRINT_ANY, "peer_port", "/%hu",
 			   p->peer_udp_port);
 		print_nl();
 
@@ -302,10 +302,11 @@ static void print_session(struct l2tp_data *data)
 	print_uint(PRINT_FP, "peer_offset", " peer offset %u\n", 0);
 
 	if (p->cookie_len > 0)
-		print_cookie("cookie", "cookie",
+		print_cookie("cookie", "  cookie %s",
 			     p->cookie, p->cookie_len);
+
 	if (p->peer_cookie_len > 0)
-		print_cookie("peer_cookie", "peer cookie",
+		print_cookie("peer_cookie", "  peer cookie %s",
 			     p->peer_cookie, p->peer_cookie_len);
 
 	if (p->reorder_timeout != 0)
@@ -437,8 +438,7 @@ static int get_response(struct nlmsghdr *n, void *arg)
 	return 0;
 }
 
-static int session_nlmsg(const struct sockaddr_nl *who,
-			 struct nlmsghdr *n, void *arg)
+static int session_nlmsg(struct nlmsghdr *n, void *arg)
 {
 	int ret = get_response(n, arg);
 
@@ -476,8 +476,7 @@ static int get_session(struct l2tp_data *p)
 	return 0;
 }
 
-static int tunnel_nlmsg(const struct sockaddr_nl *who,
-			struct nlmsghdr *n, void *arg)
+static int tunnel_nlmsg(struct nlmsghdr *n, void *arg)
 {
 	int ret = get_response(n, arg);
 

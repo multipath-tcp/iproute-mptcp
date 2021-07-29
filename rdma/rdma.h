@@ -1,11 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB */
 /*
  * rdma.c	RDMA tool
- *
- *              This program is free software; you can redistribute it and/or
- *              modify it under the terms of the GNU General Public License
- *              as published by the Free Software Foundation; either version
- *              2 of the License, or (at your option) any later version.
- *
  * Authors:     Leon Romanovsky <leonro@mellanox.com>
  */
 #ifndef _RDMA_TOOL_H_
@@ -35,13 +30,20 @@
 #define MAX_NUMBER_OF_FILTERS 64
 struct filters {
 	const char *name;
-	bool is_number;
+	uint8_t is_number:1;
+	uint8_t is_doit:1;
 };
 
 struct filter_entry {
 	struct list_head list;
 	char *key;
 	char *value;
+	/*
+	 * This field menas that we can try to issue .doit calback
+	 * on value above. This value can be converted to integer
+	 * with simple atoi(). Otherwise "is_doit" will be false.
+	 */
+	uint8_t is_doit:1;
 };
 
 struct dev_map {
@@ -66,7 +68,10 @@ struct rd {
 	json_writer_t *jw;
 	bool json_output;
 	bool pretty_output;
+	bool suppress_errors;
 	struct list_head filter_list;
+	char *link_name;
+	char *link_type;
 };
 
 struct rd_cmd {
@@ -88,8 +93,11 @@ char *rd_argv(struct rd *rd);
 int cmd_dev(struct rd *rd);
 int cmd_link(struct rd *rd);
 int cmd_res(struct rd *rd);
+int cmd_sys(struct rd *rd);
+int cmd_stat(struct rd *rd);
 int rd_exec_cmd(struct rd *rd, const struct rd_cmd *c, const char *str);
 int rd_exec_dev(struct rd *rd, int (*cb)(struct rd *rd));
+int rd_exec_require_dev(struct rd *rd, int (*cb)(struct rd *rd));
 int rd_exec_link(struct rd *rd, int (*cb)(struct rd *rd), bool strict_port);
 void rd_free(struct rd *rd);
 int rd_set_arg_to_devname(struct rd *rd);
@@ -105,15 +113,18 @@ struct dev_map *dev_map_lookup(struct rd *rd, bool allow_port_index);
 /*
  * Filter manipulation
  */
+bool rd_doit_index(struct rd *rd, uint32_t *idx);
 int rd_build_filter(struct rd *rd, const struct filters valid_filters[]);
-bool rd_check_is_filtered(struct rd *rd, const char *key, uint32_t val);
-bool rd_check_is_string_filtered(struct rd *rd, const char *key, const char *val);
-bool rd_check_is_key_exist(struct rd *rd, const char *key);
+bool rd_is_filtered_attr(struct rd *rd, const char *key, uint32_t val,
+			 struct nlattr *attr);
+bool rd_is_string_filtered_attr(struct rd *rd, const char *key, const char *val,
+				struct nlattr *attr);
 /*
  * Netlink
  */
 int rd_send_msg(struct rd *rd);
 int rd_recv_msg(struct rd *rd, mnl_cb_t callback, void *data, uint32_t seq);
+int rd_sendrecv_msg(struct rd *rd, unsigned int seq);
 void rd_prepare_msg(struct rd *rd, uint32_t cmd, uint32_t *seq, uint16_t flags);
 int rd_dev_init_cb(const struct nlmsghdr *nlh, void *data);
 int rd_attr_cb(const struct nlattr *attr, void *data);
@@ -125,6 +136,7 @@ int rd_attr_check(const struct nlattr *attr, int *typep);
 void print_driver_table(struct rd *rd, struct nlattr *tb);
 void newline(struct rd *rd);
 void newline_indent(struct rd *rd);
+void print_on_off(struct rd *rd, const char *key_str, bool on);
 #define MAX_LINE_LENGTH 80
 
 #endif /* _RDMA_TOOL_H_ */

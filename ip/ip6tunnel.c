@@ -46,99 +46,101 @@ static void usage(void) __attribute__((noreturn));
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: ip -f inet6 tunnel { add | change | del | show } [ NAME ]\n");
-	fprintf(stderr, "          [ mode { ip6ip6 | ipip6 | ip6gre | vti6 | any } ]\n");
-	fprintf(stderr, "          [ remote ADDR local ADDR ] [ dev PHYS_DEV ]\n");
-	fprintf(stderr, "          [ encaplimit ELIM ]\n");
-	fprintf(stderr, "          [ hoplimit TTL ] [ tclass TCLASS ] [ flowlabel FLOWLABEL ]\n");
-	fprintf(stderr, "          [ dscp inherit ]\n");
-	fprintf(stderr, "          [ [no]allow-localremote ]\n");
-	fprintf(stderr, "          [ [i|o]seq ] [ [i|o]key KEY ] [ [i|o]csum ]\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "Where: NAME      := STRING\n");
-	fprintf(stderr, "       ADDR      := IPV6_ADDRESS\n");
-	fprintf(stderr, "       ELIM      := { none | 0..255 }(default=%d)\n",
-		IPV6_DEFAULT_TNL_ENCAP_LIMIT);
-	fprintf(stderr, "       TTL       := 0..255 (default=%d)\n",
+	fprintf(stderr,
+		"Usage: ip -f inet6 tunnel { add | change | del | show } [ NAME ]\n"
+		"          [ mode { ip6ip6 | ipip6 | ip6gre | vti6 | any } ]\n"
+		"          [ remote ADDR local ADDR ] [ dev PHYS_DEV ]\n"
+		"          [ encaplimit ELIM ]\n"
+		"          [ hoplimit TTL ] [ tclass TCLASS ] [ flowlabel FLOWLABEL ]\n"
+		"          [ dscp inherit ]\n"
+		"          [ [no]allow-localremote ]\n"
+		"          [ [i|o]seq ] [ [i|o]key KEY ] [ [i|o]csum ]\n"
+		"\n"
+		"Where: NAME      := STRING\n"
+		"       ADDR      := IPV6_ADDRESS\n"
+		"       ELIM      := { none | 0..255 }(default=%d)\n"
+		"       TTL       := 0..255 (default=%d)\n"
+		"       TCLASS    := { 0x0..0xff | inherit }\n"
+		"       FLOWLABEL := { 0x0..0xfffff | inherit }\n"
+		"       KEY       := { DOTTED_QUAD | NUMBER }\n",
+		IPV6_DEFAULT_TNL_ENCAP_LIMIT,
 		DEFAULT_TNL_HOP_LIMIT);
-	fprintf(stderr, "       TCLASS    := { 0x0..0xff | inherit }\n");
-	fprintf(stderr, "       FLOWLABEL := { 0x0..0xfffff | inherit }\n");
-	fprintf(stderr, "       KEY       := { DOTTED_QUAD | NUMBER }\n");
 	exit(-1);
 }
 
 static void print_tunnel(const void *t)
 {
 	const struct ip6_tnl_parm2 *p = t;
-	char s1[1024];
-	char s2[1024];
+	SPRINT_BUF(b1);
 
 	/* Do not use format_host() for local addr,
 	 * symbolic name will not be useful.
 	 */
-	printf("%s: %s/ipv6 remote %s local %s",
-	       p->name,
-	       tnl_strproto(p->proto),
-	       format_host_r(AF_INET6, 16, &p->raddr, s1, sizeof(s1)),
-	       rt_addr_n2a_r(AF_INET6, 16, &p->laddr, s2, sizeof(s2)));
+	open_json_object(NULL);
+	print_color_string(PRINT_ANY, COLOR_IFNAME, "ifname", "%s: ", p->name);
+	snprintf(b1, sizeof(b1), "%s/ipv6", tnl_strproto(p->proto));
+	print_string(PRINT_ANY, "mode", "%s ", b1);
+	print_string(PRINT_FP, NULL, "%s", "remote ");
+	print_color_string(PRINT_ANY, COLOR_INET6, "remote", "%s ",
+			   format_host_r(AF_INET6, 16, &p->raddr, b1, sizeof(b1)));
+	print_string(PRINT_FP, NULL, "%s", "local ");
+	print_color_string(PRINT_ANY, COLOR_INET6, "local", "%s",
+			   rt_addr_n2a_r(AF_INET6, 16, &p->laddr, b1, sizeof(b1)));
+
 	if (p->link) {
 		const char *n = ll_index_to_name(p->link);
 
 		if (n)
-			printf(" dev %s", n);
+			print_string(PRINT_ANY, "link", " dev %s", n);
 	}
 
 	if (p->flags & IP6_TNL_F_IGN_ENCAP_LIMIT)
-		printf(" encaplimit none");
+		print_null(PRINT_ANY, "ip6_tnl_f_ign_encap_limit",
+			   " encaplimit none", NULL);
 	else
-		printf(" encaplimit %u", p->encap_limit);
+		print_uint(PRINT_ANY, "encap_limit", " encaplimit %u",
+			   p->encap_limit);
 
 	if (p->hop_limit)
-		printf(" hoplimit %u", p->hop_limit);
+		print_uint(PRINT_ANY, "hoplimit", " hoplimit %u", p->hop_limit);
 	else
-		printf(" hoplimit inherit");
+		print_string(PRINT_FP, "hoplimit", " hoplimit %s", "inherit");
 
-	if (p->flags & IP6_TNL_F_USE_ORIG_TCLASS)
-		printf(" tclass inherit");
-	else {
+	if (p->flags & IP6_TNL_F_USE_ORIG_TCLASS) {
+		print_null(PRINT_ANY, "ip6_tnl_f_use_orig_tclass",
+			   " tclass inherit", NULL);
+	} else {
 		__u32 val = ntohl(p->flowinfo & IP6_FLOWINFO_TCLASS);
 
-		printf(" tclass 0x%02x", (__u8)(val >> 20));
+		snprintf(b1, sizeof(b1), "0x%02x", (__u8)(val >> 20));
+		print_string(PRINT_ANY, "tclass", " tclass %s", b1);
 	}
 
-	if (p->flags & IP6_TNL_F_USE_ORIG_FLOWLABEL)
-		printf(" flowlabel inherit");
-	else
-		printf(" flowlabel 0x%05x", ntohl(p->flowinfo & IP6_FLOWINFO_FLOWLABEL));
+	if (p->flags & IP6_TNL_F_USE_ORIG_FLOWLABEL) {
+		print_null(PRINT_ANY, "ip6_tnl_f_use_orig_flowlabel",
+			   " flowlabel inherit", NULL);
+	} else {
+		__u32 val = ntohl(p->flowinfo & IP6_FLOWINFO_FLOWLABEL);
 
-	printf(" (flowinfo 0x%08x)", ntohl(p->flowinfo));
+		snprintf(b1, sizeof(b1), "0x%05x", val);
+		print_string(PRINT_ANY, "flowlabel", " flowlabel %s", b1);
+	}
+
+	snprintf(b1, sizeof(b1), "0x%08x", ntohl(p->flowinfo));
+	print_string(PRINT_ANY, "flowinfo", " (flowinfo %s)", b1);
 
 	if (p->flags & IP6_TNL_F_RCV_DSCP_COPY)
-		printf(" dscp inherit");
+		print_null(PRINT_ANY, "ip6_tnl_f_rcv_dscp_copy",
+			   " dscp inherit", NULL);
 
 	if (p->flags & IP6_TNL_F_ALLOW_LOCAL_REMOTE)
-		printf(" allow-localremote");
+		print_null(PRINT_ANY, "ip6_tnl_f_allow_local_remote",
+			   " allow-localremote", NULL);
 
-	if ((p->i_flags & GRE_KEY) && (p->o_flags & GRE_KEY) &&
-	    p->o_key == p->i_key)
-		printf(" key %u", ntohl(p->i_key));
-	else {
-		if (p->i_flags & GRE_KEY)
-			printf(" ikey %u", ntohl(p->i_key));
-		if (p->o_flags & GRE_KEY)
-			printf(" okey %u", ntohl(p->o_key));
-	}
+	tnl_print_gre_flags(p->proto, p->i_flags, p->o_flags,
+			    p->i_key, p->o_key);
 
-	if (p->proto == IPPROTO_GRE) {
-		if (p->i_flags & GRE_SEQ)
-			printf("%s  Drop packets out of sequence.", _SL_);
-		if (p->i_flags & GRE_CSUM)
-			printf("%s  Checksum in received packet is required.", _SL_);
-		if (p->o_flags & GRE_SEQ)
-			printf("%s  Sequence packets on output.", _SL_);
-		if (p->o_flags & GRE_CSUM)
-			printf("%s  Checksum output packets.", _SL_);
-	}
+	close_json_object();
 }
 
 static int parse_args(int argc, char **argv, int cmd, struct ip6_tnl_parm2 *p)
@@ -372,7 +374,6 @@ static int do_show(int argc, char **argv)
 		return -1;
 
 	print_tunnel(&p);
-	fputc('\n', stdout);
 	return 0;
 }
 
@@ -385,6 +386,9 @@ static int do_add(int cmd, int argc, char **argv)
 
 	if (parse_args(argc, argv, cmd, &p) < 0)
 		return -1;
+
+	if (!*p.name)
+		fprintf(stderr, "Tunnel interface name not specified\n");
 
 	if (p.proto == IPPROTO_GRE)
 		basedev = "ip6gre0";

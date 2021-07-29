@@ -19,10 +19,12 @@
 #include <linux/tipc_netlink.h>
 #include <linux/tipc.h>
 #include <linux/genetlink.h>
+#include <linux/if.h>
 
 #include <libmnl/libmnl.h>
 #include <sys/socket.h>
 
+#include "utils.h"
 #include "cmdl.h"
 #include "msg.h"
 #include "bearer.h"
@@ -40,19 +42,19 @@ static void _print_bearer_opts(void)
 {
 	fprintf(stderr,
 		"OPTIONS\n"
-		" priority              - Bearer link priority\n"
-		" tolerance             - Bearer link tolerance\n"
-		" window                - Bearer link window\n"
-		" mtu                   - Bearer link mtu\n");
+		" priority		- Bearer link priority\n"
+		" tolerance		- Bearer link tolerance\n"
+		" window		- Bearer link window\n"
+		" mtu			- Bearer link mtu\n");
 }
 
 void print_bearer_media(void)
 {
 	fprintf(stderr,
 		"\nMEDIA\n"
-		" udp                   - User Datagram Protocol\n"
-		" ib                    - Infiniband\n"
-		" eth                   - Ethernet\n");
+		" udp			- User Datagram Protocol\n"
+		" ib			- Infiniband\n"
+		" eth			- Ethernet\n");
 }
 
 static void cmd_bearer_enable_l2_help(struct cmdl *cmdl, char *media)
@@ -60,25 +62,23 @@ static void cmd_bearer_enable_l2_help(struct cmdl *cmdl, char *media)
 	fprintf(stderr,
 		"Usage: %s bearer enable media %s device DEVICE [OPTIONS]\n"
 		"\nOPTIONS\n"
-		" domain DOMAIN         - Discovery domain\n"
-		" priority PRIORITY     - Bearer priority\n",
+		" domain DOMAIN		- Discovery domain\n"
+		" priority PRIORITY	- Bearer priority\n",
 		cmdl->argv[0], media);
 }
 
 static void cmd_bearer_enable_udp_help(struct cmdl *cmdl, char *media)
 {
 	fprintf(stderr,
-		"Usage: %s bearer enable [OPTIONS] media %s name NAME localip IP [UDP OPTIONS]\n\n",
-		cmdl->argv[0], media);
-	fprintf(stderr,
+		"Usage: %s bearer enable [OPTIONS] media %s name NAME [localip IP|device DEVICE] [UDP OPTIONS]\n\n"
 		"OPTIONS\n"
-		" domain DOMAIN         - Discovery domain\n"
-		" priority PRIORITY     - Bearer priority\n\n");
-	fprintf(stderr,
+		" domain DOMAIN		- Discovery domain\n"
+		" priority PRIORITY	- Bearer priority\n\n"
 		"UDP OPTIONS\n"
-		" localport PORT        - Local UDP port (default 6118)\n"
-		" remoteip IP           - Remote IP address\n"
-		" remoteport PORT       - Remote UDP port (default 6118)\n");
+		" localport PORT	- Local UDP port (default 6118)\n"
+		" remoteip IP		- Remote IP address\n"
+		" remoteport PORT	- Remote UDP port (default 6118)\n",
+		cmdl->argv[0], media);
 }
 
 static int get_netid_cb(const struct nlmsghdr *nlh, void *data)
@@ -121,6 +121,76 @@ static int generate_multicast(short af, char *buf, int bufsize)
 	return 0;
 }
 
+static struct ifreq ifr;
+static int nl_dump_req_filter(struct nlmsghdr *nlh, int reqlen)
+{
+	struct ifaddrmsg *ifa = NLMSG_DATA(nlh);
+
+	ifa->ifa_index = ifr.ifr_ifindex;
+
+	return 0;
+}
+
+static int nl_dump_addr_filter(struct nlmsghdr *nlh, void *arg)
+{
+	struct ifaddrmsg *ifa = NLMSG_DATA(nlh);
+	char *r_addr = (char *)arg;
+	int len = nlh->nlmsg_len;
+	struct rtattr *addr_attr;
+
+	if (ifr.ifr_ifindex != ifa->ifa_index)
+		return 0;
+
+	if (strlen(r_addr) > 0)
+		return 0;
+
+	addr_attr = parse_rtattr_one(IFA_ADDRESS, IFA_RTA(ifa),
+				     len - NLMSG_LENGTH(sizeof(*ifa)));
+	if (!addr_attr)
+		return 0;
+
+	if (ifa->ifa_family == AF_INET) {
+		struct sockaddr_in ip4addr;
+		memcpy(&ip4addr.sin_addr, RTA_DATA(addr_attr),
+		       sizeof(struct in_addr));
+		inet_ntop(AF_INET, &ip4addr.sin_addr, r_addr,
+			  INET_ADDRSTRLEN);
+	} else if (ifa->ifa_family == AF_INET6) {
+		struct sockaddr_in6 ip6addr;
+		memcpy(&ip6addr.sin6_addr, RTA_DATA(addr_attr),
+		       sizeof(struct in6_addr));
+		inet_ntop(AF_INET6, &ip6addr.sin6_addr, r_addr,
+			  INET6_ADDRSTRLEN);
+	}
+	return 0;
+}
+
+static int cmd_bearer_validate_and_get_addr(const char *name, char *r_addr)
+{
+	struct rtnl_handle rth = { .fd = -1 };
+	int err = -1;
+
+	memset(&ifr, 0, sizeof(ifr));
+	if (!name || !r_addr || get_ifname(ifr.ifr_name, name))
+		return err;
+
+	ifr.ifr_ifindex = ll_name_to_index(ifr.ifr_name);
+	if (!ifr.ifr_ifindex)
+		return err;
+
+	/* remove from cache */
+	ll_drop_by_index(ifr.ifr_ifindex);
+
+	if ((err = rtnl_open(&rth, 0)) < 0)
+		return err;
+
+	if ((err = rtnl_addrdump_req(&rth, AF_UNSPEC, nl_dump_req_filter)) > 0)
+		err = rtnl_dump_filter(&rth, nl_dump_addr_filter, r_addr);
+
+	rtnl_close(&rth);
+	return err;
+}
+
 static int nl_add_udp_enable_opts(struct nlmsghdr *nlh, struct opt *opts,
 				  struct cmdl *cmdl)
 {
@@ -138,13 +208,25 @@ static int nl_add_udp_enable_opts(struct nlmsghdr *nlh, struct opt *opts,
 		.ai_family = AF_UNSPEC,
 		.ai_socktype = SOCK_DGRAM
 	};
+	char addr[INET6_ADDRSTRLEN] = {0};
 
-	if (!(opt = get_opt(opts, "localip"))) {
-		fprintf(stderr, "error, udp bearer localip missing\n");
-		cmd_bearer_enable_udp_help(cmdl, "udp");
+	opt = get_opt(opts, "device");
+	if (opt && cmd_bearer_validate_and_get_addr(opt->val, addr) < 0) {
+		fprintf(stderr, "error, no device name available\n");
 		return -EINVAL;
 	}
-	locip = opt->val;
+
+	if (strlen(addr) > 0) {
+		locip = addr;
+	} else {
+		opt = get_opt(opts, "localip");
+		if (!opt) {
+			fprintf(stderr, "error, udp bearer localip/device missing\n");
+			cmd_bearer_enable_udp_help(cmdl, "udp");
+			return -EINVAL;
+		}
+		locip = opt->val;
+	}
 
 	if ((opt = get_opt(opts, "remoteip")))
 		remip = opt->val;
@@ -996,11 +1078,11 @@ void cmd_bearer_help(struct cmdl *cmdl)
 		"\n"
 		"COMMANDS\n"
 		" add			- Add data to existing bearer\n"
-		" enable                - Enable a bearer\n"
-		" disable               - Disable a bearer\n"
-		" set                   - Set various bearer properties\n"
-		" get                   - Get various bearer properties\n"
-		" list                  - List bearers\n", cmdl->argv[0]);
+		" enable		- Enable a bearer\n"
+		" disable		- Disable a bearer\n"
+		" set			- Set various bearer properties\n"
+		" get			- Get various bearer properties\n"
+		" list			- List bearers\n", cmdl->argv[0]);
 }
 
 int cmd_bearer(struct nlmsghdr *nlh, const struct cmd *cmd, struct cmdl *cmdl,

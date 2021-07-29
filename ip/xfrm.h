@@ -104,10 +104,9 @@ struct xfrm_filter {
 
 extern struct xfrm_filter filter;
 
-int xfrm_state_print(const struct sockaddr_nl *who, struct nlmsghdr *n,
-		     void *arg);
-int xfrm_policy_print(const struct sockaddr_nl *who, struct nlmsghdr *n,
-		      void *arg);
+int xfrm_state_print(struct nlmsghdr *n, void *arg);
+int xfrm_state_print_nokeys(struct nlmsghdr *n, void *arg);
+int xfrm_policy_print(struct nlmsghdr *n, void *arg);
 int do_xfrm_state(int argc, char **argv);
 int do_xfrm_policy(int argc, char **argv);
 int do_xfrm_monitor(int argc, char **argv);
@@ -120,25 +119,16 @@ int xfrm_algotype_getbyname(char *name);
 int xfrm_parse_mark(struct xfrm_mark *mark, int *argcp, char ***argvp);
 const char *strxf_xfrmproto(__u8 proto);
 const char *strxf_algotype(int type);
-const char *strxf_mask8(__u8 mask);
 const char *strxf_mask32(__u32 mask);
-const char *strxf_share(__u8 share);
 const char *strxf_proto(__u8 proto);
 const char *strxf_ptype(__u8 ptype);
-void xfrm_id_info_print(xfrm_address_t *saddr, struct xfrm_id *id,
-			__u8 mode, __u32 reqid, __u16 family, int force_spi,
-			FILE *fp, const char *prefix, const char *title);
-void xfrm_stats_print(struct xfrm_stats *s, FILE *fp, const char *prefix);
-void xfrm_lifetime_print(struct xfrm_lifetime_cfg *cfg,
-			 struct xfrm_lifetime_cur *cur,
-			 FILE *fp, const char *prefix);
 void xfrm_selector_print(struct xfrm_selector *sel, __u16 family,
 			 FILE *fp, const char *prefix);
 void xfrm_xfrma_print(struct rtattr *tb[], __u16 family,
-		      FILE *fp, const char *prefix);
+		      FILE *fp, const char *prefix, bool nokeys);
 void xfrm_state_info_print(struct xfrm_usersa_info *xsinfo,
 			    struct rtattr *tb[], FILE *fp, const char *prefix,
-			   const char *title);
+			   const char *title, bool nokeys);
 void xfrm_policy_info_print(struct xfrm_userpolicy_info *xpinfo,
 			    struct rtattr *tb[], FILE *fp, const char *prefix,
 			    const char *title);

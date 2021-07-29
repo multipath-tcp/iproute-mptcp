@@ -25,13 +25,15 @@
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: ... matchall [skip_sw | skip_hw]\n");
-	fprintf(stderr, "                 [ action ACTION_SPEC ] [ classid CLASSID ]\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "Where: SELECTOR := SAMPLE SAMPLE ...\n");
-	fprintf(stderr, "       FILTERID := X:Y:Z\n");
-	fprintf(stderr, "       ACTION_SPEC := ... look at individual actions\n");
-	fprintf(stderr, "\nNOTE: CLASSID is parsed as hexadecimal input.\n");
+	fprintf(stderr,
+		"Usage: ... matchall [skip_sw | skip_hw]\n"
+		"                 [ action ACTION_SPEC ] [ classid CLASSID ]\n"
+		"\n"
+		"Where: SELECTOR := SAMPLE SAMPLE ...\n"
+		"       FILTERID := X:Y:Z\n"
+		"       ACTION_SPEC := ... look at individual actions\n"
+		"\n"
+		"NOTE: CLASSID is parsed as hexadecimal input.\n");
 }
 
 static int matchall_parse_opt(struct filter_util *qu, char *handle,
@@ -114,6 +116,7 @@ static int matchall_print_opt(struct filter_util *qu, FILE *f,
 			   struct rtattr *opt, __u32 handle)
 {
 	struct rtattr *tb[TCA_MATCHALL_MAX+1];
+	struct tc_matchall_pcnt *pf = NULL;
 
 	if (opt == NULL)
 		return 0;
@@ -142,6 +145,19 @@ static int matchall_print_opt(struct filter_util *qu, FILE *f,
 		else if (flags & TCA_CLS_FLAGS_NOT_IN_HW)
 			print_bool(PRINT_ANY, "not_in_hw", "\n  not_in_hw", true);
 	}
+
+	if (tb[TCA_MATCHALL_PCNT]) {
+		if (RTA_PAYLOAD(tb[TCA_MATCHALL_PCNT])  < sizeof(*pf)) {
+			print_string(PRINT_FP, NULL, "Broken perf counters\n", NULL);
+			return -1;
+		}
+		pf = RTA_DATA(tb[TCA_MATCHALL_PCNT]);
+	}
+
+	if (show_stats && NULL != pf)
+		print_u64(PRINT_ANY, "rule_hit", " (rule hit %llu)",
+			(unsigned long long) pf->rhit);
+
 
 	if (tb[TCA_MATCHALL_ACT])
 		tc_print_action(f, tb[TCA_MATCHALL_ACT], 0);

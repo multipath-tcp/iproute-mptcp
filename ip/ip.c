@@ -36,6 +36,7 @@ int timestamp;
 int force;
 int max_flush_loops = 10;
 int batch_mode;
+int numeric;
 bool do_all;
 
 struct rtnl_handle rth = { .fd = -1 };
@@ -45,19 +46,20 @@ static void usage(void) __attribute__((noreturn));
 static void usage(void)
 {
 	fprintf(stderr,
-"Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n"
-"       ip [ -force ] -batch filename\n"
-"where  OBJECT := { link | address | addrlabel | route | rule | neigh | ntable |\n"
-"                   tunnel | tuntap | maddress | mroute | mrule | monitor | xfrm |\n"
-"                   netns | l2tp | fou | macsec | tcp_metrics | token | netconf | ila |\n"
-"                   vrf | sr }\n"
-"       OPTIONS := { -V[ersion] | -s[tatistics] | -d[etails] | -r[esolve] |\n"
-"                    -h[uman-readable] | -iec | -j[son] | -p[retty] |\n"
-"                    -f[amily] { inet | inet6 | ipx | dnet | mpls | bridge | link } |\n"
-"                    -4 | -6 | -I | -D | -M | -B | -0 |\n"
-"                    -l[oops] { maximum-addr-flush-attempts } | -br[ief] |\n"
-"                    -o[neline] | -t[imestamp] | -ts[hort] | -b[atch] [filename] |\n"
-"                    -rc[vbuf] [size] | -n[etns] name | -a[ll] | -c[olor]}\n");
+		"Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n"
+		"       ip [ -force ] -batch filename\n"
+		"where  OBJECT := { link | address | addrlabel | route | rule | neigh | ntable |\n"
+		"                   tunnel | tuntap | maddress | mroute | mrule | monitor | xfrm |\n"
+		"                   netns | l2tp | fou | macsec | tcp_metrics | token | netconf | ila |\n"
+		"                   vrf | sr | nexthop }\n"
+		"       OPTIONS := { -V[ersion] | -s[tatistics] | -d[etails] | -r[esolve] |\n"
+		"                    -h[uman-readable] | -iec | -j[son] | -p[retty] |\n"
+		"                    -f[amily] { inet | inet6 | mpls | bridge | link } |\n"
+		"                    -4 | -6 | -I | -D | -M | -B | -0 |\n"
+		"                    -l[oops] { maximum-addr-flush-attempts } | -br[ief] |\n"
+		"                    -o[neline] | -t[imestamp] | -ts[hort] | -b[atch] [filename] |\n"
+		"                    -rc[vbuf] [size] | -n[etns] name | -N[umeric] | -a[ll] |\n"
+		"                    -c[olor]}\n");
 	exit(-1);
 }
 
@@ -100,6 +102,7 @@ static const struct cmd {
 	{ "netconf",	do_ipnetconf },
 	{ "vrf",	do_ipvrf},
 	{ "sr",		do_seg6 },
+	{ "nexthop",	do_ipnh },
 	{ "help",	do_help },
 	{ 0 }
 };
@@ -225,8 +228,6 @@ int main(int argc, char **argv)
 			preferred_family = AF_INET6;
 		} else if (strcmp(opt, "-0") == 0) {
 			preferred_family = AF_PACKET;
-		} else if (strcmp(opt, "-I") == 0) {
-			preferred_family = AF_IPX;
 		} else if (strcmp(opt, "-D") == 0) {
 			preferred_family = AF_DECnet;
 		} else if (strcmp(opt, "-M") == 0) {
@@ -289,6 +290,8 @@ int main(int argc, char **argv)
 			NEXT_ARG();
 			if (netns_switch(argv[1]))
 				exit(-1);
+		} else if (matches(opt, "-Numeric") == 0) {
+			++numeric;
 		} else if (matches(opt, "-all") == 0) {
 			do_all = true;
 		} else {
@@ -309,6 +312,8 @@ int main(int argc, char **argv)
 
 	if (rtnl_open(&rth, 0) < 0)
 		exit(1);
+
+	rtnl_set_strict_dump(&rth);
 
 	if (strlen(basename) > 2)
 		return do_cmd(basename+2, argc, argv);

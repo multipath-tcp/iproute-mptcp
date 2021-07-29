@@ -7,7 +7,7 @@ devlink \- Devlink tool
 .in +8
 .ti -8
 .B devlink
-.RI "[ " OPTIONS " ] { " dev | port | monitor | sb | resource " } { " COMMAND " | "
+.RI "[ " OPTIONS " ] { " dev | port | monitor | sb | resource | region | health | trap " } { " COMMAND " | "
 .BR help " }"
 .sp
 
@@ -51,6 +51,10 @@ When combined with -j generate a pretty JSON output.
 .BR "\-v" , " --verbose"
 Turn on verbose output.
 
+.TP
+.BR "\-s" , " --statistics"
+Output statistics.
+
 .SS
 .I OBJECT
 
@@ -73,6 +77,18 @@ Turn on verbose output.
 .TP
 .B resource
 - devlink device resource configuration.
+
+.TP
+.B region
+- devlink address region access
+
+.TP
+.B health
+- devlink reporting and recovery
+
+.TP
+.B trap
+- devlink trap configuration
 
 .SS
 .I COMMAND
@@ -105,6 +121,8 @@ Exit status is 0 if command was successful or a positive integer upon failure.
 .BR devlink-sb (8),
 .BR devlink-resource (8),
 .BR devlink-region (8),
+.BR devlink-health (8),
+.BR devlink-trap (8),
 .br
 
 .SH REPORTING BUGS

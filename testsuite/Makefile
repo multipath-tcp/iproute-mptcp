@@ -18,18 +18,18 @@ KENVFN := $(shell mktemp /tmp/tc_testkenv.XXXXXX)
 ifneq (,$(wildcard /proc/config.gz))
 	KCPATH := /proc/config.gz
 else
-KVER := $(shell uname -r)
-KCPATHS := /lib/modules/$(KVER)/config /boot/config-$(KVER)
-KCPATH := $(firstword $(wildcard $(KCPATHS)))
+	KVER := $(shell uname -r)
+	KCPATHS := /lib/modules/$(KVER)/config /boot/config-$(KVER)
+	KCPATH := $(firstword $(wildcard $(KCPATHS)))
 endif
 
 .PHONY: compile listtests alltests configure $(TESTS)
 
 configure:
-	echo "Entering iproute2" && cd iproute2 && $(MAKE) configure && cd ..;
+	$(MAKE) -C iproute2 configure
 
 compile: configure generate_nlmsg
-	echo "Entering iproute2" && cd iproute2 && $(MAKE) && cd ..;
+	$(MAKE) -C iproute2
 
 listtests:
 	@for t in $(TESTS); do \
@@ -51,9 +51,9 @@ clean: testclean
 	$(MAKE) -C tools clean
 
 distclean: clean
-	echo "Entering iproute2" && cd iproute2 && $(MAKE) distclean && cd ..;
+	$(MAKE) -C iproute2 distclean
 
-$(TESTS): testclean
+$(TESTS): generate_nlmsg testclean
 ifeq (,$(IPVERS))
 	$(error Please run make first)
 endif
@@ -85,11 +85,11 @@ endif
 		TC="$$i/tc/tc" IP="$$i/ip/ip" SS=$$i/misc/ss DEV="$(DEV)" IPVER="$@" SNAME="$$i" \
 		ERRF="$(RESULTS_DIR)/$@.$$o.err" $(PREFIX) tests/$@ > $(RESULTS_DIR)/$@.$$o.out; \
 		if [ "$$?" = "127" ]; then \
-			echo "SKIPPED"; \
+			printf "\033[1;35mSKIPPED\033[0m\n"; \
 		elif [ -e "$(RESULTS_DIR)/$@.$$o.err" ]; then \
-			echo "FAILED"; \
+			printf "\033[0;31mFAILED\033[0m\n"; \
 		else \
-			echo "PASS"; \
+			printf "\033[0;32mPASS\033[0m\n"; \
 		fi; \
 		rm "$$TMP_ERR" "$$TMP_OUT"; \
 		sudo dmesg > $(RESULTS_DIR)/$@.$$o.dmesg; \

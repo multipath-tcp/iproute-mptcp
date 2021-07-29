@@ -47,15 +47,15 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"Usage: ip ntable change name NAME [ dev DEV ]\n"
-		"          [ thresh1 VAL ] [ thresh2 VAL ] [ thresh3 VAL ] [ gc_int MSEC ]\n"
-		"          [ PARMS ]\n"
+		"	 [ thresh1 VAL ] [ thresh2 VAL ] [ thresh3 VAL ] [ gc_int MSEC ]\n"
+		"	 [ PARMS ]\n"
 		"Usage: ip ntable show [ dev DEV ] [ name NAME ]\n"
 
 		"PARMS := [ base_reachable MSEC ] [ retrans MSEC ] [ gc_stale MSEC ]\n"
-		"         [ delay_probe MSEC ] [ queue LEN ]\n"
-		"         [ app_probes VAL ] [ ucast_probes VAL ] [ mcast_probes VAL ]\n"
-		"         [ anycast_delay MSEC ] [ proxy_delay MSEC ] [ proxy_queue LEN ]\n"
-		"         [ locktime MSEC ]\n"
+		"	 [ delay_probe MSEC ] [ queue LEN ]\n"
+		"	 [ app_probes VAL ] [ ucast_probes VAL ] [ mcast_probes VAL ]\n"
+		"	 [ anycast_delay MSEC ] [ proxy_delay MSEC ] [ proxy_queue LEN ]\n"
+		"	 [ locktime MSEC ]\n"
 		);
 
 	exit(-1);
@@ -360,7 +360,7 @@ static void print_ndtconfig(const struct ndt_config *ndtc)
 	print_uint(PRINT_ANY, "hash_rnd",
 		   "        hash_rnd %u ", ndtc->ndtc_hash_rnd);
 	print_0xhex(PRINT_ANY, "hash_mask",
-		    "hash_mask %08x ", ndtc->ndtc_hash_mask);
+		    "hash_mask %08llx ", ndtc->ndtc_hash_mask);
 
 	print_uint(PRINT_ANY, "hash_chain_gc",
 		   "hash_chain_gc %u ", ndtc->ndtc_hash_chain_gc);
@@ -520,8 +520,7 @@ static void print_ndtstats(const struct ndt_stats *ndts)
 	print_nl();
 }
 
-static int print_ntable(const struct sockaddr_nl *who,
-			struct nlmsghdr *n, void *arg)
+static int print_ntable(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
 	struct ndtmsg *ndtm = NLMSG_DATA(n);
@@ -658,7 +657,7 @@ static int ipntable_show(int argc, char **argv)
 		argc--; argv++;
 	}
 
-	if (rtnl_wilddump_request(&rth, preferred_family, RTM_GETNEIGHTBL) < 0) {
+	if (rtnl_neightbldump_req(&rth, preferred_family) < 0) {
 		perror("Cannot send dump request");
 		exit(1);
 	}

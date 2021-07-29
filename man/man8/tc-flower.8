@@ -56,8 +56,9 @@ flower \- flow based traffic control filter
 .IR MASKED_IP_TTL " | { "
 .BR dst_ip " | " src_ip " } "
 .IR PREFIX " | { "
-.BR dst_port " | " src_port " } "
-.IR port_number " } | "
+.BR dst_port " | " src_port " } { "
+.IR port_number " | "
+.IR min_port_number-max_port_number " } | "
 .B tcp_flags
 .IR MASKED_TCP_FLAGS " | "
 .B type
@@ -80,6 +81,8 @@ flower \- flow based traffic control filter
 .IR TOS " | "
 .B enc_ttl
 .IR TTL " | "
+.B geneve_opts
+.IR OPTIONS " | "
 .BR ip_flags
 .IR IP_FLAGS
 .SH DESCRIPTION
@@ -218,10 +221,12 @@ must be a valid IPv4 or IPv6 address, depending on the \fBprotocol\fR
 option to tc filter, optionally followed by a slash and the prefix length.
 If the prefix is missing, \fBtc\fR assumes a full-length host match.
 .TP
-.BI dst_port " NUMBER"
+.IR \fBdst_port " { "  NUMBER " | " " MIN_VALUE-MAX_VALUE "  }
 .TQ
-.BI src_port " NUMBER"
-Match on layer 4 protocol source or destination port number. Only available for
+.IR \fBsrc_port " { "  NUMBER " | " " MIN_VALUE-MAX_VALUE "  }
+Match on layer 4 protocol source or destination port number. Alternatively, the
+mininum and maximum values can be specified to match on a range of layer 4
+protocol source or destination port numbers. Only available for
 .BR ip_proto " values " udp ", " tcp  " and " sctp
 which have to be specified in beforehand.
 .TP
@@ -283,6 +288,43 @@ bits is assumed.
 .BI enc_tos " NUMBER"
 .TQ
 .BI enc_ttl " NUMBER"
+.TQ
+.BR
+.TP
+.BI ct_state " CT_STATE"
+.TQ
+.BI ct_zone " CT_MASKED_ZONE"
+.TQ
+.BI ct_mark " CT_MASKED_MARK"
+.TQ
+.BI ct_label " CT_MASKED_LABEL"
+Matches on connection tracking info
+.RS
+.TP
+.I CT_STATE
+Match the connection state, and can ne combination of [{+|-}flag] flags, where flag can be one of
+.RS
+.TP
+trk - Tracked connection.
+.TP
+new - New connection.
+.TP
+est - Established connection.
+.TP
+Example: +trk+est
+.RE
+.TP
+.I CT_MASKED_ZONE
+Match the connection zone, and can be masked.
+.TP
+.I CT_MASKED_MARK
+32bit match on the connection mark, and can be masked.
+.TP
+.I CT_MASKED_LABEL
+128bit match on the connection label, and can be masked.
+.RE
+.TP
+.BI geneve_opts " OPTIONS"
 Match on IP tunnel metadata. Key id
 .I NUMBER
 is a 32 bit tunnel key id (e.g. VNI for VXLAN tunnel).
@@ -295,7 +337,14 @@ is a 16 bit UDP dst port. Tos
 .I NUMBER
 is an 8 bit tos (dscp+ecn) value, ttl
 .I NUMBER
-is an 8 bit time-to-live value.
+is an 8 bit time-to-live value. geneve_opts
+.I OPTIONS
+must be a valid list of comma-separated geneve options where each option
+consists of a key optionally followed by a slash and corresponding mask. If
+the masks is missing, \fBtc\fR assumes a full-length match. The options can
+be described in the form CLASS:TYPE:DATA/CLASS_MASK:TYPE_MASK:DATA_MASK,
+where CLASS is represented as a 16bit hexadecimal value, TYPE as an 8bit
+hexadecimal value and DATA as a variable length hexadecimal value.
 .TP
 .BI ip_flags " IP_FLAGS"
 .I IP_FLAGS

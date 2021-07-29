@@ -172,7 +172,7 @@ print_csum(struct action_util *au, FILE *f, struct rtattr *arg)
 	parse_rtattr_nested(tb, TCA_CSUM_MAX, arg);
 
 	if (tb[TCA_CSUM_PARMS] == NULL) {
-		fprintf(f, "[NULL csum parameters]");
+		fprintf(stderr, "Missing csum parameters\n");
 		return -1;
 	}
 	sel = RTA_DATA(tb[TCA_CSUM_PARMS]);
@@ -199,10 +199,11 @@ print_csum(struct action_util *au, FILE *f, struct rtattr *arg)
 		uflag_1 = "?empty";
 	}
 
+	print_string(PRINT_ANY, "kind", "%s ", "csum");
 	snprintf(buf, sizeof(buf), "%s%s%s%s%s%s%s",
 		 uflag_1, uflag_2, uflag_3,
 		 uflag_4, uflag_5, uflag_6, uflag_7);
-	print_string(PRINT_ANY, "csum", "csum (%s) ", buf);
+	print_string(PRINT_ANY, "csum", "(%s) ", buf);
 
 	print_action_control(f, "action ", sel->action, "\n");
 	print_uint(PRINT_ANY, "index", "\tindex %u", sel->index);

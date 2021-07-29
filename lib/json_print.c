@@ -118,11 +118,12 @@ void close_json_array(enum output_type type, const char *str)
 	}
 _PRINT_FUNC(int, int);
 _PRINT_FUNC(s64, int64_t);
+_PRINT_FUNC(hhu, unsigned char);
 _PRINT_FUNC(hu, unsigned short);
 _PRINT_FUNC(uint, unsigned int);
 _PRINT_FUNC(u64, uint64_t);
-_PRINT_FUNC(luint, unsigned long int);
-_PRINT_FUNC(lluint, unsigned long long int);
+_PRINT_FUNC(luint, unsigned long);
+_PRINT_FUNC(lluint, unsigned long long);
 _PRINT_FUNC(float, double);
 #undef _PRINT_FUNC
 
@@ -223,7 +224,7 @@ void print_color_null(enum output_type type,
 	}
 }
 
-/* Print line seperator (if not in JSON mode) */
+/* Print line separator (if not in JSON mode) */
 void print_nl(void)
 {
 	if (!_jw)

@@ -23,12 +23,11 @@ int preferred_family = AF_UNSPEC;
 int oneline;
 int show_stats;
 int show_details;
-int show_pretty;
-int color;
+static int color;
 int compress_vlans;
 int json;
 int timestamp;
-char *batch_file;
+static const char *batch_file;
 int force;
 
 static void usage(void) __attribute__((noreturn));
@@ -97,6 +96,8 @@ static int batch(const char *name)
 		fprintf(stderr, "Cannot open rtnetlink\n");
 		return EXIT_FAILURE;
 	}
+
+	rtnl_set_strict_dump(&rth);
 
 	cmdlineno = 0;
 	while (getcmdline(&line, &len, stdin) != -1) {
@@ -172,9 +173,9 @@ main(int argc, char **argv)
 			NEXT_ARG();
 			if (netns_switch(argv[1]))
 				exit(-1);
-		} else if (matches_color(opt, &color)) {
 		} else if (matches(opt, "-compressvlans") == 0) {
 			++compress_vlans;
+		} else if (matches_color(opt, &color)) {
 		} else if (matches(opt, "-force") == 0) {
 			++force;
 		} else if (matches(opt, "-json") == 0) {
@@ -205,6 +206,8 @@ main(int argc, char **argv)
 
 	if (rtnl_open(&rth, 0) < 0)
 		exit(1);
+
+	rtnl_set_strict_dump(&rth);
 
 	if (argc > 1)
 		return do_cmd(argv[1], argc-1, argv+1);

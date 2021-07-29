@@ -21,11 +21,11 @@
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: tunnel_key unset\n");
-	fprintf(stderr, "       tunnel_key set <TUNNEL_KEY>\n");
 	fprintf(stderr,
+		"Usage: tunnel_key unset\n"
+		"       tunnel_key set <TUNNEL_KEY>\n"
 		"Where TUNNEL_KEY is a combination of:\n"
-		"id <TUNNELID> (mandatory)\n"
+		"id <TUNNELID>\n"
 		"src_ip <IP> (mandatory)\n"
 		"dst_ip <IP> (mandatory)\n"
 		"dst_port <UDP_PORT>\n"
@@ -217,7 +217,6 @@ static int parse_tunnel_key(struct action_util *a, int *argc_p, char ***argv_p,
 	int ret;
 	int has_src_ip = 0;
 	int has_dst_ip = 0;
-	int has_key_id = 0;
 	int csum = 1;
 
 	if (matches(*argv, "tunnel_key") != 0)
@@ -273,7 +272,6 @@ static int parse_tunnel_key(struct action_util *a, int *argc_p, char ***argv_p,
 				fprintf(stderr, "Illegal \"id\"\n");
 				return -1;
 			}
-			has_key_id = 1;
 		} else if (matches(*argv, "dst_port") == 0) {
 			NEXT_ARG();
 			ret = tunnel_key_parse_dst_port(*argv,
@@ -335,7 +333,7 @@ static int parse_tunnel_key(struct action_util *a, int *argc_p, char ***argv_p,
 	}
 
 	if (action == TCA_TUNNEL_KEY_ACT_SET &&
-	    (!has_src_ip || !has_dst_ip || !has_key_id)) {
+	    (!has_src_ip || !has_dst_ip)) {
 		fprintf(stderr, "set needs tunnel_key parameters\n");
 		explain();
 		return -1;
@@ -495,8 +493,7 @@ static int print_tunnel_key(struct action_util *au, FILE *f, struct rtattr *arg)
 	parse_rtattr_nested(tb, TCA_TUNNEL_KEY_MAX, arg);
 
 	if (!tb[TCA_TUNNEL_KEY_PARMS]) {
-		print_string(PRINT_FP, NULL, "%s",
-			     "[NULL tunnel_key parameters]");
+		fprintf(stderr, "Missing tunnel_key parameters\n");
 		return -1;
 	}
 	parm = RTA_DATA(tb[TCA_TUNNEL_KEY_PARMS]);

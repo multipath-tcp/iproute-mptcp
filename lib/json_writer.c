@@ -75,7 +75,7 @@ static void jsonw_puts(json_writer_t *self, const char *str)
 			fputs("\\b", self->out);
 			break;
 		case '\\':
-			fputs("\\n", self->out);
+			fputs("\\\\", self->out);
 			break;
 		case '"':
 			fputs("\\\"", self->out);
@@ -211,6 +211,11 @@ void jsonw_float(json_writer_t *self, double num)
 	jsonw_printf(self, "%g", num);
 }
 
+void jsonw_hhu(json_writer_t *self, unsigned char num)
+{
+	jsonw_printf(self, "%hhu", num);
+}
+
 void jsonw_hu(json_writer_t *self, unsigned short num)
 {
 	jsonw_printf(self, "%hu", num);
@@ -231,12 +236,12 @@ void jsonw_xint(json_writer_t *self, uint64_t num)
 	jsonw_printf(self, "%"PRIx64, num);
 }
 
-void jsonw_luint(json_writer_t *self, unsigned long int num)
+void jsonw_luint(json_writer_t *self, unsigned long num)
 {
 	jsonw_printf(self, "%lu", num);
 }
 
-void jsonw_lluint(json_writer_t *self, unsigned long long int num)
+void jsonw_lluint(json_writer_t *self, unsigned long long num)
 {
 	jsonw_printf(self, "%llu", num);
 }
@@ -288,6 +293,12 @@ void jsonw_xint_field(json_writer_t *self, const char *prop, uint64_t num)
 	jsonw_xint(self, num);
 }
 
+void jsonw_hhu_field(json_writer_t *self, const char *prop, unsigned char num)
+{
+	jsonw_name(self, prop);
+	jsonw_hhu(self, num);
+}
+
 void jsonw_hu_field(json_writer_t *self, const char *prop, unsigned short num)
 {
 	jsonw_name(self, prop);
@@ -296,7 +307,7 @@ void jsonw_hu_field(json_writer_t *self, const char *prop, unsigned short num)
 
 void jsonw_luint_field(json_writer_t *self,
 			const char *prop,
-			unsigned long int num)
+			unsigned long num)
 {
 	jsonw_name(self, prop);
 	jsonw_luint(self, num);
@@ -304,7 +315,7 @@ void jsonw_luint_field(json_writer_t *self,
 
 void jsonw_lluint_field(json_writer_t *self,
 			const char *prop,
-			unsigned long long int num)
+			unsigned long long num)
 {
 	jsonw_name(self, prop);
 	jsonw_lluint(self, num);

@@ -182,11 +182,13 @@ static int count_spaces(const char *line)
 
 static void load_ugly_table(FILE *fp)
 {
-	char buf[2048];
+	char *buf = NULL;
+	size_t buflen = 0;
+	ssize_t nread;
 	struct nstat_ent *db = NULL;
 	struct nstat_ent *n;
 
-	while (fgets(buf, sizeof(buf), fp) != NULL) {
+	while ((nread = getline(&buf, &buflen, fp)) != -1) {
 		char idbuf[4096];
 		int  off;
 		char *p;
@@ -223,7 +225,8 @@ static void load_ugly_table(FILE *fp)
 			p = next;
 		}
 		n = db;
-		if (fgets(buf, sizeof(buf), fp) == NULL)
+		nread = getline(&buf, &buflen, fp);
+		if (nread == -1)
 			abort();
 		count2 = count_spaces(buf);
 		if (count2 > count1)
@@ -242,6 +245,7 @@ static void load_ugly_table(FILE *fp)
 				n = n->next;
 		} while (p > buf + off + 2);
 	}
+	free(buf);
 
 	while (db) {
 		n = db;
@@ -540,18 +544,18 @@ static void usage(void) __attribute__((noreturn));
 static void usage(void)
 {
 	fprintf(stderr,
-"Usage: nstat [OPTION] [ PATTERN [ PATTERN ] ]\n"
-"   -h, --help           this message\n"
-"   -a, --ignore         ignore history\n"
-"   -d, --scan=SECS      sample every statistics every SECS\n"
-"   -j, --json           format output in JSON\n"
-"   -n, --nooutput       do history only\n"
-"   -p, --pretty         pretty print\n"
-"   -r, --reset          reset history\n"
-"   -s, --noupdate       don't update history\n"
-"   -t, --interval=SECS  report average over the last SECS\n"
-"   -V, --version        output version information\n"
-"   -z, --zeros          show entries with zero activity\n");
+		"Usage: nstat [OPTION] [ PATTERN [ PATTERN ] ]\n"
+		"   -h, --help		this message\n"
+		"   -a, --ignore	ignore history\n"
+		"   -d, --scan=SECS	sample every statistics every SECS\n"
+		"   -j, --json		format output in JSON\n"
+		"   -n, --nooutput	do history only\n"
+		"   -p, --pretty	pretty print\n"
+		"   -r, --reset		reset history\n"
+		"   -s, --noupdate	don't update history\n"
+		"   -t, --interval=SECS	report average over the last SECS\n"
+		"   -V, --version	output version information\n"
+		"   -z, --zeros		show entries with zero activity\n");
 	exit(-1);
 }
 

@@ -23,24 +23,26 @@ static void print_explain(FILE *f)
 {
 	fprintf(f,
 		"Usage: ... bridge_slave [ fdb_flush ]\n"
-		"                        [ state STATE ]\n"
-		"                        [ priority PRIO ]\n"
-		"                        [ cost COST ]\n"
-		"                        [ guard {on | off} ]\n"
-		"                        [ hairpin {on | off} ]\n"
-		"                        [ fastleave {on | off} ]\n"
-		"                        [ root_block {on | off} ]\n"
-		"                        [ learning {on | off} ]\n"
-		"                        [ flood {on | off} ]\n"
-		"                        [ proxy_arp {on | off} ]\n"
-		"                        [ proxy_arp_wifi {on | off} ]\n"
-		"                        [ mcast_router MULTICAST_ROUTER ]\n"
-		"                        [ mcast_fast_leave {on | off} ]\n"
-		"                        [ mcast_flood {on | off} ]\n"
-		"                        [ group_fwd_mask MASK ]\n"
-		"                        [ neigh_suppress {on | off} ]\n"
-		"                        [ vlan_tunnel {on | off} ]\n"
-		"                        [ isolated {on | off} ]\n"
+		"			[ state STATE ]\n"
+		"			[ priority PRIO ]\n"
+		"			[ cost COST ]\n"
+		"			[ guard {on | off} ]\n"
+		"			[ hairpin {on | off} ]\n"
+		"			[ fastleave {on | off} ]\n"
+		"			[ root_block {on | off} ]\n"
+		"			[ learning {on | off} ]\n"
+		"			[ flood {on | off} ]\n"
+		"			[ proxy_arp {on | off} ]\n"
+		"			[ proxy_arp_wifi {on | off} ]\n"
+		"			[ mcast_router MULTICAST_ROUTER ]\n"
+		"			[ mcast_fast_leave {on | off} ]\n"
+		"			[ mcast_flood {on | off} ]\n"
+		"			[ mcast_to_unicast {on | off} ]\n"
+		"			[ group_fwd_mask MASK ]\n"
+		"			[ neigh_suppress {on | off} ]\n"
+		"			[ vlan_tunnel {on | off} ]\n"
+		"			[ isolated {on | off} ]\n"
+		"			[ backup_port DEVICE ] [ nobackup_port ]\n"
 	);
 }
 
@@ -167,11 +169,11 @@ static void bridge_slave_print_opt(struct link_util *lu, FILE *f,
 			     rta_getattr_u8(tb[IFLA_BRPORT_UNICAST_FLOOD]));
 
 	if (tb[IFLA_BRPORT_ID])
-		print_0xhex(PRINT_ANY, "id", "port_id 0x%x ",
+		print_0xhex(PRINT_ANY, "id", "port_id %#llx ",
 			    rta_getattr_u16(tb[IFLA_BRPORT_ID]));
 
 	if (tb[IFLA_BRPORT_NO])
-		print_0xhex(PRINT_ANY, "no", "port_no 0x%x ",
+		print_0xhex(PRINT_ANY, "no", "port_no %#llx ",
 			   rta_getattr_u16(tb[IFLA_BRPORT_NO]));
 
 	if (tb[IFLA_BRPORT_DESIGNATED_PORT])
@@ -256,6 +258,10 @@ static void bridge_slave_print_opt(struct link_util *lu, FILE *f,
 		_print_onoff(f, "mcast_flood", "mcast_flood",
 			     rta_getattr_u8(tb[IFLA_BRPORT_MCAST_FLOOD]));
 
+	if (tb[IFLA_BRPORT_MCAST_TO_UCAST])
+		_print_onoff(f, "mcast_to_unicast", "mcast_to_unicast",
+			     rta_getattr_u8(tb[IFLA_BRPORT_MCAST_TO_UCAST]));
+
 	if (tb[IFLA_BRPORT_NEIGH_SUPPRESS])
 		_print_onoff(f, "neigh_suppress", "neigh_suppress",
 			     rta_getattr_u8(tb[IFLA_BRPORT_NEIGH_SUPPRESS]));
@@ -266,7 +272,7 @@ static void bridge_slave_print_opt(struct link_util *lu, FILE *f,
 
 		fwd_mask = rta_getattr_u16(tb[IFLA_BRPORT_GROUP_FWD_MASK]);
 		print_0xhex(PRINT_ANY, "group_fwd_mask",
-			    "group_fwd_mask 0x%x ", fwd_mask);
+			    "group_fwd_mask %#llx ", fwd_mask);
 		_bitmask2str(fwd_mask, convbuf, sizeof(convbuf), fwd_mask_tbl);
 		print_string(PRINT_ANY, "group_fwd_mask_str",
 			     "group_fwd_mask_str %s ", convbuf);
@@ -279,6 +285,13 @@ static void bridge_slave_print_opt(struct link_util *lu, FILE *f,
 	if (tb[IFLA_BRPORT_ISOLATED])
 		_print_onoff(f, "isolated", "isolated",
 			     rta_getattr_u8(tb[IFLA_BRPORT_ISOLATED]));
+
+	if (tb[IFLA_BRPORT_BACKUP_PORT]) {
+		int backup_p = rta_getattr_u32(tb[IFLA_BRPORT_BACKUP_PORT]);
+
+		print_string(PRINT_ANY, "backup_port", "backup_port %s ",
+			     ll_index_to_name(backup_p));
+	}
 }
 
 static void bridge_slave_parse_on_off(char *arg_name, char *arg_val,
@@ -349,6 +362,10 @@ static int bridge_slave_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			bridge_slave_parse_on_off("mcast_flood", *argv, n,
 						  IFLA_BRPORT_MCAST_FLOOD);
+		} else if (matches(*argv, "mcast_to_unicast") == 0) {
+			NEXT_ARG();
+			bridge_slave_parse_on_off("mcast_to_unicast", *argv, n,
+						  IFLA_BRPORT_MCAST_TO_UCAST);
 		} else if (matches(*argv, "proxy_arp") == 0) {
 			NEXT_ARG();
 			bridge_slave_parse_on_off("proxy_arp", *argv, n,
@@ -388,6 +405,16 @@ static int bridge_slave_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			bridge_slave_parse_on_off("isolated", *argv, n,
 						  IFLA_BRPORT_ISOLATED);
+		} else if (matches(*argv, "backup_port") == 0) {
+			int ifindex;
+
+			NEXT_ARG();
+			ifindex = ll_name_to_index(*argv);
+			if (!ifindex)
+				invarg("Device does not exist\n", *argv);
+			addattr32(n, 1024, IFLA_BRPORT_BACKUP_PORT, ifindex);
+		} else if (matches(*argv, "nobackup_port") == 0) {
+			addattr32(n, 1024, IFLA_BRPORT_BACKUP_PORT, 0);
 		} else if (matches(*argv, "help") == 0) {
 			explain();
 			return -1;

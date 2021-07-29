@@ -30,15 +30,16 @@
 #include "rt_names.h"
 #include "utils.h"
 
-static unsigned int filter_index, filter_vlan, filter_state;
+static unsigned int filter_index, filter_vlan, filter_state, filter_master;
 
 static void usage(void)
 {
 	fprintf(stderr,
 		"Usage: bridge fdb { add | append | del | replace } ADDR dev DEV\n"
 		"              [ self ] [ master ] [ use ] [ router ] [ extern_learn ]\n"
-		"              [ local | static | dynamic ] [ dst IPADDR ] [ vlan VID ]\n"
-		"              [ port PORT] [ vni VNI ] [ via DEV ]\n"
+		"              [ sticky ] [ local | static | dynamic ] [ dst IPADDR ]\n"
+		"              [ vlan VID ] [ port PORT] [ vni VNI ] [ via DEV ]\n"
+		"              [ src_vni VNI ]\n"
 		"       bridge fdb [ show [ br BRDEV ] [ brport DEV ] [ vlan VID ] [ state STATE ] ]\n");
 	exit(-1);
 }
@@ -101,6 +102,9 @@ static void fdb_print_flags(FILE *fp, unsigned int flags)
 	if (flags & NTF_MASTER)
 		print_string(PRINT_ANY, NULL, "%s ", "master");
 
+	if (flags & NTF_STICKY)
+		print_string(PRINT_ANY, NULL, "%s ", "sticky");
+
 	close_json_array(PRINT_JSON, NULL);
 }
 
@@ -123,7 +127,7 @@ static void fdb_print_stats(FILE *fp, const struct nda_cacheinfo *ci)
 	}
 }
 
-int print_fdb(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
+int print_fdb(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = arg;
 	struct ndmsg *r = NLMSG_DATA(n);
@@ -178,13 +182,10 @@ int print_fdb(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 				   "mac", "%s ", lladdr);
 	}
 
-	if (!filter_index && r->ndm_ifindex) {
-		if (!is_json_context())
-			fprintf(fp, "dev ");
+	if (!filter_index && r->ndm_ifindex)
 		print_color_string(PRINT_ANY, COLOR_IFNAME,
 				   "ifname", "dev %s ",
 				   ll_index_to_name(r->ndm_ifindex));
-	}
 
 	if (tb[NDA_DST]) {
 		int family = AF_INET;
@@ -256,20 +257,49 @@ int print_fdb(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 	return 0;
 }
 
+static int fdb_linkdump_filter(struct nlmsghdr *nlh, int reqlen)
+{
+	int err;
+
+	if (filter_index) {
+		struct ifinfomsg *ifm = NLMSG_DATA(nlh);
+
+		ifm->ifi_index = filter_index;
+	}
+
+	if (filter_master) {
+		err = addattr32(nlh, reqlen, IFLA_MASTER, filter_master);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+static int fdb_dump_filter(struct nlmsghdr *nlh, int reqlen)
+{
+	int err;
+
+	if (filter_index) {
+		struct ndmsg *ndm = NLMSG_DATA(nlh);
+
+		ndm->ndm_ifindex = filter_index;
+	}
+
+	if (filter_master) {
+		err = addattr32(nlh, reqlen, NDA_MASTER, filter_master);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 static int fdb_show(int argc, char **argv)
 {
-	struct {
-		struct nlmsghdr	n;
-		struct ifinfomsg	ifm;
-		char			buf[256];
-	} req = {
-		.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
-		.ifm.ifi_family = PF_BRIDGE,
-	};
-
 	char *filter_dev = NULL;
 	char *br = NULL;
-	int msg_size = sizeof(struct ifinfomsg);
+	int rc;
 
 	while (argc > 0) {
 		if ((strcmp(*argv, "brport") == 0) || strcmp(*argv, "dev") == 0) {
@@ -304,8 +334,7 @@ static int fdb_show(int argc, char **argv)
 			fprintf(stderr, "Cannot find bridge device \"%s\"\n", br);
 			return -1;
 		}
-		addattr32(&req.n, sizeof(req), IFLA_MASTER, br_ifindex);
-		msg_size += RTA_LENGTH(4);
+		filter_master = br_ifindex;
 	}
 
 	/*we'll keep around filter_dev for older kernels */
@@ -313,10 +342,13 @@ static int fdb_show(int argc, char **argv)
 		filter_index = ll_name_to_index(filter_dev);
 		if (!filter_index)
 			return nodev(filter_dev);
-		req.ifm.ifi_index = filter_index;
 	}
 
-	if (rtnl_dump_request(&rth, RTM_GETNEIGH, &req.ifm, msg_size) < 0) {
+	if (rth.flags & RTNL_HANDLE_F_STRICT_CHK)
+		rc = rtnl_neighdump_req(&rth, PF_BRIDGE, fdb_dump_filter);
+	else
+		rc = rtnl_fdb_linkdump_req_filter_fn(&rth, fdb_linkdump_filter);
+	if (rc < 0) {
 		perror("Cannot send dump request");
 		exit(1);
 	}
@@ -352,6 +384,7 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 	inet_prefix dst;
 	unsigned long port = 0;
 	unsigned long vni = ~0;
+	unsigned long src_vni = ~0;
 	unsigned int via = 0;
 	char *endptr;
 	short vid = -1;
@@ -385,6 +418,12 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 			if ((endptr && *endptr) ||
 			    (vni >> 24) || vni == ULONG_MAX)
 				invarg("invalid VNI\n", *argv);
+		} else if (strcmp(*argv, "src_vni") == 0) {
+			NEXT_ARG();
+			src_vni = strtoul(*argv, &endptr, 0);
+			if ((endptr && *endptr) ||
+			    (src_vni >> 24) || src_vni == ULONG_MAX)
+				invarg("invalid src VNI\n", *argv);
 		} else if (strcmp(*argv, "via") == 0) {
 			NEXT_ARG();
 			via = ll_name_to_index(*argv);
@@ -414,6 +453,8 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 			req.ndm.ndm_flags |= NTF_USE;
 		} else if (matches(*argv, "extern_learn") == 0) {
 			req.ndm.ndm_flags |= NTF_EXT_LEARNED;
+		} else if (matches(*argv, "sticky") == 0) {
+			req.ndm.ndm_flags |= NTF_STICKY;
 		} else {
 			if (strcmp(*argv, "to") == 0)
 				NEXT_ARG();
@@ -462,6 +503,8 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 	}
 	if (vni != ~0)
 		addattr32(&req.n, sizeof(req), NDA_VNI, vni);
+	if (src_vni != ~0)
+		addattr32(&req.n, sizeof(req), NDA_SRC_VNI, src_vni);
 	if (via)
 		addattr32(&req.n, sizeof(req), NDA_IFINDEX, via);
 

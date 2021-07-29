@@ -42,7 +42,7 @@ static void usage(void)
 	exit(-1);
 }
 
-static int print_token(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
+static int print_token(struct nlmsghdr *n, void *arg)
 {
 	struct rtnl_dump_args *args = arg;
 	FILE *fp = args->fp;
@@ -60,9 +60,9 @@ static int print_token(const struct sockaddr_nl *who, struct nlmsghdr *n, void *
 		return -1;
 
 	if (ifi->ifi_family != AF_INET6)
-		return -1;
+		return 0;
 	if (ifi->ifi_index == 0)
-		return -1;
+		return 0;
 	if (ifindex > 0 && ifi->ifi_index != ifindex)
 		return 0;
 	if (ifi->ifi_flags & (IFF_LOOPBACK | IFF_NOARP))
@@ -109,7 +109,7 @@ static int iptoken_list(int argc, char **argv)
 		argc--; argv++;
 	}
 
-	if (rtnl_wilddump_request(&rth, af, RTM_GETLINK) < 0) {
+	if (rtnl_linkdump_req(&rth, af) < 0) {
 		perror("Cannot send dump request");
 		return -1;
 	}

@@ -30,9 +30,10 @@
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: ... pie [ limit PACKETS ][ target TIME us]\n");
-	fprintf(stderr, "              [ tupdate TIME us][ alpha ALPHA ]");
-	fprintf(stderr, "[beta BETA ][bytemode | nobytemode][ecn | noecn ]\n");
+	fprintf(stderr,
+		"Usage: ... pie	[ limit PACKETS ][ target TIME us]\n"
+		"		[ tupdate TIME us][ alpha ALPHA ]"
+		"[beta BETA ][bytemode | nobytemode][ecn | noecn ]\n");
 }
 
 #define ALPHA_MAX 32
@@ -198,7 +199,7 @@ static int pie_print_xstats(struct qdisc_util *qu, FILE *f,
 	st = RTA_DATA(xstats);
 	/*prob is returned as a fracion of maximum integer value */
 	fprintf(f, "prob %f delay %uus avg_dq_rate %u\n",
-		(double)st->prob / (double)0xffffffff, st->delay,
+		(double)st->prob / UINT64_MAX, st->delay,
 		st->avg_dq_rate);
 	fprintf(f, "pkts_in %u overlimit %u dropped %u maxq %u ecn_mark %u\n",
 		st->packets_in, st->overlimit, st->dropped, st->maxq,

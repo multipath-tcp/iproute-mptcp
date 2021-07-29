@@ -119,6 +119,7 @@ tc \- show / manipulate traffic control settings
 .IR OPTIONS " := {"
 \fB[ -force ] -b\fR[\fIatch\fR] \fB[ filename ] \fR|
 \fB[ \fB-n\fR[\fIetns\fR] name \fB] \fR|
+\fB[ \fB-N\fR[\fIumeric\fR] \fB] \fR|
 \fB[ \fB-nm \fR| \fB-nam\fR[\fIes\fR] \fB] \fR|
 \fB[ \fR{ \fB-cf \fR| \fB-c\fR[\fIonf\fR] \fR} \fB[ filename ] \fB] \fR
 \fB[ -t\fR[imestamp\fR] \fB\] \fR| \fB[ -t\fR[short\fR] \fR| \fB[
@@ -708,6 +709,11 @@ to
 .BR help " }"
 
 .TP
+.BR "\-N" , " \-Numeric"
+Print the number of protocol, scope, dsfield, etc directly instead of
+converting it to human readable name.
+
+.TP
 .BR "\-cf" , " \-conf " <FILENAME>
 specifies path to the config file. This option is used in conjunction with other options (e.g.
 .BR -nm ")."
@@ -848,6 +854,7 @@ was written by Alexey N. Kuznetsov and added in Linux 2.2.
 .BR tc-mqprio (8),
 .BR tc-pfifo (8),
 .BR tc-pfifo_fast (8),
+.BR tc-pie (8),
 .BR tc-red (8),
 .BR tc-route (8),
 .BR tc-sfb (8),

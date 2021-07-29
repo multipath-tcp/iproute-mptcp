@@ -22,8 +22,14 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/uio.h>
+#include <linux/fib_rules.h>
+#include <linux/if_addrlabel.h>
+#include <linux/if_bridge.h>
+#include <linux/nexthop.h>
 
 #include "libnetlink.h"
+
+#define __aligned(x)		__attribute__((aligned(x)))
 
 #ifndef SOL_NETLINK
 #define SOL_NETLINK 270
@@ -62,6 +68,14 @@ static int err_attr_cb(const struct nlattr *attr, void *data)
 
 	tb[type] = attr;
 	return MNL_CB_OK;
+}
+
+static void print_ext_ack_msg(bool is_err, const char *msg)
+{
+	fprintf(stderr, "%s: %s", is_err ? "Error" : "Warning", msg);
+	if (msg[strlen(msg) - 1] != '.')
+		fprintf(stderr, ".");
+	fprintf(stderr, "\n");
 }
 
 /* dump netlink extended ack error message */
@@ -105,12 +119,29 @@ int nl_dump_ext_ack(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
 	if (msg && *msg != '\0') {
 		bool is_err = !!err->error;
 
-		fprintf(stderr, "%s: %s",
-			is_err ? "Error" : "Warning", msg);
-		if (msg[strlen(msg) - 1] != '.')
-			fprintf(stderr, ".");
-		fprintf(stderr, "\n");
+		print_ext_ack_msg(is_err, msg);
+		return is_err ? 1 : 0;
+	}
 
+	return 0;
+}
+
+int nl_dump_ext_ack_done(const struct nlmsghdr *nlh, int error)
+{
+	struct nlattr *tb[NLMSGERR_ATTR_MAX + 1] = {};
+	unsigned int hlen = sizeof(int);
+	const char *msg = NULL;
+
+	if (mnl_attr_parse(nlh, hlen, err_attr_cb, tb) != MNL_CB_OK)
+		return 0;
+
+	if (tb[NLMSGERR_ATTR_MSG])
+		msg = mnl_attr_get_str(tb[NLMSGERR_ATTR_MSG]);
+
+	if (msg && *msg != '\0') {
+		bool is_err = !!error;
+
+		print_ext_ack_msg(is_err, msg);
 		return is_err ? 1 : 0;
 	}
 
@@ -124,7 +155,30 @@ int nl_dump_ext_ack(const struct nlmsghdr *nlh, nl_ext_ack_fn_t errfn)
 {
 	return 0;
 }
+
+int nl_dump_ext_ack_done(const struct nlmsghdr *nlh, int error)
+{
+	return 0;
+}
 #endif
+
+/* Older kernels may not support strict dump and filtering */
+void rtnl_set_strict_dump(struct rtnl_handle *rth)
+{
+	int one = 1;
+
+	if (setsockopt(rth->fd, SOL_NETLINK, NETLINK_GET_STRICT_CHK,
+		       &one, sizeof(one)) < 0)
+		return;
+
+	rth->flags |= RTNL_HANDLE_F_STRICT_CHK;
+}
+
+int rtnl_add_nl_group(struct rtnl_handle *rth, unsigned int group)
+{
+	return setsockopt(rth->fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP,
+			  &group, sizeof(group));
+}
 
 void rtnl_close(struct rtnl_handle *rth)
 {
@@ -199,47 +253,204 @@ int rtnl_open(struct rtnl_handle *rth, unsigned int subscriptions)
 	return rtnl_open_byproto(rth, subscriptions, NETLINK_ROUTE);
 }
 
-int rtnl_wilddump_request(struct rtnl_handle *rth, int family, int type)
-{
-	return rtnl_wilddump_req_filter(rth, family, type, RTEXT_FILTER_VF);
-}
-
-int rtnl_wilddump_req_filter(struct rtnl_handle *rth, int family, int type,
-			    __u32 filt_mask)
+int rtnl_nexthopdump_req(struct rtnl_handle *rth, int family,
+			 req_filter_fn_t filter_fn)
 {
 	struct {
 		struct nlmsghdr nlh;
-		struct ifinfomsg ifm;
-		/* attribute has to be NLMSG aligned */
-		struct rtattr ext_req __attribute__ ((aligned(NLMSG_ALIGNTO)));
-		__u32 ext_filter_mask;
+		struct nhmsg nhm;
+		char buf[128];
 	} req = {
-		.nlh.nlmsg_len = sizeof(req),
-		.nlh.nlmsg_type = type,
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct nhmsg)),
+		.nlh.nlmsg_type = RTM_GETNEXTHOP,
 		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
 		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
-		.ifm.ifi_family = family,
-		.ext_req.rta_type = IFLA_EXT_MASK,
-		.ext_req.rta_len = RTA_LENGTH(sizeof(__u32)),
-		.ext_filter_mask = filt_mask,
+		.nhm.nh_family = family,
+	};
+
+	if (filter_fn) {
+		int err;
+
+		err = filter_fn(&req.nlh, sizeof(req));
+		if (err)
+			return err;
+	}
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_addrdump_req(struct rtnl_handle *rth, int family,
+		      req_filter_fn_t filter_fn)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct ifaddrmsg ifm;
+		char buf[128];
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifaddrmsg)),
+		.nlh.nlmsg_type = RTM_GETADDR,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.ifm.ifa_family = family,
+	};
+
+	if (filter_fn) {
+		int err;
+
+		err = filter_fn(&req.nlh, sizeof(req));
+		if (err)
+			return err;
+	}
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_addrlbldump_req(struct rtnl_handle *rth, int family)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct ifaddrlblmsg ifal;
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifaddrlblmsg)),
+		.nlh.nlmsg_type = RTM_GETADDRLABEL,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.ifal.ifal_family = family,
 	};
 
 	return send(rth->fd, &req, sizeof(req), 0);
 }
 
-int rtnl_wilddump_req_filter_fn(struct rtnl_handle *rth, int family, int type,
+int rtnl_routedump_req(struct rtnl_handle *rth, int family,
+		       req_filter_fn_t filter_fn)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct rtmsg rtm;
+		char buf[128];
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg)),
+		.nlh.nlmsg_type = RTM_GETROUTE,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.rtm.rtm_family = family,
+	};
+
+	if (filter_fn) {
+		int err;
+
+		err = filter_fn(&req.nlh, sizeof(req));
+		if (err)
+			return err;
+	}
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_ruledump_req(struct rtnl_handle *rth, int family)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct fib_rule_hdr frh;
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct fib_rule_hdr)),
+		.nlh.nlmsg_type = RTM_GETRULE,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.frh.family = family
+	};
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_neighdump_req(struct rtnl_handle *rth, int family,
+		       req_filter_fn_t filter_fn)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct ndmsg ndm;
+		char buf[256];
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg)),
+		.nlh.nlmsg_type = RTM_GETNEIGH,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.ndm.ndm_family = family,
+	};
+
+	if (filter_fn) {
+		int err;
+
+		err = filter_fn(&req.nlh, sizeof(req));
+		if (err)
+			return err;
+	}
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_neightbldump_req(struct rtnl_handle *rth, int family)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct ndtmsg ndtmsg;
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndtmsg)),
+		.nlh.nlmsg_type = RTM_GETNEIGHTBL,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.ndtmsg.ndtm_family = family,
+	};
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_mdbdump_req(struct rtnl_handle *rth, int family)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct br_port_msg bpm;
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct br_port_msg)),
+		.nlh.nlmsg_type = RTM_GETMDB,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.bpm.family = family,
+	};
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_netconfdump_req(struct rtnl_handle *rth, int family)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct netconfmsg ncm;
+		char buf[0] __aligned(NLMSG_ALIGNTO);
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(NLMSG_ALIGN(sizeof(struct netconfmsg))),
+		.nlh.nlmsg_type = RTM_GETNETCONF,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.ncm.ncm_family = family,
+	};
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_nsiddump_req_filter_fn(struct rtnl_handle *rth, int family,
 				req_filter_fn_t filter_fn)
 {
 	struct {
 		struct nlmsghdr nlh;
-		struct ifinfomsg ifm;
+		struct rtgenmsg rtm;
 		char buf[1024];
 	} req = {
-		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
-		.nlh.nlmsg_type = type,
+		.nlh.nlmsg_len = NLMSG_LENGTH(NLMSG_ALIGN(sizeof(struct rtgenmsg))),
+		.nlh.nlmsg_type = RTM_GETNSID,
 		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
 		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
-		.ifm.ifi_family = family,
+		.rtm.rtgen_family = family,
 	};
 	int err;
 
@@ -253,8 +464,111 @@ int rtnl_wilddump_req_filter_fn(struct rtnl_handle *rth, int family, int type,
 	return send(rth->fd, &req, req.nlh.nlmsg_len, 0);
 }
 
-int rtnl_wilddump_stats_req_filter(struct rtnl_handle *rth, int fam, int type,
-				   __u32 filt_mask)
+static int __rtnl_linkdump_req(struct rtnl_handle *rth, int family)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct ifinfomsg ifm;
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
+		.nlh.nlmsg_type = RTM_GETLINK,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.ifm.ifi_family = family,
+	};
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_linkdump_req(struct rtnl_handle *rth, int family)
+{
+	if (family == AF_UNSPEC)
+		return rtnl_linkdump_req_filter(rth, family, RTEXT_FILTER_VF);
+
+	return __rtnl_linkdump_req(rth, family);
+}
+
+int rtnl_linkdump_req_filter(struct rtnl_handle *rth, int family,
+			    __u32 filt_mask)
+{
+	if (family == AF_UNSPEC || family == AF_BRIDGE) {
+		struct {
+			struct nlmsghdr nlh;
+			struct ifinfomsg ifm;
+			/* attribute has to be NLMSG aligned */
+			struct rtattr ext_req __aligned(NLMSG_ALIGNTO);
+			__u32 ext_filter_mask;
+		} req = {
+			.nlh.nlmsg_len = sizeof(req),
+			.nlh.nlmsg_type = RTM_GETLINK,
+			.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+			.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+			.ifm.ifi_family = family,
+			.ext_req.rta_type = IFLA_EXT_MASK,
+			.ext_req.rta_len = RTA_LENGTH(sizeof(__u32)),
+			.ext_filter_mask = filt_mask,
+		};
+
+		return send(rth->fd, &req, sizeof(req), 0);
+	}
+
+	return __rtnl_linkdump_req(rth, family);
+}
+
+int rtnl_linkdump_req_filter_fn(struct rtnl_handle *rth, int family,
+				req_filter_fn_t filter_fn)
+{
+	if (family == AF_UNSPEC || family == AF_PACKET) {
+		struct {
+			struct nlmsghdr nlh;
+			struct ifinfomsg ifm;
+			char buf[1024];
+		} req = {
+			.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
+			.nlh.nlmsg_type = RTM_GETLINK,
+			.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+			.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+			.ifm.ifi_family = family,
+		};
+		int err;
+
+		if (!filter_fn)
+			return -EINVAL;
+
+		err = filter_fn(&req.nlh, sizeof(req));
+		if (err)
+			return err;
+
+		return send(rth->fd, &req, req.nlh.nlmsg_len, 0);
+	}
+
+	return __rtnl_linkdump_req(rth, family);
+}
+
+int rtnl_fdb_linkdump_req_filter_fn(struct rtnl_handle *rth,
+				    req_filter_fn_t filter_fn)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct ifinfomsg ifm;
+		char buf[128];
+	} req = {
+		.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
+		.nlh.nlmsg_type = RTM_GETNEIGH,
+		.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
+		.nlh.nlmsg_seq = rth->dump = ++rth->seq,
+		.ifm.ifi_family = PF_BRIDGE,
+	};
+	int err;
+
+	err = filter_fn(&req.nlh, sizeof(req));
+	if (err)
+		return err;
+
+	return send(rth->fd, &req, sizeof(req), 0);
+}
+
+int rtnl_statsdump_req_filter(struct rtnl_handle *rth, int fam, __u32 filt_mask)
 {
 	struct {
 		struct nlmsghdr nlh;
@@ -263,7 +577,7 @@ int rtnl_wilddump_stats_req_filter(struct rtnl_handle *rth, int fam, int type,
 
 	memset(&req, 0, sizeof(req));
 	req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct if_stats_msg));
-	req.nlh.nlmsg_type = type;
+	req.nlh.nlmsg_type = RTM_GETSTATS;
 	req.nlh.nlmsg_flags = NLM_F_DUMP|NLM_F_REQUEST;
 	req.nlh.nlmsg_pid = 0;
 	req.nlh.nlmsg_seq = rth->dump = ++rth->seq;
@@ -366,6 +680,10 @@ static int rtnl_dump_done(struct nlmsghdr *h)
 	}
 
 	if (len < 0) {
+		/* check for any messages returned from kernel */
+		if (nl_dump_ext_ack_done(h, len))
+			return len;
+
 		errno = -len;
 		switch (errno) {
 		case ENOENT:
@@ -442,6 +760,8 @@ static int rtnl_recvmsg(int fd, struct msghdr *msg, char **answer)
 	if (len < 0)
 		return len;
 
+	if (len < 32768)
+		len = 32768;
 	buf = malloc(len);
 	if (!buf) {
 		fprintf(stderr, "malloc error: not enough buffer\n");
@@ -465,8 +785,8 @@ static int rtnl_recvmsg(int fd, struct msghdr *msg, char **answer)
 	return len;
 }
 
-int rtnl_dump_filter_l(struct rtnl_handle *rth,
-		       const struct rtnl_dump_filter_arg *arg)
+static int rtnl_dump_filter_l(struct rtnl_handle *rth,
+			      const struct rtnl_dump_filter_arg *arg)
 {
 	struct sockaddr_nl nladdr;
 	struct iovec iov;
@@ -528,7 +848,7 @@ int rtnl_dump_filter_l(struct rtnl_handle *rth,
 				}
 
 				if (!rth->dump_fp) {
-					err = a->filter(&nladdr, h, a->arg1);
+					err = a->filter(h, a->arg1);
 					if (err < 0) {
 						free(buf);
 						return err;
@@ -617,6 +937,7 @@ static int __rtnl_talk_iov(struct rtnl_handle *rtnl, struct iovec *iov,
 	msg.msg_iovlen = 1;
 	i = 0;
 	while (1) {
+next:
 		status = rtnl_recvmsg(rtnl->fd, &msg, &buf);
 		++i;
 
@@ -680,6 +1001,8 @@ static int __rtnl_talk_iov(struct rtnl_handle *rtnl, struct iovec *iov,
 				else
 					free(buf);
 
+				if (i < iovlen)
+					goto next;
 				return error ? -i : 0;
 			}
 
@@ -729,13 +1052,6 @@ int rtnl_talk_iov(struct rtnl_handle *rtnl, struct iovec *iovec, size_t iovlen,
 		  struct nlmsghdr **answer)
 {
 	return __rtnl_talk_iov(rtnl, iovec, iovlen, answer, true, NULL);
-}
-
-int rtnl_talk_extack(struct rtnl_handle *rtnl, struct nlmsghdr *n,
-		     struct nlmsghdr **answer,
-		     nl_ext_ack_fn_t errfn)
-{
-	return __rtnl_talk(rtnl, n, answer, true, errfn);
 }
 
 int rtnl_talk_suppress_rtnl_errmsg(struct rtnl_handle *rtnl, struct nlmsghdr *n,
@@ -837,7 +1153,7 @@ int rtnl_listen(struct rtnl_handle *rtnl,
 				exit(1);
 			}
 
-			err = handler(&nladdr, &ctrl, h, jarg);
+			err = handler(&ctrl, h, jarg);
 			if (err < 0)
 				return err;
 
@@ -858,8 +1174,7 @@ int rtnl_listen(struct rtnl_handle *rtnl,
 int rtnl_from_file(FILE *rtnl, rtnl_listen_filter_t handler,
 		   void *jarg)
 {
-	int status;
-	struct sockaddr_nl nladdr = { .nl_family = AF_NETLINK };
+	size_t status;
 	char buf[16384];
 	struct nlmsghdr *h = (struct nlmsghdr *)buf;
 
@@ -869,14 +1184,15 @@ int rtnl_from_file(FILE *rtnl, rtnl_listen_filter_t handler,
 
 		status = fread(&buf, 1, sizeof(*h), rtnl);
 
-		if (status < 0) {
-			if (errno == EINTR)
-				continue;
-			perror("rtnl_from_file: fread");
+		if (status == 0 && feof(rtnl))
+			return 0;
+		if (status != sizeof(*h)) {
+			if (ferror(rtnl))
+				perror("rtnl_from_file: fread");
+			if (feof(rtnl))
+				fprintf(stderr, "rtnl-from_file: truncated message\n");
 			return -1;
 		}
-		if (status == 0)
-			return 0;
 
 		len = h->nlmsg_len;
 		l = len - sizeof(*h);
@@ -889,16 +1205,15 @@ int rtnl_from_file(FILE *rtnl, rtnl_listen_filter_t handler,
 
 		status = fread(NLMSG_DATA(h), 1, NLMSG_ALIGN(l), rtnl);
 
-		if (status < 0) {
-			perror("rtnl_from_file: fread");
-			return -1;
-		}
-		if (status < l) {
-			fprintf(stderr, "rtnl-from_file: truncated message\n");
+		if (status != NLMSG_ALIGN(l)) {
+			if (ferror(rtnl))
+				perror("rtnl_from_file: fread");
+			if (feof(rtnl))
+				fprintf(stderr, "rtnl-from_file: truncated message\n");
 			return -1;
 		}
 
-		err = handler(&nladdr, NULL, h, jarg);
+		err = handler(NULL, h, jarg);
 		if (err < 0)
 			return err;
 	}
@@ -1063,6 +1378,7 @@ struct rtattr *rta_nest(struct rtattr *rta, int maxlen, int type)
 	struct rtattr *nest = RTA_TAIL(rta);
 
 	rta_addattr_l(rta, maxlen, type, NULL, 0);
+	nest->rta_type |= NLA_F_NESTED;
 
 	return nest;
 }
@@ -1095,23 +1411,6 @@ int parse_rtattr_flags(struct rtattr *tb[], int max, struct rtattr *rta,
 		fprintf(stderr, "!!!Deficit %d, rta_len=%d\n",
 			len, rta->rta_len);
 	return 0;
-}
-
-int parse_rtattr_byindex(struct rtattr *tb[], int max,
-			 struct rtattr *rta, int len)
-{
-	int i = 0;
-
-	memset(tb, 0, sizeof(struct rtattr *) * max);
-	while (RTA_OK(rta, len)) {
-		if (rta->rta_type <= max && i < max)
-			tb[i++] = rta;
-		rta = RTA_NEXT(rta, len);
-	}
-	if (len)
-		fprintf(stderr, "!!!Deficit %d, rta_len=%d\n",
-			len, rta->rta_len);
-	return i;
 }
 
 struct rtattr *parse_rtattr_one(int type, struct rtattr *rta, int len)

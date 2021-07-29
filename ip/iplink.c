@@ -54,75 +54,77 @@ void iplink_usage(void)
 	if (iplink_have_newlink()) {
 		fprintf(stderr,
 			"Usage: ip link add [link DEV] [ name ] NAME\n"
-			"                   [ txqueuelen PACKETS ]\n"
-			"                   [ address LLADDR ]\n"
-			"                   [ broadcast LLADDR ]\n"
-			"                   [ mtu MTU ] [index IDX ]\n"
-			"                   [ numtxqueues QUEUE_COUNT ]\n"
-			"                   [ numrxqueues QUEUE_COUNT ]\n"
-			"                   type TYPE [ ARGS ]\n"
+			"		    [ txqueuelen PACKETS ]\n"
+			"		    [ address LLADDR ]\n"
+			"		    [ broadcast LLADDR ]\n"
+			"		    [ mtu MTU ] [index IDX ]\n"
+			"		    [ numtxqueues QUEUE_COUNT ]\n"
+			"		    [ numrxqueues QUEUE_COUNT ]\n"
+			"		    type TYPE [ ARGS ]\n"
 			"\n"
-			"       ip link delete { DEVICE | dev DEVICE | group DEVGROUP } type TYPE [ ARGS ]\n"
+			"	ip link delete { DEVICE | dev DEVICE | group DEVGROUP } type TYPE [ ARGS ]\n"
 			"\n"
-			"       ip link set { DEVICE | dev DEVICE | group DEVGROUP }\n"
-			"	                  [ { up | down } ]\n"
-			"	                  [ type TYPE ARGS ]\n");
+			"	ip link set { DEVICE | dev DEVICE | group DEVGROUP }\n"
+			"			[ { up | down } ]\n"
+			"			[ type TYPE ARGS ]\n");
 	} else
 		fprintf(stderr,
 			"Usage: ip link set DEVICE [ { up | down } ]\n");
 
 	fprintf(stderr,
-		"	                  [ arp { on | off } ]\n"
-		"	                  [ dynamic { on | off } ]\n"
-		"	                  [ multicast { on | off } ]\n"
-		"	                  [ allmulticast { on | off } ]\n"
-		"                         [ multipath { on | off | backup } ]\n"
-		"	                  [ promisc { on | off } ]\n"
-		"	                  [ trailers { on | off } ]\n"
-		"	                  [ carrier { on | off } ]\n"
-		"	                  [ txqueuelen PACKETS ]\n"
-		"	                  [ name NEWNAME ]\n"
-		"	                  [ address LLADDR ]\n"
-		"	                  [ broadcast LLADDR ]\n"
-		"	                  [ mtu MTU ]\n"
-		"	                  [ netns { PID | NAME } ]\n"
-		"	                  [ link-netns NAME | link-netnsid ID ]\n"
-		"			  [ alias NAME ]\n"
-		"	                  [ vf NUM [ mac LLADDR ]\n"
-		"				   [ vlan VLANID [ qos VLAN-QOS ] [ proto VLAN-PROTO ] ]\n"
-		"				   [ rate TXRATE ]\n"
-		"				   [ max_tx_rate TXRATE ]\n"
-		"				   [ min_tx_rate TXRATE ]\n"
-		"				   [ spoofchk { on | off} ]\n"
-		"				   [ query_rss { on | off} ]\n"
-		"				   [ state { auto | enable | disable} ] ]\n"
-		"				   [ trust { on | off} ] ]\n"
-		"				   [ node_guid { eui64 } ]\n"
-		"				   [ port_guid { eui64 } ]\n"
-		"			  [ xdp { off |\n"
+		"		[ arp { on | off } ]\n"
+		"		[ dynamic { on | off } ]\n"
+		"		[ multicast { on | off } ]\n"
+		"		[ allmulticast { on | off } ]\n"
+		"               [ multipath { on | off | backup } ]\n"
+		"		[ promisc { on | off } ]\n"
+		"		[ trailers { on | off } ]\n"
+		"		[ carrier { on | off } ]\n"
+		"		[ txqueuelen PACKETS ]\n"
+		"		[ name NEWNAME ]\n"
+		"		[ address LLADDR ]\n"
+		"		[ broadcast LLADDR ]\n"
+		"		[ mtu MTU ]\n"
+		"		[ netns { PID | NAME } ]\n"
+		"		[ link-netns NAME | link-netnsid ID ]\n"
+		"			[ alias NAME ]\n"
+		"			[ vf NUM [ mac LLADDR ]\n"
+		"				 [ vlan VLANID [ qos VLAN-QOS ] [ proto VLAN-PROTO ] ]\n"
+		"				 [ rate TXRATE ]\n"
+		"				 [ max_tx_rate TXRATE ]\n"
+		"				 [ min_tx_rate TXRATE ]\n"
+		"				 [ spoofchk { on | off} ]\n"
+		"				 [ query_rss { on | off} ]\n"
+		"				 [ state { auto | enable | disable} ] ]\n"
+		"				 [ trust { on | off} ] ]\n"
+		"				 [ node_guid { eui64 } ]\n"
+		"				 [ port_guid { eui64 } ]\n"
+		"			[ { xdp | xdpgeneric | xdpdrv | xdpoffload } { off |\n"
 		"				  object FILE [ section NAME ] [ verbose ] |\n"
 		"				  pinned FILE } ]\n"
-		"			  [ master DEVICE ][ vrf NAME ]\n"
-		"			  [ nomaster ]\n"
-		"			  [ addrgenmode { eui64 | none | stable_secret | random } ]\n"
-		"			  [ protodown { on | off } ]\n"
-		"			  [ gso_max_size BYTES ] | [ gso_max_segs PACKETS ]\n"
+		"			[ master DEVICE ][ vrf NAME ]\n"
+		"			[ nomaster ]\n"
+		"			[ addrgenmode { eui64 | none | stable_secret | random } ]\n"
+		"			[ protodown { on | off } ]\n"
+		"			[ gso_max_size BYTES ] | [ gso_max_segs PACKETS ]\n"
 		"\n"
-		"       ip link show [ DEVICE | group GROUP ] [up] [master DEV] [vrf NAME] [type TYPE]\n");
-
-	fprintf(stderr, "\n       ip link xstats type TYPE [ ARGS ]\n");
-	fprintf(stderr, "\n       ip link afstats [ dev DEVICE ]\n");
+		"	ip link show [ DEVICE | group GROUP ] [up] [master DEV] [vrf NAME] [type TYPE]\n"
+		"\n"
+		"	ip link xstats type TYPE [ ARGS ]\n"
+		"\n"
+		"	ip link afstats [ dev DEVICE ]\n");
 
 	if (iplink_have_newlink()) {
 		fprintf(stderr,
 			"\n"
-			"       ip link help [ TYPE ]\n"
+			"	ip link help [ TYPE ]\n"
 			"\n"
 			"TYPE := { vlan | veth | vcan | vxcan | dummy | ifb | macvlan | macvtap |\n"
-			"          bridge | bond | team | ipoib | ip6tnl | ipip | sit | vxlan |\n"
-			"          gre | gretap | erspan | ip6gre | ip6gretap | ip6erspan |\n"
-			"          vti | nlmon | team_slave | bond_slave | ipvlan | geneve |\n"
-			"          bridge_slave | vrf | macsec | netdevsim | rmnet }\n");
+			"	   bridge | bond | team | ipoib | ip6tnl | ipip | sit | vxlan |\n"
+			"	   gre | gretap | erspan | ip6gre | ip6gretap | ip6erspan |\n"
+			"	   vti | nlmon | team_slave | bond_slave | bridge_slave |\n"
+			"	   ipvlan | ipvtap | geneve | vrf | macsec | netdevsim | rmnet |\n"
+			"	   xfrm }\n");
 	}
 	exit(-1);
 }
@@ -200,8 +202,7 @@ static int get_addr_gen_mode(const char *mode)
 #if IPLINK_IOCTL_COMPAT
 static int have_rtnl_newlink = -1;
 
-static int accept_msg(const struct sockaddr_nl *who,
-		      struct rtnl_ctrl_data *ctrl,
+static int accept_msg(struct rtnl_ctrl_data *ctrl,
 		      struct nlmsghdr *n, void *arg)
 {
 	struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(n);
@@ -958,7 +959,8 @@ int iplink_parse(int argc, char **argv, struct iplink_req *req, char **type)
 	else if (!strcmp(name, dev))
 		name = dev;
 
-	if (dev && addr_len) {
+	if (dev && addr_len &&
+	    !(req->n.nlmsg_flags & NLM_F_CREATE)) {
 		int halen = nl_get_ll_addr_len(dev);
 
 		if (halen >= 0 && halen != addr_len) {
@@ -1097,14 +1099,17 @@ static int iplink_modify(int cmd, unsigned int flags, int argc, char **argv)
 	if (rtnl_talk(&rth, &req.n, NULL) < 0)
 		return -2;
 
+	/* remove device from cache; next use can refresh with new data */
+	ll_drop_by_index(req.i.ifi_index);
+
 	return 0;
 }
 
-int iplink_get(unsigned int flags, char *name, __u32 filt_mask)
+int iplink_get(char *name, __u32 filt_mask)
 {
 	struct iplink_req req = {
 		.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
-		.n.nlmsg_flags = NLM_F_REQUEST | flags,
+		.n.nlmsg_flags = NLM_F_REQUEST,
 		.n.nlmsg_type = RTM_GETLINK,
 		.i.ifi_family = preferred_family,
 	};
@@ -1120,7 +1125,7 @@ int iplink_get(unsigned int flags, char *name, __u32 filt_mask)
 		return -2;
 
 	open_json_object(NULL);
-	print_linkinfo(NULL, answer, stdout);
+	print_linkinfo(answer, stdout);
 	close_json_object();
 
 	free(answer);
@@ -1553,9 +1558,7 @@ struct af_stats_ctx {
 	int ifindex;
 };
 
-static int print_af_stats(const struct sockaddr_nl *who,
-			  struct nlmsghdr *n,
-			  void *arg)
+static int print_af_stats(struct nlmsghdr *n, void *arg)
 {
 	struct if_stats_msg *ifsm = NLMSG_DATA(n);
 	struct rtattr *tb[IFLA_STATS_MAX+1];
@@ -1618,9 +1621,7 @@ static int iplink_afstats(int argc, char **argv)
 		}
 	}
 
-	if (rtnl_wilddump_stats_req_filter(&rth, AF_UNSPEC,
-					   RTM_GETSTATS,
-					   filt_mask) < 0) {
+	if (rtnl_statsdump_req_filter(&rth, AF_UNSPEC, filt_mask) < 0) {
 		perror("Cannont send dump request");
 		return 1;
 	}

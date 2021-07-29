@@ -252,11 +252,11 @@ static int filter_vlan_check(__u16 vid, __u16 flags)
 	return 1;
 }
 
-static void open_vlan_port(int ifi_index)
+static void open_vlan_port(int ifi_index, const char *fmt)
 {
 	open_json_object(NULL);
-	print_string(PRINT_ANY, "ifname", "%s",
-		     ll_index_to_name(ifi_index));
+	print_color_string(PRINT_ANY, COLOR_IFNAME, "ifname", fmt,
+			   ll_index_to_name(ifi_index));
 	open_json_array(PRINT_JSON, "vlans");
 }
 
@@ -286,7 +286,7 @@ static void print_vlan_tunnel_info(FILE *fp, struct rtattr *tb, int ifindex)
 	__u32 last_tunid_start = 0;
 
 	if (!filter_vlan)
-		open_vlan_port(ifindex);
+		open_vlan_port(ifindex, "%s");
 
 	open_json_array(PRINT_JSON, "tunnel");
 	for (i = RTA_DATA(list); RTA_OK(i, rem); i = RTA_NEXT(i, rem)) {
@@ -331,7 +331,7 @@ static void print_vlan_tunnel_info(FILE *fp, struct rtattr *tb, int ifindex)
 			continue;
 
 		if (filter_vlan)
-			open_vlan_port(ifindex);
+			open_vlan_port(ifindex, "%s");
 
 		open_json_object(NULL);
 		print_range("vlan", last_vid_start, tunnel_vid);
@@ -347,9 +347,7 @@ static void print_vlan_tunnel_info(FILE *fp, struct rtattr *tb, int ifindex)
 		close_vlan_port();
 }
 
-static int print_vlan_tunnel(const struct sockaddr_nl *who,
-			     struct nlmsghdr *n,
-			     void *arg)
+static int print_vlan_tunnel(struct nlmsghdr *n, void *arg)
 {
 	struct ifinfomsg *ifm = NLMSG_DATA(n);
 	struct rtattr *tb[IFLA_MAX+1];
@@ -392,9 +390,7 @@ static int print_vlan_tunnel(const struct sockaddr_nl *who,
 	return 0;
 }
 
-static int print_vlan(const struct sockaddr_nl *who,
-		      struct nlmsghdr *n,
-		      void *arg)
+static int print_vlan(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = arg;
 	struct ifinfomsg *ifm = NLMSG_DATA(n);
@@ -467,7 +463,7 @@ static void print_one_vlan_stats(const struct bridge_vlan_xstats *vstats)
 	print_lluint(PRINT_ANY, "tx_bytes",
 		     "                   TX: %llu bytes",
 		     vstats->tx_bytes);
-	print_lluint(PRINT_ANY, "tx_packets", " %llu packets",
+	print_lluint(PRINT_ANY, "tx_packets", " %llu packets\n",
 		vstats->tx_packets);
 	close_json_object();
 }
@@ -476,7 +472,7 @@ static void print_vlan_stats_attr(struct rtattr *attr, int ifindex)
 {
 	struct rtattr *brtb[LINK_XSTATS_TYPE_MAX+1];
 	struct rtattr *i, *list;
-	const char *ifname;
+	bool found_vlan = false;
 	int rem;
 
 	parse_rtattr(brtb, LINK_XSTATS_TYPE_MAX, RTA_DATA(attr),
@@ -486,12 +482,6 @@ static void print_vlan_stats_attr(struct rtattr *attr, int ifindex)
 
 	list = brtb[LINK_XSTATS_TYPE_BRIDGE];
 	rem = RTA_PAYLOAD(list);
-
-	ifname = ll_index_to_name(ifindex);
-	open_json_object(ifname);
-
-	print_color_string(PRINT_FP, COLOR_IFNAME,
-			   NULL, "%-16s", ifname);
 
 	for (i = RTA_DATA(list); RTA_OK(i, rem); i = RTA_NEXT(i, rem)) {
 		const struct bridge_vlan_xstats *vstats = RTA_DATA(i);
@@ -507,15 +497,22 @@ static void print_vlan_stats_attr(struct rtattr *attr, int ifindex)
 		    !(vstats->flags & BRIDGE_VLAN_INFO_BRENTRY))
 			continue;
 
+		/* found vlan stats, first time print the interface name */
+		if (!found_vlan) {
+			open_vlan_port(ifindex, "%-16s");
+			found_vlan = true;
+		} else {
+			print_string(PRINT_FP, NULL, "%-16s", "");
+		}
 		print_one_vlan_stats(vstats);
 	}
-	close_json_object();
 
+	/* vlan_port is opened only if there are any vlan stats */
+	if (found_vlan)
+		close_vlan_port();
 }
 
-static int print_vlan_stats(const struct sockaddr_nl *who,
-			    struct nlmsghdr *n,
-			    void *arg)
+static int print_vlan_stats(struct nlmsghdr *n, void *arg)
 {
 	struct if_stats_msg *ifsm = NLMSG_DATA(n);
 	struct rtattr *tb[IFLA_STATS_MAX+1];
@@ -575,7 +572,7 @@ static int vlan_show(int argc, char **argv)
 	new_json_obj(json);
 
 	if (!show_stats) {
-		if (rtnl_wilddump_req_filter(&rth, PF_BRIDGE, RTM_GETLINK,
+		if (rtnl_linkdump_req_filter(&rth, PF_BRIDGE,
 					     (compress_vlans ?
 					      RTEXT_FILTER_BRVLAN_COMPRESSED :
 					      RTEXT_FILTER_BRVLAN)) < 0) {
@@ -603,9 +600,7 @@ static int vlan_show(int argc, char **argv)
 		__u32 filt_mask;
 
 		filt_mask = IFLA_STATS_FILTER_BIT(IFLA_STATS_LINK_XSTATS);
-		if (rtnl_wilddump_stats_req_filter(&rth, AF_UNSPEC,
-						   RTM_GETSTATS,
-						   filt_mask) < 0) {
+		if (rtnl_statsdump_req_filter(&rth, AF_UNSPEC, filt_mask) < 0) {
 			perror("Cannont send dump request");
 			exit(1);
 		}
@@ -619,9 +614,7 @@ static int vlan_show(int argc, char **argv)
 		}
 
 		filt_mask = IFLA_STATS_FILTER_BIT(IFLA_STATS_LINK_XSTATS_SLAVE);
-		if (rtnl_wilddump_stats_req_filter(&rth, AF_UNSPEC,
-						   RTM_GETSTATS,
-						   filt_mask) < 0) {
+		if (rtnl_statsdump_req_filter(&rth, AF_UNSPEC, filt_mask) < 0) {
 			perror("Cannont send slave dump request");
 			exit(1);
 		}
@@ -643,7 +636,7 @@ void print_vlan_info(struct rtattr *tb, int ifindex)
 	int rem = RTA_PAYLOAD(list);
 	__u16 last_vid_start = 0;
 
-	open_vlan_port(ifindex);
+	open_vlan_port(ifindex, "%s");
 
 	for (i = RTA_DATA(list); RTA_OK(i, rem); i = RTA_NEXT(i, rem)) {
 		struct bridge_vlan_info *vinfo;

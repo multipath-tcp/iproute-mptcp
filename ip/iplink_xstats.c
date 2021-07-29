@@ -65,17 +65,18 @@ int iplink_ifla_xstats(int argc, char **argv)
 	else
 		filt_mask = IFLA_STATS_FILTER_BIT(IFLA_STATS_LINK_XSTATS);
 
-	if (rtnl_wilddump_stats_req_filter(&rth, AF_UNSPEC,
-					   RTM_GETSTATS,
-					   filt_mask) < 0) {
+	if (rtnl_statsdump_req_filter(&rth, AF_UNSPEC, filt_mask) < 0) {
 		perror("Cannont send dump request");
 		return -1;
 	}
 
+	new_json_obj(json);
 	if (rtnl_dump_filter(&rth, lu->print_ifla_xstats, stdout) < 0) {
+		delete_json_obj();
 		fprintf(stderr, "Dump terminated\n");
 		return -1;
 	}
+	delete_json_obj();
 
 	return 0;
 }

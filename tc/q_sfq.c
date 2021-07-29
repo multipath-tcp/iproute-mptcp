@@ -26,12 +26,13 @@
 
 static void explain(void)
 {
-	fprintf(stderr, "Usage: ... sfq [ limit NUMBER ] [ perturb SECS ] [ quantum BYTES ]\n");
-	fprintf(stderr, "               [ divisor NUMBER ] [ flows NUMBER] [ depth NUMBER ]\n");
-	fprintf(stderr, "               [ headdrop ]\n");
-	fprintf(stderr, "               [ redflowlimit BYTES ] [ min BYTES ] [ max BYTES ]\n");
-	fprintf(stderr, "               [ avpkt BYTES ] [ burst PACKETS ] [ probability P ]\n");
-	fprintf(stderr, "               [ ecn ] [ harddrop ]\n");
+	fprintf(stderr,
+		"Usage: ... sfq	[ limit NUMBER ] [ perturb SECS ] [ quantum BYTES ]\n"
+		"		[ divisor NUMBER ] [ flows NUMBER] [ depth NUMBER ]\n"
+		"		[ headdrop ]\n"
+		"		[ redflowlimit BYTES ] [ min BYTES ] [ max BYTES ]\n"
+		"		[ avpkt BYTES ] [ burst PACKETS ] [ probability P ]\n"
+		"		[ ecn ] [ harddrop ]\n");
 }
 
 static int sfq_parse_opt(struct qdisc_util *qu, int argc, char **argv, struct nlmsghdr *n, const char *dev)
@@ -235,8 +236,7 @@ static int sfq_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 			sprint_size(qopt_ext->qth_min, b2),
 			sprint_size(qopt_ext->qth_max, b3),
 			qopt_ext->max_P / pow(2, 32));
-		if (qopt_ext->flags & TC_RED_ECN)
-			fprintf(f, "ecn ");
+		tc_red_print_flags(qopt_ext->flags);
 		if (show_stats) {
 			fprintf(f, "\n prob_mark %u prob_mark_head %u prob_drop %u",
 				qopt_ext->stats.prob_mark,

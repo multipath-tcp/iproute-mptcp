@@ -34,17 +34,18 @@
 #include "ip_common.h"
 
 static void usage(void) __attribute__((noreturn));
-int listen_all_nsid;
+static int listen_all_nsid;
+static bool nokeys;
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: ip xfrm monitor [all-nsid] [ all | OBJECTS | help ]\n");
-	fprintf(stderr, "OBJECTS := { acquire | expire | SA | aevent | policy | report }\n");
+	fprintf(stderr,
+		"Usage: ip xfrm monitor [ nokeys ] [ all-nsid ] [ all | OBJECTS | help ]\n"
+		"OBJECTS := { acquire | expire | SA | aevent | policy | report }\n");
 	exit(-1);
 }
 
-static int xfrm_acquire_print(const struct sockaddr_nl *who,
-			      struct nlmsghdr *n, void *arg)
+static int xfrm_acquire_print(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
 	struct xfrm_user_acquire *xacq = NLMSG_DATA(n);
@@ -105,8 +106,7 @@ static int xfrm_acquire_print(const struct sockaddr_nl *who,
 	return 0;
 }
 
-static int xfrm_state_flush_print(const struct sockaddr_nl *who,
-				  struct nlmsghdr *n, void *arg)
+static int xfrm_state_flush_print(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
 	struct xfrm_usersa_flush *xsf = NLMSG_DATA(n);
@@ -135,8 +135,7 @@ static int xfrm_state_flush_print(const struct sockaddr_nl *who,
 	return 0;
 }
 
-static int xfrm_policy_flush_print(const struct sockaddr_nl *who,
-				   struct nlmsghdr *n, void *arg)
+static int xfrm_policy_flush_print(struct nlmsghdr *n, void *arg)
 {
 	struct rtattr *tb[XFRMA_MAX+1];
 	FILE *fp = (FILE *)arg;
@@ -173,8 +172,7 @@ static int xfrm_policy_flush_print(const struct sockaddr_nl *who,
 	return 0;
 }
 
-static int xfrm_report_print(const struct sockaddr_nl *who,
-			     struct nlmsghdr *n, void *arg)
+static int xfrm_report_print(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
 	struct xfrm_user_report *xrep = NLMSG_DATA(n);
@@ -201,7 +199,7 @@ static int xfrm_report_print(const struct sockaddr_nl *who,
 
 	parse_rtattr(tb, XFRMA_MAX, XFRMREP_RTA(xrep), len);
 
-	xfrm_xfrma_print(tb, family, fp, "  ");
+	xfrm_xfrma_print(tb, family, fp, "  ", nokeys);
 
 	if (oneline)
 		fprintf(fp, "\n");
@@ -236,8 +234,7 @@ static void xfrm_usersa_print(const struct xfrm_usersa_id *sa_id, __u32 reqid, F
 	fprintf(fp, " SPI 0x%x", ntohl(sa_id->spi));
 }
 
-static int xfrm_ae_print(const struct sockaddr_nl *who,
-			     struct nlmsghdr *n, void *arg)
+static int xfrm_ae_print(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
 	struct xfrm_aevent_id *id = NLMSG_DATA(n);
@@ -261,8 +258,7 @@ static void xfrm_print_addr(FILE *fp, int family, xfrm_address_t *a)
 	fprintf(fp, "%s", rt_addr_n2a(family, sizeof(*a), a));
 }
 
-static int xfrm_mapping_print(const struct sockaddr_nl *who,
-			     struct nlmsghdr *n, void *arg)
+static int xfrm_mapping_print(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
 	struct xfrm_user_mapping *map = NLMSG_DATA(n);
@@ -281,8 +277,7 @@ static int xfrm_mapping_print(const struct sockaddr_nl *who,
 	return 0;
 }
 
-static int xfrm_accept_msg(const struct sockaddr_nl *who,
-			   struct rtnl_ctrl_data *ctrl,
+static int xfrm_accept_msg(struct rtnl_ctrl_data *ctrl,
 			   struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
@@ -302,31 +297,31 @@ static int xfrm_accept_msg(const struct sockaddr_nl *who,
 	case XFRM_MSG_DELSA:
 	case XFRM_MSG_UPDSA:
 	case XFRM_MSG_EXPIRE:
-		xfrm_state_print(who, n, arg);
+		xfrm_state_print(n, arg);
 		return 0;
 	case XFRM_MSG_NEWPOLICY:
 	case XFRM_MSG_DELPOLICY:
 	case XFRM_MSG_UPDPOLICY:
 	case XFRM_MSG_POLEXPIRE:
-		xfrm_policy_print(who, n, arg);
+		xfrm_policy_print(n, arg);
 		return 0;
 	case XFRM_MSG_ACQUIRE:
-		xfrm_acquire_print(who, n, arg);
+		xfrm_acquire_print(n, arg);
 		return 0;
 	case XFRM_MSG_FLUSHSA:
-		xfrm_state_flush_print(who, n, arg);
+		xfrm_state_flush_print(n, arg);
 		return 0;
 	case XFRM_MSG_FLUSHPOLICY:
-		xfrm_policy_flush_print(who, n, arg);
+		xfrm_policy_flush_print(n, arg);
 		return 0;
 	case XFRM_MSG_REPORT:
-		xfrm_report_print(who, n, arg);
+		xfrm_report_print(n, arg);
 		return 0;
 	case XFRM_MSG_NEWAE:
-		xfrm_ae_print(who, n, arg);
+		xfrm_ae_print(n, arg);
 		return 0;
 	case XFRM_MSG_MAPPING:
-		xfrm_mapping_print(who, n, arg);
+		xfrm_mapping_print(n, arg);
 		return 0;
 	default:
 		break;
@@ -359,6 +354,8 @@ int do_xfrm_monitor(int argc, char **argv)
 		if (matches(*argv, "file") == 0) {
 			NEXT_ARG();
 			file = *argv;
+		} else if (strcmp(*argv, "nokeys") == 0) {
+			nokeys = true;
 		} else if (strcmp(*argv, "all") == 0) {
 			/* fall out */
 		} else if (matches(*argv, "all-nsid") == 0) {

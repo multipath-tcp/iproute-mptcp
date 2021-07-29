@@ -89,7 +89,9 @@ replace " } "
 .RB "{ " enabled " | " disabled " } ]"
 
 .ti -8
-.IR INFO_SPEC " := " "NH OPTIONS FLAGS" " ["
+.IR INFO_SPEC " := { " NH " | "
+.B nhid
+.IR ID " } " "OPTIONS FLAGS" " ["
 .B  nexthop
 .IR NH " ] ..."
 
@@ -107,7 +109,7 @@ replace " } "
 
 .ti -8
 .IR FAMILY " := [ "
-.BR inet " | " inet6 " | " ipx " | " dnet " | " mpls " | " bridge " | " link " ]"
+.BR inet " | " inet6 " | " mpls " | " bridge " | " link " ]"
 
 .ti -8
 .IR OPTIONS " := " FLAGS " [ "
@@ -187,7 +189,8 @@ throw " | " unreachable " | " prohibit " | " blackhole " | " nat " ]"
 
 .ti -8
 .IR ENCAP " := [ "
-.IR MPLS " | " IP " | " BPF " | " SEG6 " | " SEG6LOCAL " ] "
+.IR ENCAP_MPLS " | " ENCAP_IP " | " ENCAP_BPF " | "
+.IR ENCAP_SEG6 " | " ENCAP_SEG6LOCAL " ] "
 
 .ti -8
 .IR ENCAP_MPLS " := "
@@ -203,6 +206,8 @@ throw " | " unreachable " | " prohibit " | " blackhole " | " nat " ]"
 .IR TUNNEL_ID
 .B  dst
 .IR REMOTE_IP " [ "
+.B src
+.IR SRC " ] ["
 .B tos
 .IR TOS " ] ["
 .B  ttl
@@ -589,6 +594,15 @@ argument lists:
 route reflecting its relative bandwidth or quality.
 .in -8
 
+The internal buffer used in iproute2 limits the maximum number of nexthops that
+may be specified in one go. If only
+.I ADDRESS
+is given, the current buffer size allows for 144 IPv6 nexthops and 253 IPv4
+ones. For IPv4, this effectively limits the number of nexthops possible per
+route. With IPv6, further nexthops may be appended to the same route via
+.B "ip route append"
+command.
+
 .TP
 .BI scope " SCOPE_VAL"
 the scope of the destinations covered by the route prefix.
@@ -677,6 +691,10 @@ Discovery messages. Namely:
 .sp
 
 .TP
+.BI nhid " ID"
+use nexthop object with given id as nexthop specification.
+.sp
+.TP
 .BI encap " ENCAPTYPE ENCAPHDR"
 attach tunnel encapsulation attributes to this route.
 .sp
@@ -724,10 +742,13 @@ is a set of encapsulation attributes specific to the
 .I TUNNEL_ID
 .B  dst
 .IR REMOTE_IP " [ "
+.B src
+.IR SRC " ] ["
 .B tos
 .IR TOS " ] ["
 .B  ttl
-.IR TTL " ]"
+.IR TTL " ] [ "
+.BR key " ] [ " csum " ] [ " seq " ] "
 .in -2
 .sp
 
@@ -1142,6 +1163,11 @@ Adds an ipv4 route with mpls encapsulation attributes attached to it.
 ip -6 route add 2001:db8:1::/64 encap seg6 mode encap segs 2001:db8:42::1,2001:db8:ffff::2 dev eth0
 .RS 4
 Adds an IPv6 route with SRv6 encapsulation and two segments attached.
+.RE
+.PP
+ip route add 10.1.1.0/30 nhid 10
+.RS 4
+Adds an ipv4 route using nexthop object with id 10.
 .RE
 .SH SEE ALSO
 .br

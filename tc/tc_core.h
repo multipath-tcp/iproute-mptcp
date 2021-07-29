@@ -5,8 +5,6 @@
 #include <asm/types.h>
 #include <linux/pkt_sched.h>
 
-#define TIME_UNITS_PER_SEC	1000000
-
 enum link_layer {
 	LINKLAYER_UNSPEC,
 	LINKLAYER_ETHERNET,
@@ -23,6 +21,9 @@ unsigned tc_calc_xmittime(__u64 rate, unsigned size);
 unsigned tc_calc_xmitsize(__u64 rate, unsigned ticks);
 int tc_calc_rtable(struct tc_ratespec *r, __u32 *rtab,
 		   int cell_log, unsigned mtu, enum link_layer link_layer);
+int tc_calc_rtable_64(struct tc_ratespec *r, __u32 *rtab,
+			int cell_log, unsigned mtu, enum link_layer link_layer,
+			__u64 rate);
 int tc_calc_size_table(struct tc_sizespec *s, __u16 **stab);
 
 int tc_setup_estimator(unsigned A, unsigned time_const, struct tc_estimator *est);

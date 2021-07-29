@@ -29,46 +29,39 @@ static void iptunnel_print_help(struct link_util *lu, int argc, char **argv,
 {
 	const char *mode;
 
-	fprintf(f,
-		"Usage: ... %-6s [ remote ADDR ]\n",
-		lu->id
-	);
-	fprintf(f,
-		"                  [ local ADDR ]\n"
-		"                  [ ttl TTL ]\n"
-		"                  [ tos TOS ]\n"
-		"                  [ [no]pmtudisc ]\n"
-		"                  [ 6rd-prefix ADDR ]\n"
-		"                  [ 6rd-relay_prefix ADDR ]\n"
-		"                  [ 6rd-reset ]\n"
-		"                  [ dev PHYS_DEV ]\n"
-		"                  [ fwmark MARK ]\n"
-		"                  [ external ]\n"
-		"                  [ noencap ]\n"
-		"                  [ encap { fou | gue | none } ]\n"
-		"                  [ encap-sport PORT ]\n"
-		"                  [ encap-dport PORT ]\n"
-		"                  [ [no]encap-csum ]\n"
-		"                  [ [no]encap-csum6 ]\n"
-		"                  [ [no]encap-remcsum ]\n"
-	);
 	if (strcmp(lu->id, "sit") == 0) {
-		mode = "{ ip6ip | ipip | mplsip | any } ]\n"
-		"                  [ isatap";
+		mode =	"{ ip6ip | ipip | mplsip | any } ]\n"
+			"			[ isatap";
 	} else {
 		mode = "{ ipip | mplsip | any }";
 	}
+
 	fprintf(f,
-		"                  [ mode %s ]\n"
-		"\n",
-		mode
-	);
-	fprintf(f,
-		"Where: ADDR := { IP_ADDRESS | any }\n"
-		"       TOS  := { NUMBER | inherit }\n"
-		"       TTL  := { 1..255 | inherit }\n"
-		"       MARK := { 0x0..0xffffffff }\n"
-	);
+		"Usage: ... %-6s	[ remote ADDR ]\n"
+		"			[ local ADDR ]\n"
+		"			[ ttl TTL ]\n"
+		"			[ tos TOS ]\n"
+		"			[ [no]pmtudisc ]\n"
+		"			[ 6rd-prefix ADDR ]\n"
+		"			[ 6rd-relay_prefix ADDR ]\n"
+		"			[ 6rd-reset ]\n"
+		"			[ dev PHYS_DEV ]\n"
+		"			[ fwmark MARK ]\n"
+		"			[ external ]\n"
+		"			[ noencap ]\n"
+		"			[ encap { fou | gue | none } ]\n"
+		"			[ encap-sport PORT ]\n"
+		"			[ encap-dport PORT ]\n"
+		"			[ [no]encap-csum ]\n"
+		"			[ [no]encap-csum6 ]\n"
+		"			[ [no]encap-remcsum ]\n"
+		"			[ mode %s ]\n"
+		"\n"
+		"Where:	ADDR := { IP_ADDRESS | any }\n"
+		"	TOS  := { NUMBER | inherit }\n"
+		"	TTL  := { 1..255 | inherit }\n"
+		"	MARK := { 0x0..0xffffffff }\n",
+		lu->id, mode);
 }
 
 static int iptunnel_parse_opt(struct link_util *lu, int argc, char **argv,
@@ -374,7 +367,7 @@ static void iptunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[
 		return;
 
 	if (tb[IFLA_IPTUN_COLLECT_METADATA]) {
-		print_bool(PRINT_ANY, "external", "external", true);
+		print_bool(PRINT_ANY, "external", "external ", true);
 		return;
 	}
 
@@ -418,7 +411,7 @@ static void iptunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[
 		tos = rta_getattr_u8(tb[IFLA_IPTUN_TOS]);
 	if (tos) {
 		if (is_json_context() || tos != 1)
-			print_0xhex(PRINT_ANY, "tos", "tos 0x%x ", tos);
+			print_0xhex(PRINT_ANY, "tos", "tos %#llx ", tos);
 		else
 			print_string(PRINT_FP, NULL, "tos %s ", "inherit");
 	}
@@ -476,7 +469,7 @@ static void iptunnel_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[
 
 		if (fwmark) {
 			print_0xhex(PRINT_ANY,
-				    "fwmark", "fwmark 0x%x ", fwmark);
+				    "fwmark", "fwmark %#llx ", fwmark);
 		}
 	}
 

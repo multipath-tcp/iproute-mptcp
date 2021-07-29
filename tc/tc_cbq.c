@@ -1,5 +1,5 @@
 /*
- * tc_cbq.c		CBQ maintanance routines.
+ * tc_cbq.c		CBQ maintenance routines.
  *
  *		This program is free software; you can redistribute it and/or
  *		modify it under the terms of the GNU General Public License
@@ -20,6 +20,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 
+#include "utils.h"
 #include "tc_core.h"
 #include "tc_cbq.h"
 

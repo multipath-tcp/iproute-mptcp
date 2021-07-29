@@ -40,12 +40,13 @@ static void usage(void) __attribute__((noreturn));
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: ip tuntap { add | del | show | list | lst | help } [ dev PHYS_DEV ]\n");
-	fprintf(stderr, "          [ mode { tun | tap } ] [ user USER ] [ group GROUP ]\n");
-	fprintf(stderr, "          [ one_queue ] [ pi ] [ vnet_hdr ] [ multi_queue ] [ name NAME ]\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "Where: USER  := { STRING | NUMBER }\n");
-	fprintf(stderr, "       GROUP := { STRING | NUMBER }\n");
+	fprintf(stderr,
+		"Usage: ip tuntap { add | del | show | list | lst | help } [ dev PHYS_DEV ]\n"
+		"	[ mode { tun | tap } ] [ user USER ] [ group GROUP ]\n"
+		"	[ one_queue ] [ pi ] [ vnet_hdr ] [ multi_queue ] [ name NAME ]\n"
+		"\n"
+		"Where:	USER  := { STRING | NUMBER }\n"
+		"	GROUP := { STRING | NUMBER }\n");
 	exit(-1);
 }
 
@@ -254,7 +255,7 @@ static void print_flags(long flags)
 	flags &= ~(IFF_TUN | IFF_TAP | IFF_NO_PI | IFF_ONE_QUEUE |
 		   IFF_VNET_HDR | IFF_PERSIST | IFF_NOFILTER);
 	if (flags)
-		print_0xhex(PRINT_ANY, NULL, "%#x", flags);
+		print_0xhex(PRINT_ANY, NULL, "%#llx", flags);
 
 	close_json_array(PRINT_JSON, NULL);
 }
@@ -386,8 +387,7 @@ static int tuntap_filter_req(struct nlmsghdr *nlh, int reqlen)
 	return 0;
 }
 
-static int print_tuntap(const struct sockaddr_nl *who,
-			struct nlmsghdr *n, void *arg)
+static int print_tuntap(struct nlmsghdr *n, void *arg)
 {
 	struct ifinfomsg *ifi = NLMSG_DATA(n);
 	struct rtattr *tb[IFLA_MAX+1];
@@ -459,7 +459,7 @@ static int print_tuntap(const struct sockaddr_nl *who,
 
 static int do_show(int argc, char **argv)
 {
-	if (rtnl_wilddump_req_filter_fn(&rth, AF_UNSPEC, RTM_GETLINK,
+	if (rtnl_linkdump_req_filter_fn(&rth, AF_UNSPEC,
 					tuntap_filter_req) < 0) {
 		perror("Cannot send dump request\n");
 		return -1;
