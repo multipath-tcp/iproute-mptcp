@@ -71,9 +71,9 @@ ip-link \- network device configuration
 .br
 .RB "[ " allmulticast " { " on " | " off " } ]"
 .br
-.RB "[ " promisc " { " on " | " off " } ]"
-.br
 .RB "[ " multipath " { " on " | " off " | " backup " } ]"
+.br
+.RB "[ " promisc " { " on " | " off " } ]"
 .br
 .RB "[ " protodown " { " on " | " off " } ]"
 .br
@@ -1951,7 +1951,7 @@ multicast packets from the network to the kernel for further processing.
 .BR "multipath on ", " multipath off" or " multipath backup"
 change the
 .B MULTIPATH
-flag on the device, to enable/disable MPTCP for this interface. The backup-flag 
+flag on the device, to enable/disable MPTCP for this interface. The backup-flag
 will allow a subflow to be established across this interface, but only be used
 as backup.
 
