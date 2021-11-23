@@ -51,8 +51,9 @@ static void act_usage(void)
 		"	FL := ls | list | flush | <ACTNAMESPEC>\n"
 		"	ACTNAMESPEC :=  action <ACTNAME>\n"
 		"	ACTISPEC := <ACTNAMESPEC> <INDEXSPEC>\n"
-		"	ACTSPEC := action <ACTDETAIL> [INDEXSPEC]\n"
+		"	ACTSPEC := action <ACTDETAIL> [INDEXSPEC] [HWSTATSSPEC]\n"
 		"	INDEXSPEC := index <32 bit indexvalue>\n"
+		"	HWSTATSSPEC := hw_stats [ immediate | delayed | disabled ]\n"
 		"	ACTDETAIL := <ACTNAME> <ACTPARAMS>\n"
 		"		Example ACTNAME is gact, mirred, bpf, etc\n"
 		"		Each action has its own parameters (ACTPARAMS)\n"
@@ -149,6 +150,59 @@ new_cmd(char **argv)
 		(matches(*argv, "add") == 0);
 }
 
+static const struct hw_stats_item {
+	const char *str;
+	__u8 type;
+} hw_stats_items[] = {
+	{ "immediate", TCA_ACT_HW_STATS_IMMEDIATE },
+	{ "delayed", TCA_ACT_HW_STATS_DELAYED },
+	{ "disabled", 0 }, /* no bit set */
+};
+
+static void print_hw_stats(const struct rtattr *arg, bool print_used)
+{
+	struct nla_bitfield32 *hw_stats_bf = RTA_DATA(arg);
+	__u8 hw_stats;
+	int i;
+
+	hw_stats = hw_stats_bf->value & hw_stats_bf->selector;
+	print_string(PRINT_FP, NULL, "\t", NULL);
+	open_json_array(PRINT_ANY, print_used ? "used_hw_stats" : "hw_stats");
+
+	for (i = 0; i < ARRAY_SIZE(hw_stats_items); i++) {
+		const struct hw_stats_item *item;
+
+		item = &hw_stats_items[i];
+		if ((!hw_stats && !item->type) || hw_stats & item->type)
+			print_string(PRINT_ANY, NULL, " %s", item->str);
+	}
+	close_json_array(PRINT_JSON, NULL);
+	print_nl();
+}
+
+static int parse_hw_stats(const char *str, struct nlmsghdr *n)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(hw_stats_items); i++) {
+		const struct hw_stats_item *item;
+
+		item = &hw_stats_items[i];
+		if (matches(str, item->str) == 0) {
+			struct nla_bitfield32 hw_stats_bf = {
+				.value = item->type,
+				.selector = item->type
+			};
+
+			addattr_l(n, MAX_MSG, TCA_ACT_HW_STATS,
+				  &hw_stats_bf, sizeof(hw_stats_bf));
+			return 0;
+		}
+
+	}
+	return -1;
+}
+
 int parse_action(int *argc_p, char ***argv_p, int tca_id, struct nlmsghdr *n)
 {
 	int argc = *argc_p;
@@ -237,7 +291,8 @@ done0:
 					invarg(cookie_err_m, *argv);
 				}
 
-				if (hex2mem(*argv, act_ck, slen / 2) < 0)
+				if (slen % 2 ||
+				    hex2mem(*argv, act_ck, slen / 2) < 0)
 					invarg("cookie must be a hex string\n",
 					       *argv);
 
@@ -249,6 +304,24 @@ done0:
 			if (act_ck_len)
 				addattr_l(n, MAX_MSG, TCA_ACT_COOKIE,
 					  &act_ck, act_ck_len);
+
+			if (*argv && matches(*argv, "hw_stats") == 0) {
+				NEXT_ARG();
+				ret = parse_hw_stats(*argv, n);
+				if (ret < 0)
+					invarg("value is invalid\n", *argv);
+				NEXT_ARG_FWD();
+			}
+
+			if (*argv && strcmp(*argv, "no_percpu") == 0) {
+				struct nla_bitfield32 flags =
+					{ TCA_ACT_FLAGS_NO_PERCPU_STATS,
+					  TCA_ACT_FLAGS_NO_PERCPU_STATS };
+
+				addattr_l(n, MAX_MSG, TCA_ACT_FLAGS, &flags,
+					  sizeof(struct nla_bitfield32));
+				NEXT_ARG_FWD();
+			}
 
 			addattr_nest_end(n, tail);
 			ok++;
@@ -301,13 +374,18 @@ static int tc_print_one_action(FILE *f, struct rtattr *arg)
 	if (err < 0)
 		return err;
 
+	if (brief && tb[TCA_ACT_INDEX]) {
+		print_uint(PRINT_ANY, "index", "\t index %u",
+			   rta_getattr_u32(tb[TCA_ACT_INDEX]));
+		print_nl();
+	}
 	if (show_stats && tb[TCA_ACT_STATS]) {
 		print_string(PRINT_FP, NULL, "\tAction statistics:", NULL);
-		print_string(PRINT_FP, NULL, "%s", _SL_);
+		print_nl();
 		open_json_object("stats");
 		print_tcstats2_attr(f, tb[TCA_ACT_STATS], "\t", NULL);
 		close_json_object();
-		print_string(PRINT_FP, NULL, "%s", _SL_);
+		print_nl();
 	}
 	if (tb[TCA_ACT_COOKIE]) {
 		int strsz = RTA_PAYLOAD(tb[TCA_ACT_COOKIE]);
@@ -316,8 +394,22 @@ static int tc_print_one_action(FILE *f, struct rtattr *arg)
 		print_string(PRINT_ANY, "cookie", "\tcookie %s",
 			     hexstring_n2a(RTA_DATA(tb[TCA_ACT_COOKIE]),
 					   strsz, b1, sizeof(b1)));
-		print_string(PRINT_FP, NULL, "%s", _SL_);
+		print_nl();
 	}
+	if (tb[TCA_ACT_FLAGS]) {
+		struct nla_bitfield32 *flags = RTA_DATA(tb[TCA_ACT_FLAGS]);
+
+		if (flags->selector & TCA_ACT_FLAGS_NO_PERCPU_STATS)
+			print_bool(PRINT_ANY, "no_percpu", "\tno_percpu",
+				   flags->value &
+				   TCA_ACT_FLAGS_NO_PERCPU_STATS);
+		print_nl();
+	}
+	if (tb[TCA_ACT_HW_STATS])
+		print_hw_stats(tb[TCA_ACT_HW_STATS], false);
+
+	if (tb[TCA_ACT_USED_HW_STATS])
+		print_hw_stats(tb[TCA_ACT_USED_HW_STATS], true);
 
 	return 0;
 }
@@ -371,7 +463,7 @@ tc_print_action(FILE *f, const struct rtattr *arg, unsigned short tot_acts)
 	for (i = 0; i <= tot_acts; i++) {
 		if (tb[i]) {
 			open_json_object(NULL);
-			print_string(PRINT_FP, NULL, "%s", _SL_);
+			print_nl();
 			print_uint(PRINT_ANY, "order",
 				   "\taction order %u: ", i);
 			if (tc_print_one_action(f, tb[i]) < 0) {
@@ -410,7 +502,7 @@ int print_action(struct nlmsghdr *n, void *arg)
 	open_json_object(NULL);
 	print_uint(PRINT_ANY, "total acts", "total acts %u",
 		   tot_acts ? *tot_acts : 0);
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	close_json_object();
 	if (tb[TCA_ACT_TAB] == NULL) {
 		if (n->nlmsg_type != RTM_GETACTION)
@@ -648,8 +740,12 @@ static int tc_act_list_or_flush(int *argc_p, char ***argv_p, int event)
 	addattr_nest_end(&req.n, tail);
 
 	tail3 = NLMSG_TAIL(&req.n);
-	flag_select.value |= TCA_FLAG_LARGE_DUMP_ON;
-	flag_select.selector |= TCA_FLAG_LARGE_DUMP_ON;
+	flag_select.value |= TCA_ACT_FLAG_LARGE_DUMP_ON;
+	flag_select.selector |= TCA_ACT_FLAG_LARGE_DUMP_ON;
+	if (brief) {
+		flag_select.value |= TCA_ACT_FLAG_TERSE_DUMP;
+		flag_select.selector |= TCA_ACT_FLAG_TERSE_DUMP;
+	}
 	addattr_l(&req.n, MAX_MSG, TCA_ROOT_FLAGS, &flag_select,
 		  sizeof(struct nla_bitfield32));
 	tail3->rta_len = (void *) NLMSG_TAIL(&req.n) - (void *) tail3;

@@ -5,6 +5,7 @@
 #define MAX_MSG 16384
 #include <limits.h>
 #include <linux/if.h>
+#include <stdbool.h>
 
 #include <linux/pkt_sched.h>
 #include <linux/pkt_cls.h>
@@ -40,6 +41,7 @@ struct qdisc_util {
 	int (*parse_copt)(struct qdisc_util *qu, int argc,
 			  char **argv, struct nlmsghdr *n, const char *dev);
 	int (*print_copt)(struct qdisc_util *qu, FILE *f, struct rtattr *opt);
+	int (*has_block)(struct qdisc_util *qu, struct rtattr *opt, __u32 block_idx, bool *p_has);
 };
 
 extern __u16 f_proto;
@@ -74,19 +76,15 @@ struct qdisc_util *get_qdisc_kind(const char *str);
 struct filter_util *get_filter_kind(const char *str);
 
 int get_qdisc_handle(__u32 *h, const char *str);
-int get_rate(unsigned int *rate, const char *str);
 int get_percent_rate(unsigned int *rate, const char *str, const char *dev);
-int get_rate64(__u64 *rate, const char *str);
 int get_percent_rate64(__u64 *rate, const char *str, const char *dev);
-int get_size(unsigned int *size, const char *str);
 int get_size_and_cell(unsigned int *size, int *cell_log, char *str);
 int get_linklayer(unsigned int *val, const char *arg);
 
-void print_rate(char *buf, int len, __u64 rate);
+void tc_print_rate(enum output_type t, const char *key, const char *fmt,
+		   unsigned long long rate);
 void print_devname(enum output_type type, int ifindex);
 
-char *sprint_rate(__u64 rate, char *buf);
-char *sprint_size(__u32 size, char *buf);
 char *sprint_tc_classid(__u32 h, char *buf);
 char *sprint_ticks(__u32 ticks, char *buf);
 char *sprint_linklayer(unsigned int linklayer, char *buf);
@@ -133,4 +131,6 @@ void print_masked_u16(const char *name, struct rtattr *attr,
 		      struct rtattr *mask_attr, bool newline);
 void print_masked_u8(const char *name, struct rtattr *attr,
 		     struct rtattr *mask_attr, bool newline);
+void print_masked_be16(const char *name, struct rtattr *attr,
+		       struct rtattr *mask_attr, bool newline);
 #endif

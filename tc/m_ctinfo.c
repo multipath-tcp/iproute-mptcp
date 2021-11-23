@@ -188,8 +188,9 @@ static int print_ctinfo(struct action_util *au, FILE *f, struct rtattr *arg)
 	unsigned short zone = 0;
 	struct tc_ctinfo *ci;
 
+	print_string(PRINT_ANY, "kind", "%s ", "ctinfo");
 	if (arg == NULL)
-		return -1;
+		return 0;
 
 	parse_rtattr_nested(tb, TCA_CTINFO_MAX, arg);
 	if (!tb[TCA_CTINFO_ACT]) {
@@ -234,11 +235,10 @@ static int print_ctinfo(struct action_util *au, FILE *f, struct rtattr *arg)
 	    sizeof(__u16))
 		zone = rta_getattr_u16(tb[TCA_CTINFO_ZONE]);
 
-	print_string(PRINT_ANY, "kind", "%s ", "ctinfo");
 	print_hu(PRINT_ANY, "zone", "zone %u", zone);
 	print_action_control(f, " ", ci->action, "");
 
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	print_uint(PRINT_ANY, "index", "\t index %u", ci->index);
 	print_int(PRINT_ANY, "ref", " ref %d", ci->refcnt);
 	print_int(PRINT_ANY, "bind", " bind %d", ci->bindcnt);
@@ -256,7 +256,7 @@ static int print_ctinfo(struct action_util *au, FILE *f, struct rtattr *arg)
 	if (show_stats)
 		print_ctinfo_stats(f, tb);
 
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 
 	return 0;
 }

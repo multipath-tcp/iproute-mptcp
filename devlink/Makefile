@@ -7,12 +7,13 @@ ifeq ($(HAVE_MNL),y)
 
 DEVLINKOBJ = devlink.o mnlg.o
 TARGETS += devlink
+LDLIBS += -lm
 
 endif
 
 all: $(TARGETS) $(LIBS)
 
-devlink: $(DEVLINKOBJ)
+devlink: $(DEVLINKOBJ) $(LIBNETLINK)
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
 install: all

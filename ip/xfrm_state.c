@@ -62,8 +62,8 @@ static void usage(void)
 		"        [ flag FLAG-LIST ] [ sel SELECTOR ] [ LIMIT-LIST ] [ encap ENCAP ]\n"
 		"        [ coa ADDR[/PLEN] ] [ ctx CTX ] [ extra-flag EXTRA-FLAG-LIST ]\n"
 		"        [ offload [dev DEV] dir DIR ]\n"
-		"        [ output-mark OUTPUT-MARK ]\n"
-		"        [ if_id IF_ID ]\n"
+		"        [ output-mark OUTPUT-MARK [ mask MASK ] ]\n"
+		"        [ if_id IF_ID ] [ tfcpad LENGTH ]\n"
 		"Usage: ip xfrm state allocspi ID [ mode MODE ] [ mark MARK [ mask MASK ] ]\n"
 		"        [ reqid REQID ] [ seq SEQ ] [ min SPI max SPI ]\n"
 		"Usage: ip xfrm state { delete | get } ID [ mark MARK [ mask MASK ] ]\n"
@@ -104,33 +104,15 @@ static void usage(void)
 		"FLAG-LIST := [ FLAG-LIST ] FLAG\n"
 		"FLAG := noecn | decap-dscp | nopmtudisc | wildrecv | icmp | af-unspec | align4 | esn\n"
 		"EXTRA-FLAG-LIST := [ EXTRA-FLAG-LIST ] EXTRA-FLAG\n"
-		"EXTRA-FLAG := dont-encap-dscp\n"
+		"EXTRA-FLAG := dont-encap-dscp | oseq-may-wrap\n"
 		"SELECTOR := [ src ADDR[/PLEN] ] [ dst ADDR[/PLEN] ] [ dev DEV ] [ UPSPEC ]\n"
-		"UPSPEC := proto { { ");
-	fprintf(stderr,
-		"%s | %s | %s | %s",
-		strxf_proto(IPPROTO_TCP),
-		strxf_proto(IPPROTO_UDP),
-		strxf_proto(IPPROTO_SCTP),
-		strxf_proto(IPPROTO_DCCP));
-	fprintf(stderr,
-		" } [ sport PORT ] [ dport PORT ] |\n"
-		"                  { ");
-	fprintf(stderr,
-		"%s | %s | %s",
-		strxf_proto(IPPROTO_ICMP),
-		strxf_proto(IPPROTO_ICMPV6),
-		strxf_proto(IPPROTO_MH));
-	fprintf(stderr,
-		" } [ type NUMBER ] [ code NUMBER ] |\n");
-	fprintf(stderr,
-		"                  %s", strxf_proto(IPPROTO_GRE));
-	fprintf(stderr,
-		" [ key { DOTTED-QUAD | NUMBER } ] | PROTO }\n"
+		"UPSPEC := proto { { tcp | udp | sctp | dccp } [ sport PORT ] [ dport PORT ] |\n"
+		"                  { icmp | ipv6-icmp | mobility-header } [ type NUMBER ] [ code NUMBER ] |\n"
+		"                  gre [ key { DOTTED-QUAD | NUMBER } ] | PROTO }\n"
 		"LIMIT-LIST := [ LIMIT-LIST ] limit LIMIT\n"
 		"LIMIT := { time-soft | time-hard | time-use-soft | time-use-hard } SECONDS |\n"
 		"         { byte-soft | byte-hard } SIZE | { packet-soft | packet-hard } COUNT\n"
-		"ENCAP := { espinudp | espinudp-nonike } SPORT DPORT OADDR\n"
+		"ENCAP := { espinudp | espinudp-nonike | espintcp } SPORT DPORT OADDR\n"
 		"DIR := in | out\n");
 
 	exit(-1);
@@ -271,6 +253,8 @@ static int xfrm_state_extra_flag_parse(__u32 *extra_flags, int *argcp, char ***a
 		while (1) {
 			if (strcmp(*argv, "dont-encap-dscp") == 0)
 				*extra_flags |= XFRM_SA_XFLAG_DONT_ENCAP_DSCP;
+			else if (strcmp(*argv, "oseq-may-wrap") == 0)
+				*extra_flags |= XFRM_SA_XFLAG_OSEQ_MAY_WRAP;
 			else {
 				PREV_ARG(); /* back track */
 				break;
@@ -344,9 +328,10 @@ static int xfrm_state_modify(int cmd, unsigned int flags, int argc, char **argv)
 		struct xfrm_user_sec_ctx sctx;
 		char    str[CTX_BUF_SIZE];
 	} ctx = {};
-	__u32 output_mark = 0;
+	struct xfrm_mark output_mark = {0, 0};
 	bool is_if_id_set = false;
 	__u32 if_id = 0;
+	__u32 tfcpad = 0;
 
 	while (argc > 0) {
 		if (strcmp(*argv, "mode") == 0) {
@@ -464,13 +449,27 @@ static int xfrm_state_modify(int cmd, unsigned int flags, int argc, char **argv)
 			}
 		} else if (strcmp(*argv, "output-mark") == 0) {
 			NEXT_ARG();
-			if (get_u32(&output_mark, *argv, 0))
+			if (get_u32(&output_mark.v, *argv, 0))
 				invarg("value after \"output-mark\" is invalid", *argv);
+			if (argc > 1) {
+				NEXT_ARG();
+				if (strcmp(*argv, "mask") == 0) {
+					NEXT_ARG();
+					if (get_u32(&output_mark.m, *argv, 0))
+						invarg("mask value is invalid\n", *argv);
+				} else {
+					PREV_ARG();
+				}
+			}
 		} else if (strcmp(*argv, "if_id") == 0) {
 			NEXT_ARG();
 			if (get_u32(&if_id, *argv, 0))
 				invarg("value after \"if_id\" is invalid", *argv);
 			is_if_id_set = true;
+		} else if (strcmp(*argv, "tfcpad") == 0) {
+			NEXT_ARG();
+			if (get_u32(&tfcpad, *argv, 0))
+				invarg("value after \"tfcpad\" is invalid", *argv);
 		} else {
 			/* try to assume ALGO */
 			int type = xfrm_algotype_getbyname(*argv);
@@ -656,6 +655,9 @@ static int xfrm_state_modify(int cmd, unsigned int flags, int argc, char **argv)
 	if (is_if_id_set)
 		addattr32(&req.n, sizeof(req.buf), XFRMA_IF_ID, if_id);
 
+	if (tfcpad)
+		addattr32(&req.n, sizeof(req.buf), XFRMA_TFCPAD, tfcpad);
+
 	if (xfrm_xfrmproto_is_ipsec(req.xsinfo.id.proto)) {
 		switch (req.xsinfo.mode) {
 		case XFRM_MODE_TRANSPORT:
@@ -757,8 +759,11 @@ static int xfrm_state_modify(int cmd, unsigned int flags, int argc, char **argv)
 		}
 	}
 
-	if (output_mark)
-		addattr32(&req.n, sizeof(req.buf), XFRMA_OUTPUT_MARK, output_mark);
+	if (output_mark.v)
+		addattr32(&req.n, sizeof(req.buf), XFRMA_OUTPUT_MARK, output_mark.v);
+
+	if (output_mark.m)
+		addattr32(&req.n, sizeof(req.buf), XFRMA_SET_MARK_MASK, output_mark.m);
 
 	if (rtnl_open_byproto(&rth, 0, NETLINK_XFRM) < 0)
 		exit(1);
@@ -1147,6 +1152,10 @@ static int xfrm_state_keep(struct nlmsghdr *n, void *arg)
 	}
 
 	if (!xfrm_state_filter_match(xsinfo))
+		return 0;
+
+	if (xsinfo->id.proto == IPPROTO_IPIP ||
+	    xsinfo->id.proto == IPPROTO_IPV6)
 		return 0;
 
 	if (xb->offset > xb->size) {

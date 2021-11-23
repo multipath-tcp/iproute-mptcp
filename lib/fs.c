@@ -25,10 +25,35 @@
 
 #include "utils.h"
 
+#ifndef HAVE_HANDLE_AT
+# include <sys/syscall.h>
+#endif
+
 #define CGROUP2_FS_NAME "cgroup2"
 
 /* if not already mounted cgroup2 is mounted here for iproute2's use */
 #define MNT_CGRP2_PATH  "/var/run/cgroup2"
+
+
+#ifndef HAVE_HANDLE_AT
+struct file_handle {
+	unsigned handle_bytes;
+	int handle_type;
+	unsigned char f_handle[];
+};
+
+static int name_to_handle_at(int dirfd, const char *pathname,
+	struct file_handle *handle, int *mount_id, int flags)
+{
+	return syscall(__NR_name_to_handle_at, dirfd, pathname, handle,
+	               mount_id, flags);
+}
+
+static int open_by_handle_at(int mount_fd, struct file_handle *handle, int flags)
+{
+	return syscall(__NR_open_by_handle_at, mount_fd, handle, flags);
+}
+#endif
 
 /* return mount path of first occurrence of given fstype */
 static char *find_fs_mount(const char *fs_to_find)
@@ -59,12 +84,17 @@ static char *find_fs_mount(const char *fs_to_find)
 }
 
 /* caller needs to free string returned */
-char *find_cgroup2_mount(void)
+char *find_cgroup2_mount(bool do_mount)
 {
 	char *mnt = find_fs_mount(CGROUP2_FS_NAME);
 
 	if (mnt)
 		return mnt;
+
+	if (!do_mount) {
+		fprintf(stderr, "Failed to find cgroup2 mount\n");
+		return NULL;
+	}
 
 	mnt = strdup(MNT_CGRP2_PATH);
 	if (!mnt) {
@@ -74,7 +104,7 @@ char *find_cgroup2_mount(void)
 	}
 
 	if (make_path(mnt, 0755)) {
-		fprintf(stderr, "Failed to setup vrf cgroup2 directory\n");
+		fprintf(stderr, "Failed to setup cgroup2 directory\n");
 		free(mnt);
 		return NULL;
 	}
@@ -99,6 +129,137 @@ out:
 	return mnt;
 }
 
+__u64 get_cgroup2_id(const char *path)
+{
+	char fh_buf[sizeof(struct file_handle) + sizeof(__u64)] = { 0 };
+	struct file_handle *fhp = (struct file_handle *)fh_buf;
+	union {
+		__u64 id;
+		unsigned char bytes[sizeof(__u64)];
+	} cg_id = { .id = 0 };
+	char *mnt = NULL;
+	int mnt_fd = -1;
+	int mnt_id;
+
+	if (!path) {
+		fprintf(stderr, "Invalid cgroup2 path\n");
+		return 0;
+	}
+
+	fhp->handle_bytes = sizeof(__u64);
+	if (name_to_handle_at(AT_FDCWD, path, fhp, &mnt_id, 0) < 0) {
+		/* try at cgroup2 mount */
+
+		while (*path == '/')
+			path++;
+		if (*path == '\0') {
+			fprintf(stderr, "Invalid cgroup2 path\n");
+			goto out;
+		}
+
+		mnt = find_cgroup2_mount(false);
+		if (!mnt)
+			goto out;
+
+		mnt_fd = open(mnt, O_RDONLY);
+		if (mnt_fd < 0) {
+			fprintf(stderr, "Failed to open cgroup2 mount\n");
+			goto out;
+		}
+
+		fhp->handle_bytes = sizeof(__u64);
+		if (name_to_handle_at(mnt_fd, path, fhp, &mnt_id, 0) < 0) {
+			fprintf(stderr, "Failed to get cgroup2 ID: %s\n",
+					strerror(errno));
+			goto out;
+		}
+	}
+	if (fhp->handle_bytes != sizeof(__u64)) {
+		fprintf(stderr, "Invalid size of cgroup2 ID\n");
+		goto out;
+	}
+
+	memcpy(cg_id.bytes, fhp->f_handle, sizeof(__u64));
+
+out:
+	if (mnt_fd >= 0)
+		close(mnt_fd);
+	free(mnt);
+
+	return cg_id.id;
+}
+
+#define FILEID_INO32_GEN 1
+
+/* caller needs to free string returned */
+char *get_cgroup2_path(__u64 id, bool full)
+{
+	char fh_buf[sizeof(struct file_handle) + sizeof(__u64)] = { 0 };
+	struct file_handle *fhp = (struct file_handle *)fh_buf;
+	union {
+		__u64 id;
+		unsigned char bytes[sizeof(__u64)];
+	} cg_id = { .id = id };
+	int mnt_fd = -1, fd = -1;
+	char link_buf[PATH_MAX];
+	char *path = NULL;
+	char fd_path[64];
+	int link_len;
+	char *mnt = NULL;
+
+	if (!id) {
+		fprintf(stderr, "Invalid cgroup2 ID\n");
+		goto out;
+	}
+
+	mnt = find_cgroup2_mount(false);
+	if (!mnt)
+		goto out;
+
+	mnt_fd = open(mnt, O_RDONLY);
+	if (mnt_fd < 0) {
+		fprintf(stderr, "Failed to open cgroup2 mount\n");
+		goto out;
+	}
+
+	fhp->handle_bytes = sizeof(__u64);
+	fhp->handle_type = FILEID_INO32_GEN;
+	memcpy(fhp->f_handle, cg_id.bytes, sizeof(__u64));
+
+	fd = open_by_handle_at(mnt_fd, fhp, 0);
+	if (fd < 0) {
+		fprintf(stderr, "Failed to open cgroup2 by ID\n");
+		goto out;
+	}
+
+	snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", fd);
+	link_len = readlink(fd_path, link_buf, sizeof(link_buf) - 1);
+	if (link_len < 0) {
+		fprintf(stderr,
+			"Failed to read value of symbolic link %s\n",
+			fd_path);
+		goto out;
+	}
+	link_buf[link_len] = '\0';
+
+	if (full)
+		path = strdup(link_buf);
+	else
+		path = strdup(link_buf + strlen(mnt));
+	if (!path)
+		fprintf(stderr,
+			"Failed to allocate memory for cgroup2 path\n");
+
+out:
+	if (fd >= 0)
+		close(fd);
+	if (mnt_fd >= 0)
+		close(mnt_fd);
+	free(mnt);
+
+	return path;
+}
+
 int make_path(const char *path, mode_t mode)
 {
 	char *dir, *delim;
@@ -120,7 +281,7 @@ int make_path(const char *path, mode_t mode)
 			*delim = '\0';
 
 		rc = mkdir(dir, mode);
-		if (mkdir(dir, mode) != 0 && errno != EEXIST) {
+		if (rc && errno != EEXIST) {
 			fprintf(stderr, "mkdir failed for %s: %s\n",
 				dir, strerror(errno));
 			goto out;
@@ -179,4 +340,27 @@ int get_command_name(const char *pid, char *comm, size_t len)
 	fclose(fp);
 
 	return 0;
+}
+
+char *get_task_name(pid_t pid)
+{
+	char *comm;
+	FILE *f;
+
+	if (!pid)
+		return NULL;
+
+	if (asprintf(&comm, "/proc/%d/comm", pid) < 0)
+		return NULL;
+
+	f = fopen(comm, "r");
+	if (!f)
+		return NULL;
+
+	if (fscanf(f, "%ms\n", &comm) != 1)
+		comm = NULL;
+
+	fclose(f);
+
+	return comm;
 }

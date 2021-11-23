@@ -26,58 +26,64 @@ devlink-dev \- devlink device configuration
 .B devlink dev help
 
 .ti -8
-.BR "devlink dev eswitch set"
-.IR DEV
-.RI "[ "
+.B devlink dev eswitch set
+.I DEV
+[
 .BR mode " { " legacy " | " switchdev " } "
-.RI "]"
-.RI "[ "
+] [
 .BR inline-mode " { " none " | " link " | " network " | " transport " } "
-.RI "]"
-.RI "[ "
-.BR encap " { " disable " | " enable " } "
-.RI "]"
+] [
+.BR encap-mode " { " none " | " basic " } "
+]
 
 .ti -8
-.BR "devlink dev eswitch show"
-.IR DEV
+.B devlink dev eswitch show
+.I DEV
 
 .ti -8
-.BR "devlink dev param set"
-.IR DEV
-.BR name
-.IR PARAMETER
-.BR value
-.IR VALUE
+.B devlink dev param set
+.I DEV
+.B name
+.I PARAMETER
+.B value
+.I VALUE
 .BR cmode " { " runtime " | " driverinit " | " permanent " } "
 
 .ti -8
-.BR "devlink dev param show"
-.RI "[ "
-.IR DEV
-.BR name
-.IR PARAMETER
-.RI "]"
+.B devlink dev param show
+[
+.I DEV
+.B name
+.I PARAMETER
+]
 
 .ti -8
-.BR "devlink dev reload"
-.IR DEV
+.B devlink dev reload
+.I DEV
+[
+.B netns
+.RI "{ " PID " | " NAME " | " ID " }"
+] [
+.BR action " { " driver_reinit " | " fw_activate " }"
+] [
+.B limit no_reset
+]
 
 .ti -8
-.BR "devlink dev info"
-.RI "[ "
-.IR DEV
-.RI "]"
+.B devlink dev info
+[
+.I DEV
+]
 
 .ti -8
-.BR "devlink dev flash"
-.IR DEV
-.BR file
-.IR PATH
-.RI "["
-.BR target
-.IR ID
-.RI "]"
+.B devlink dev flash
+.I DEV
+.B file
+.I PATH
+[
+.B target
+.I ID
+]
 
 .SH "DESCRIPTION"
 .SS devlink dev show - display devlink device attributes
@@ -122,13 +128,13 @@ Some HWs need the VF driver to put part of the packet headers on the TX descript
 - L4 mode
 
 .TP
-.BR encap " { " disable " | " enable " } "
+.BR encap-mode " { " none " | " basic " } "
 Set eswitch encapsulation support
 
-.I disable
+.I none
 - Disable encapsulation support
 
-.I enable
+.I basic
 - Enable encapsulation support
 
 .SS devlink dev param set  - set new value to devlink device configuration parameter
@@ -156,8 +162,8 @@ Configuration mode in which the new value is set.
 
 .SS devlink dev param show - display devlink device supported configuration parameters attributes
 
-.BR name
-.IR PARAMETER
+.B name
+.I PARAMETER
 Specify parameter name to show.
 If this argument is omitted all parameters supported by devlink devices are listed.
 
@@ -166,6 +172,40 @@ If this argument is omitted all parameters supported by devlink devices are list
 .PP
 .I "DEV"
 - Specifies the devlink device to reload.
+
+.B netns
+.RI { " PID " | " NAME " | " ID " }
+- Specifies the network namespace to reload into, either by pid, name or id.
+
+.BR action " { " driver_reinit " | " fw_activate " }"
+- Specifies the reload action required.
+If this argument is omitted
+.I driver_reinit
+action will be used.
+Note that even though user asks for a specific action, the driver implementation
+might require to perform another action alongside with it. For example, some
+driver do not support driver reinitialization being performed without fw
+activation. Therefore, the devlink reload command returns the list of actions
+which were actrually performed.
+
+.I driver_reinit
+- Driver entities re-initialization, applying devlink-param and
+devlink-resource values.
+
+.I fw_activate
+- Activates new firmware if such image is stored and pending activation. If no
+limitation specified this action may involve firmware reset. If no new image
+pending this action will reload current firmware image.
+
+.B limit no_reset
+- Specifies limitation on reload action.
+If this argument is omitted limit is unspecificed and the reload action is not
+limited. In such case driver implementation may include reset or downtime as
+needed to perform the actions.
+
+.I no_reset
+- No reset allowed, no down time allowed, no link flap and no configuration is
+lost.
 
 .SS devlink dev info - display device information.
 Display device information provided by the driver. This command can be used
@@ -193,13 +233,13 @@ If this argument is omitted all devices are listed.
 .I "DEV"
 - specifies the devlink device to write to.
 
-.BR file
+.B file
 .I PATH
 - Path to the file which will be written into device's flash. The path needs
 to be relative to one of the directories searched by the kernel firmware loaded,
 such as /lib/firmware.
 
-.BR component
+.B component
 .I NAME
 - If device stores multiple firmware images in non-volatile memory, this
 parameter may be used to indicate which firmware image should be written.
@@ -255,6 +295,7 @@ Preparing to flash
 Flashing 100%
 .br
 Flashing done
+.RE
 
 .SH SEE ALSO
 .BR devlink (8),

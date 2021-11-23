@@ -14,11 +14,11 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
-#include <time.h>
 #include <libmnl/libmnl.h>
 #include <linux/genetlink.h>
 
 #include "libnetlink.h"
+#include "mnl_utils.h"
 #include "utils.h"
 #include "mnlg.h"
 
@@ -28,95 +28,11 @@ struct mnlg_socket {
 	uint32_t id;
 	uint8_t version;
 	unsigned int seq;
-	unsigned int portid;
 };
 
-static struct nlmsghdr *__mnlg_msg_prepare(struct mnlg_socket *nlg, uint8_t cmd,
-					   uint16_t flags, uint32_t id,
-					   uint8_t version)
-{
-	struct nlmsghdr *nlh;
-	struct genlmsghdr *genl;
-
-	nlh = mnl_nlmsg_put_header(nlg->buf);
-	nlh->nlmsg_type	= id;
-	nlh->nlmsg_flags = flags;
-	nlg->seq = time(NULL);
-	nlh->nlmsg_seq = nlg->seq;
-
-	genl = mnl_nlmsg_put_extra_header(nlh, sizeof(struct genlmsghdr));
-	genl->cmd = cmd;
-	genl->version = version;
-
-	return nlh;
-}
-
-struct nlmsghdr *mnlg_msg_prepare(struct mnlg_socket *nlg, uint8_t cmd,
-				  uint16_t flags)
-{
-	return __mnlg_msg_prepare(nlg, cmd, flags, nlg->id, nlg->version);
-}
-
-int mnlg_socket_send(struct mnlg_socket *nlg, const struct nlmsghdr *nlh)
+int mnlg_socket_send(struct mnlu_gen_socket *nlg, const struct nlmsghdr *nlh)
 {
 	return mnl_socket_sendto(nlg->nl, nlh, nlh->nlmsg_len);
-}
-
-static int mnlg_cb_noop(const struct nlmsghdr *nlh, void *data)
-{
-	return MNL_CB_OK;
-}
-
-static int mnlg_cb_error(const struct nlmsghdr *nlh, void *data)
-{
-	const struct nlmsgerr *err = mnl_nlmsg_get_payload(nlh);
-
-	/* Netlink subsystems returns the errno value with different signess */
-	if (err->error < 0)
-		errno = -err->error;
-	else
-		errno = err->error;
-
-	if (nl_dump_ext_ack(nlh, NULL))
-		return MNL_CB_ERROR;
-
-	return err->error == 0 ? MNL_CB_STOP : MNL_CB_ERROR;
-}
-
-static int mnlg_cb_stop(const struct nlmsghdr *nlh, void *data)
-{
-	int len = *(int *)NLMSG_DATA(nlh);
-
-	if (len < 0) {
-		errno = -len;
-		nl_dump_ext_ack_done(nlh, len);
-		return MNL_CB_ERROR;
-	}
-	return MNL_CB_STOP;
-}
-
-static mnl_cb_t mnlg_cb_array[NLMSG_MIN_TYPE] = {
-	[NLMSG_NOOP]	= mnlg_cb_noop,
-	[NLMSG_ERROR]	= mnlg_cb_error,
-	[NLMSG_DONE]	= mnlg_cb_stop,
-	[NLMSG_OVERRUN]	= mnlg_cb_noop,
-};
-
-int mnlg_socket_recv_run(struct mnlg_socket *nlg, mnl_cb_t data_cb, void *data)
-{
-	int err;
-
-	do {
-		err = mnl_socket_recvfrom(nlg->nl, nlg->buf,
-					  MNL_SOCKET_BUFFER_SIZE);
-		if (err <= 0)
-			break;
-		err = mnl_cb_run2(nlg->buf, err, nlg->seq, nlg->portid,
-				  data_cb, data, mnlg_cb_array,
-				  ARRAY_SIZE(mnlg_cb_array));
-	} while (err > 0);
-
-	return err;
 }
 
 struct group_info {
@@ -198,15 +114,17 @@ static int get_group_id_cb(const struct nlmsghdr *nlh, void *data)
 	return MNL_CB_OK;
 }
 
-int mnlg_socket_group_add(struct mnlg_socket *nlg, const char *group_name)
+int mnlg_socket_group_add(struct mnlu_gen_socket *nlg, const char *group_name)
 {
 	struct nlmsghdr *nlh;
 	struct group_info group_info;
 	int err;
 
-	nlh = __mnlg_msg_prepare(nlg, CTRL_CMD_GETFAMILY,
-				 NLM_F_REQUEST | NLM_F_ACK, GENL_ID_CTRL, 1);
-	mnl_attr_put_u16(nlh, CTRL_ATTR_FAMILY_ID, nlg->id);
+	nlh = _mnlu_gen_socket_cmd_prepare(nlg, CTRL_CMD_GETFAMILY,
+					   NLM_F_REQUEST | NLM_F_ACK,
+					   GENL_ID_CTRL, 1);
+
+	mnl_attr_put_u16(nlh, CTRL_ATTR_FAMILY_ID, nlg->family);
 
 	err = mnlg_socket_send(nlg, nlh);
 	if (err < 0)
@@ -214,7 +132,7 @@ int mnlg_socket_group_add(struct mnlg_socket *nlg, const char *group_name)
 
 	group_info.found = false;
 	group_info.name = group_name;
-	err = mnlg_socket_recv_run(nlg, get_group_id_cb, &group_info);
+	err = mnlu_gen_socket_recv_run(nlg, get_group_id_cb, &group_info);
 	if (err < 0)
 		return err;
 
@@ -231,97 +149,7 @@ int mnlg_socket_group_add(struct mnlg_socket *nlg, const char *group_name)
 	return 0;
 }
 
-static int get_family_id_attr_cb(const struct nlattr *attr, void *data)
-{
-	const struct nlattr **tb = data;
-	int type = mnl_attr_get_type(attr);
-
-	if (mnl_attr_type_valid(attr, CTRL_ATTR_MAX) < 0)
-		return MNL_CB_ERROR;
-
-	if (type == CTRL_ATTR_FAMILY_ID &&
-	    mnl_attr_validate(attr, MNL_TYPE_U16) < 0)
-		return MNL_CB_ERROR;
-	tb[type] = attr;
-	return MNL_CB_OK;
-}
-
-static int get_family_id_cb(const struct nlmsghdr *nlh, void *data)
-{
-	uint32_t *p_id = data;
-	struct nlattr *tb[CTRL_ATTR_MAX + 1] = {};
-	struct genlmsghdr *genl = mnl_nlmsg_get_payload(nlh);
-
-	mnl_attr_parse(nlh, sizeof(*genl), get_family_id_attr_cb, tb);
-	if (!tb[CTRL_ATTR_FAMILY_ID])
-		return MNL_CB_ERROR;
-	*p_id = mnl_attr_get_u16(tb[CTRL_ATTR_FAMILY_ID]);
-	return MNL_CB_OK;
-}
-
-struct mnlg_socket *mnlg_socket_open(const char *family_name, uint8_t version)
-{
-	struct mnlg_socket *nlg;
-	struct nlmsghdr *nlh;
-	int one = 1;
-	int err;
-
-	nlg = malloc(sizeof(*nlg));
-	if (!nlg)
-		return NULL;
-
-	nlg->buf = malloc(MNL_SOCKET_BUFFER_SIZE);
-	if (!nlg->buf)
-		goto err_buf_alloc;
-
-	nlg->nl = mnl_socket_open(NETLINK_GENERIC);
-	if (!nlg->nl)
-		goto err_mnl_socket_open;
-
-	/* Older kernels may no support capped/extended ACK reporting */
-	mnl_socket_setsockopt(nlg->nl, NETLINK_CAP_ACK, &one, sizeof(one));
-	mnl_socket_setsockopt(nlg->nl, NETLINK_EXT_ACK, &one, sizeof(one));
-
-	err = mnl_socket_bind(nlg->nl, 0, MNL_SOCKET_AUTOPID);
-	if (err < 0)
-		goto err_mnl_socket_bind;
-
-	nlg->portid = mnl_socket_get_portid(nlg->nl);
-
-	nlh = __mnlg_msg_prepare(nlg, CTRL_CMD_GETFAMILY,
-				 NLM_F_REQUEST | NLM_F_ACK, GENL_ID_CTRL, 1);
-	mnl_attr_put_strz(nlh, CTRL_ATTR_FAMILY_NAME, family_name);
-
-	err = mnlg_socket_send(nlg, nlh);
-	if (err < 0)
-		goto err_mnlg_socket_send;
-
-	err = mnlg_socket_recv_run(nlg, get_family_id_cb, &nlg->id);
-	if (err < 0)
-		goto err_mnlg_socket_recv_run;
-
-	nlg->version = version;
-	return nlg;
-
-err_mnlg_socket_recv_run:
-err_mnlg_socket_send:
-err_mnl_socket_bind:
-	mnl_socket_close(nlg->nl);
-err_mnl_socket_open:
-	free(nlg->buf);
-err_buf_alloc:
-	free(nlg);
-	return NULL;
-}
-
-void mnlg_socket_close(struct mnlg_socket *nlg)
-{
-	mnl_socket_close(nlg->nl);
-	free(nlg->buf);
-	free(nlg);
-}
-
-int mnlg_socket_get_fd(struct mnlg_socket *nlg)
+int mnlg_socket_get_fd(struct mnlu_gen_socket *nlg)
 {
 	return mnl_socket_get_fd(nlg->nl);
 }

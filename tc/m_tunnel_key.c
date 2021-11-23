@@ -29,7 +29,7 @@ static void explain(void)
 		"src_ip <IP> (mandatory)\n"
 		"dst_ip <IP> (mandatory)\n"
 		"dst_port <UDP_PORT>\n"
-		"geneve_opts <OPTIONS>\n"
+		"geneve_opts | vxlan_opts | erspan_opts <OPTIONS>\n"
 		"csum | nocsum (default is \"csum\")\n");
 }
 
@@ -97,6 +97,21 @@ static int tunnel_key_parse_be16(char *str, int base, int type,
 	return 0;
 }
 
+static int tunnel_key_parse_be32(char *str, int base, int type,
+				 struct nlmsghdr *n)
+{
+	__be32 value;
+	int ret;
+
+	ret = get_be32(&value, str, base);
+	if (ret)
+		return ret;
+
+	addattr32(n, MAX_MSG, type, value);
+
+	return 0;
+}
+
 static int tunnel_key_parse_u8(char *str, int base, int type,
 			       struct nlmsghdr *n)
 {
@@ -108,6 +123,21 @@ static int tunnel_key_parse_u8(char *str, int base, int type,
 		return ret;
 
 	addattr8(n, MAX_MSG, type, value);
+
+	return 0;
+}
+
+static int tunnel_key_parse_u32(char *str, int base, int type,
+				struct nlmsghdr *n)
+{
+	__u32 value;
+	int ret;
+
+	ret = get_u32(&value, str, base);
+	if (ret)
+		return ret;
+
+	addattr32(n, MAX_MSG, type, value);
 
 	return 0;
 }
@@ -186,6 +216,84 @@ static int tunnel_key_parse_geneve_opts(char *str, struct nlmsghdr *n)
 	}
 
 	addattr_nest_end(n, nest);
+
+	return 0;
+}
+
+static int tunnel_key_parse_vxlan_opt(char *str, struct nlmsghdr *n)
+{
+	struct rtattr *encap, *nest;
+	int ret;
+
+	encap = addattr_nest(n, MAX_MSG,
+			     TCA_TUNNEL_KEY_ENC_OPTS | NLA_F_NESTED);
+	nest = addattr_nest(n, MAX_MSG,
+			    TCA_TUNNEL_KEY_ENC_OPTS_VXLAN | NLA_F_NESTED);
+
+	ret = tunnel_key_parse_u32(str, 0,
+				   TCA_TUNNEL_KEY_ENC_OPT_VXLAN_GBP, n);
+	if (ret)
+		return ret;
+
+	addattr_nest_end(n, nest);
+	addattr_nest_end(n, encap);
+
+	return 0;
+}
+
+static int tunnel_key_parse_erspan_opt(char *str, struct nlmsghdr *n)
+{
+	char *token, *saveptr = NULL;
+	struct rtattr *encap, *nest;
+	int i, ret;
+
+	encap = addattr_nest(n, MAX_MSG,
+			     TCA_TUNNEL_KEY_ENC_OPTS | NLA_F_NESTED);
+	nest = addattr_nest(n, MAX_MSG,
+			    TCA_TUNNEL_KEY_ENC_OPTS_ERSPAN | NLA_F_NESTED);
+
+	token = strtok_r(str, ":", &saveptr);
+	i = 1;
+	while (token) {
+		switch (i) {
+		case TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_VER:
+		{
+			ret = tunnel_key_parse_u8(token, 0, i, n);
+			if (ret)
+				return ret;
+			break;
+		}
+		case TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_INDEX:
+		{
+			ret = tunnel_key_parse_be32(token, 0, i, n);
+			if (ret)
+				return ret;
+			break;
+		}
+		case TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_DIR:
+		{
+			ret = tunnel_key_parse_u8(token, 0, i, n);
+			if (ret)
+				return ret;
+			break;
+		}
+		case TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_HWID:
+		{
+			ret = tunnel_key_parse_u8(token, 0, i, n);
+			if (ret)
+				return ret;
+			break;
+		}
+		default:
+			return -1;
+		}
+
+		token = strtok_r(NULL, ":", &saveptr);
+		i++;
+	}
+
+	addattr_nest_end(n, nest);
+	addattr_nest_end(n, encap);
 
 	return 0;
 }
@@ -287,6 +395,20 @@ static int parse_tunnel_key(struct action_util *a, int *argc_p, char ***argv_p,
 				fprintf(stderr, "Illegal \"geneve_opts\"\n");
 				return -1;
 			}
+		} else if (matches(*argv, "vxlan_opts") == 0) {
+			NEXT_ARG();
+
+			if (tunnel_key_parse_vxlan_opt(*argv, n)) {
+				fprintf(stderr, "Illegal \"vxlan_opts\"\n");
+				return -1;
+			}
+		} else if (matches(*argv, "erspan_opts") == 0) {
+			NEXT_ARG();
+
+			if (tunnel_key_parse_erspan_opt(*argv, n)) {
+				fprintf(stderr, "Illegal \"erspan_opts\"\n");
+				return -1;
+			}
 		} else if (matches(*argv, "tos") == 0) {
 			NEXT_ARG();
 			ret = tunnel_key_parse_tos_ttl(*argv,
@@ -367,7 +489,7 @@ static void tunnel_key_print_ip_addr(FILE *f, const char *name,
 	else
 		return;
 
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	if (matches(name, "src_ip") == 0)
 		print_string(PRINT_ANY, "src_ip", "\tsrc_ip %s",
 			     rt_addr_n2a_rta(family, attr));
@@ -381,7 +503,7 @@ static void tunnel_key_print_key_id(FILE *f, const char *name,
 {
 	if (!attr)
 		return;
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	print_uint(PRINT_ANY, "key_id", "\tkey_id %u", rta_getattr_be32(attr));
 }
 
@@ -390,7 +512,7 @@ static void tunnel_key_print_dst_port(FILE *f, char *name,
 {
 	if (!attr)
 		return;
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	print_uint(PRINT_ANY, "dst_port", "\tdst_port %u",
 		   rta_getattr_be16(attr));
 }
@@ -401,18 +523,18 @@ static void tunnel_key_print_flag(FILE *f, const char *name_on,
 {
 	if (!attr)
 		return;
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	print_string(PRINT_ANY, "flag", "\t%s",
 		     rta_getattr_u8(attr) ? name_on : name_off);
 }
 
-static void tunnel_key_print_geneve_options(const char *name,
-					    struct rtattr *attr)
+static void tunnel_key_print_geneve_options(struct rtattr *attr)
 {
 	struct rtattr *tb[TCA_TUNNEL_KEY_ENC_OPT_GENEVE_MAX + 1];
 	struct rtattr *i = RTA_DATA(attr);
 	int ii, data_len = 0, offset = 0;
 	int rem = RTA_PAYLOAD(attr);
+	char *name = "geneve_opts";
 	char strbuf[rem * 2 + 1];
 	char data[rem * 2 + 1];
 	uint8_t data_r[rem];
@@ -420,7 +542,8 @@ static void tunnel_key_print_geneve_options(const char *name,
 	uint8_t type;
 
 	open_json_array(PRINT_JSON, name);
-	print_string(PRINT_FP, name, "\n\t%s ", "geneve_opt");
+	print_nl();
+	print_string(PRINT_FP, name, "\t%s ", name);
 
 	while (rem) {
 		parse_rtattr(tb, TCA_TUNNEL_KEY_ENC_OPT_GENEVE_MAX, i, rem);
@@ -453,7 +576,60 @@ static void tunnel_key_print_geneve_options(const char *name,
 	close_json_array(PRINT_JSON, name);
 }
 
-static void tunnel_key_print_key_opt(const char *name, struct rtattr *attr)
+static void tunnel_key_print_vxlan_options(struct rtattr *attr)
+{
+	struct rtattr *tb[TCA_TUNNEL_KEY_ENC_OPT_VXLAN_MAX + 1];
+	struct rtattr *i = RTA_DATA(attr);
+	int rem = RTA_PAYLOAD(attr);
+	char *name = "vxlan_opts";
+	__u32 gbp;
+
+	parse_rtattr(tb, TCA_TUNNEL_KEY_ENC_OPT_VXLAN_MAX, i, rem);
+	gbp = rta_getattr_u32(tb[TCA_TUNNEL_KEY_ENC_OPT_VXLAN_GBP]);
+
+	print_nl();
+	print_string(PRINT_FP, name, "\t%s ", name);
+	open_json_array(PRINT_JSON, name);
+	open_json_object(NULL);
+	print_uint(PRINT_ANY, "gbp", "%u", gbp);
+	close_json_object();
+	close_json_array(PRINT_JSON, name);
+}
+
+static void tunnel_key_print_erspan_options(struct rtattr *attr)
+{
+	struct rtattr *tb[TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_MAX + 1];
+	struct rtattr *i = RTA_DATA(attr);
+	int rem = RTA_PAYLOAD(attr);
+	char *name = "erspan_opts";
+	__u8 ver, hwid, dir;
+	__u32 idx;
+
+	parse_rtattr(tb, TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_MAX, i, rem);
+	ver = rta_getattr_u8(tb[TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_VER]);
+	if (ver == 1) {
+		idx = rta_getattr_be32(tb[TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_INDEX]);
+		dir = 0;
+		hwid = 0;
+	} else {
+		idx = 0;
+		dir = rta_getattr_u8(tb[TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_DIR]);
+		hwid = rta_getattr_u8(tb[TCA_TUNNEL_KEY_ENC_OPT_ERSPAN_HWID]);
+	}
+
+	print_nl();
+	print_string(PRINT_FP, name, "\t%s ", name);
+	open_json_array(PRINT_JSON, name);
+	open_json_object(NULL);
+	print_uint(PRINT_ANY, "ver", "%u", ver);
+	print_uint(PRINT_ANY, "index", ":%u", idx);
+	print_uint(PRINT_ANY, "dir", ":%u", dir);
+	print_uint(PRINT_ANY, "hwid", ":%u", hwid);
+	close_json_object();
+	close_json_array(PRINT_JSON, name);
+}
+
+static void tunnel_key_print_key_opt(struct rtattr *attr)
 {
 	struct rtattr *tb[TCA_TUNNEL_KEY_ENC_OPTS_MAX + 1];
 
@@ -461,8 +637,15 @@ static void tunnel_key_print_key_opt(const char *name, struct rtattr *attr)
 		return;
 
 	parse_rtattr_nested(tb, TCA_TUNNEL_KEY_ENC_OPTS_MAX, attr);
-	tunnel_key_print_geneve_options(name,
-					tb[TCA_TUNNEL_KEY_ENC_OPTS_GENEVE]);
+	if (tb[TCA_TUNNEL_KEY_ENC_OPTS_GENEVE])
+		tunnel_key_print_geneve_options(
+			tb[TCA_TUNNEL_KEY_ENC_OPTS_GENEVE]);
+	else if (tb[TCA_TUNNEL_KEY_ENC_OPTS_VXLAN])
+		tunnel_key_print_vxlan_options(
+			tb[TCA_TUNNEL_KEY_ENC_OPTS_VXLAN]);
+	else if (tb[TCA_TUNNEL_KEY_ENC_OPTS_ERSPAN])
+		tunnel_key_print_erspan_options(
+			tb[TCA_TUNNEL_KEY_ENC_OPTS_ERSPAN]);
 }
 
 static void tunnel_key_print_tos_ttl(FILE *f, char *name,
@@ -472,11 +655,11 @@ static void tunnel_key_print_tos_ttl(FILE *f, char *name,
 		return;
 
 	if (matches(name, "tos") == 0 && rta_getattr_u8(attr) != 0) {
-		print_string(PRINT_FP, NULL, "%s", _SL_);
+		print_nl();
 		print_uint(PRINT_ANY, "tos", "\ttos 0x%x",
 			   rta_getattr_u8(attr));
 	} else if (matches(name, "ttl") == 0 && rta_getattr_u8(attr) != 0) {
-		print_string(PRINT_FP, NULL, "%s", _SL_);
+		print_nl();
 		print_uint(PRINT_ANY, "ttl", "\tttl %u",
 			   rta_getattr_u8(attr));
 	}
@@ -487,8 +670,9 @@ static int print_tunnel_key(struct action_util *au, FILE *f, struct rtattr *arg)
 	struct rtattr *tb[TCA_TUNNEL_KEY_MAX + 1];
 	struct tc_tunnel_key *parm;
 
+	print_string(PRINT_ANY, "kind", "%s ", "tunnel_key");
 	if (!arg)
-		return -1;
+		return 0;
 
 	parse_rtattr_nested(tb, TCA_TUNNEL_KEY_MAX, arg);
 
@@ -497,8 +681,6 @@ static int print_tunnel_key(struct action_util *au, FILE *f, struct rtattr *arg)
 		return -1;
 	}
 	parm = RTA_DATA(tb[TCA_TUNNEL_KEY_PARMS]);
-
-	print_string(PRINT_ANY, "kind", "%s ", "tunnel_key");
 
 	switch (parm->t_action) {
 	case TCA_TUNNEL_KEY_ACT_RELEASE:
@@ -518,8 +700,7 @@ static int print_tunnel_key(struct action_util *au, FILE *f, struct rtattr *arg)
 					tb[TCA_TUNNEL_KEY_ENC_KEY_ID]);
 		tunnel_key_print_dst_port(f, "dst_port",
 					  tb[TCA_TUNNEL_KEY_ENC_DST_PORT]);
-		tunnel_key_print_key_opt("geneve_opts",
-					 tb[TCA_TUNNEL_KEY_ENC_OPTS]);
+		tunnel_key_print_key_opt(tb[TCA_TUNNEL_KEY_ENC_OPTS]);
 		tunnel_key_print_flag(f, "nocsum", "csum",
 				      tb[TCA_TUNNEL_KEY_NO_CSUM]);
 		tunnel_key_print_tos_ttl(f, "tos",
@@ -530,7 +711,7 @@ static int print_tunnel_key(struct action_util *au, FILE *f, struct rtattr *arg)
 	}
 	print_action_control(f, " ", parm->action, "");
 
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	print_uint(PRINT_ANY, "index", "\t index %u", parm->index);
 	print_int(PRINT_ANY, "ref", " ref %d", parm->refcnt);
 	print_int(PRINT_ANY, "bind", " bind %d", parm->bindcnt);
@@ -543,7 +724,7 @@ static int print_tunnel_key(struct action_util *au, FILE *f, struct rtattr *arg)
 		}
 	}
 
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 
 	return 0;
 }

@@ -18,11 +18,17 @@
 #include <string.h>
 #include <errno.h>
 
-#include "SNAPSHOT.h"
+#include "version.h"
 #include "utils.h"
 #include "ip_common.h"
 #include "namespace.h"
 #include "color.h"
+#include "rt_names.h"
+#include "bpf_util.h"
+
+#ifndef LIBDIR
+#define LIBDIR "/usr/lib"
+#endif
 
 int preferred_family = AF_UNSPEC;
 int human_readable;
@@ -36,10 +42,20 @@ int timestamp;
 int force;
 int max_flush_loops = 10;
 int batch_mode;
-int numeric;
 bool do_all;
 
 struct rtnl_handle rth = { .fd = -1 };
+
+const char *get_ip_lib_dir(void)
+{
+	const char *lib_dir;
+
+	lib_dir = getenv("IP_LIB_DIR");
+	if (!lib_dir)
+		lib_dir = LIBDIR "/ip";
+
+	return lib_dir;
+}
 
 static void usage(void) __attribute__((noreturn));
 
@@ -48,14 +64,15 @@ static void usage(void)
 	fprintf(stderr,
 		"Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n"
 		"       ip [ -force ] -batch filename\n"
-		"where  OBJECT := { link | address | addrlabel | route | rule | neigh | ntable |\n"
-		"                   tunnel | tuntap | maddress | mroute | mrule | monitor | xfrm |\n"
-		"                   netns | l2tp | fou | macsec | tcp_metrics | token | netconf | ila |\n"
-		"                   vrf | sr | nexthop }\n"
+		"where  OBJECT := { address | addrlabel | fou | help | ila | ioam | l2tp | link |\n"
+		"                   macsec | maddress | monitor | mptcp | mroute | mrule |\n"
+		"                   neighbor | neighbour | netconf | netns | nexthop | ntable |\n"
+		"                   ntbl | route | rule | sr | tap | tcpmetrics |\n"
+		"                   token | tunnel | tuntap | vrf | xfrm }\n"
 		"       OPTIONS := { -V[ersion] | -s[tatistics] | -d[etails] | -r[esolve] |\n"
 		"                    -h[uman-readable] | -iec | -j[son] | -p[retty] |\n"
 		"                    -f[amily] { inet | inet6 | mpls | bridge | link } |\n"
-		"                    -4 | -6 | -I | -D | -M | -B | -0 |\n"
+		"                    -4 | -6 | -M | -B | -0 |\n"
 		"                    -l[oops] { maximum-addr-flush-attempts } | -br[ief] |\n"
 		"                    -o[neline] | -t[imestamp] | -ts[hort] | -b[atch] [filename] |\n"
 		"                    -rc[vbuf] [size] | -n[etns] name | -N[umeric] | -a[ll] |\n"
@@ -103,11 +120,13 @@ static const struct cmd {
 	{ "vrf",	do_ipvrf},
 	{ "sr",		do_seg6 },
 	{ "nexthop",	do_ipnh },
+	{ "mptcp",	do_mptcp },
+	{ "ioam",	do_ioam6 },
 	{ "help",	do_help },
 	{ 0 }
 };
 
-static int do_cmd(const char *argv0, int argc, char **argv)
+static int do_cmd(const char *argv0, int argc, char **argv, bool final)
 {
 	const struct cmd *c;
 
@@ -116,64 +135,41 @@ static int do_cmd(const char *argv0, int argc, char **argv)
 			return -(c->func(argc-1, argv+1));
 	}
 
-	fprintf(stderr, "Object \"%s\" is unknown, try \"ip help\".\n", argv0);
+	if (final)
+		fprintf(stderr, "Object \"%s\" is unknown, try \"ip help\".\n", argv0);
 	return EXIT_FAILURE;
+}
+
+static int ip_batch_cmd(int argc, char *argv[], void *data)
+{
+	const int *orig_family = data;
+
+	preferred_family = *orig_family;
+	return do_cmd(argv[0], argc, argv, true);
 }
 
 static int batch(const char *name)
 {
-	char *line = NULL;
-	size_t len = 0;
-	int ret = EXIT_SUCCESS;
 	int orig_family = preferred_family;
-
-	batch_mode = 1;
-
-	if (name && strcmp(name, "-") != 0) {
-		if (freopen(name, "r", stdin) == NULL) {
-			fprintf(stderr,
-				"Cannot open file \"%s\" for reading: %s\n",
-				name, strerror(errno));
-			return EXIT_FAILURE;
-		}
-	}
+	int ret;
 
 	if (rtnl_open(&rth, 0) < 0) {
 		fprintf(stderr, "Cannot open rtnetlink\n");
 		return EXIT_FAILURE;
 	}
 
-	cmdlineno = 0;
-	while (getcmdline(&line, &len, stdin) != -1) {
-		char *largv[100];
-		int largc;
-
-		preferred_family = orig_family;
-
-		largc = makeargs(line, largv, 100);
-		if (largc == 0)
-			continue;	/* blank line */
-
-		if (do_cmd(largv[0], largc, largv)) {
-			fprintf(stderr, "Command failed %s:%d\n",
-				name, cmdlineno);
-			ret = EXIT_FAILURE;
-			if (!force)
-				break;
-		}
-	}
-	if (line)
-		free(line);
+	batch_mode = 1;
+	ret = do_batch(name, force, ip_batch_cmd, &orig_family);
 
 	rtnl_close(&rth);
 	return ret;
 }
 
-
 int main(int argc, char **argv)
 {
-	char *basename;
+	const char *libbpf_version;
 	char *batch_file = NULL;
+	char *basename;
 	int color = 0;
 
 	/* to run vrf exec without root, capabilities might be set, drop them
@@ -228,8 +224,6 @@ int main(int argc, char **argv)
 			preferred_family = AF_INET6;
 		} else if (strcmp(opt, "-0") == 0) {
 			preferred_family = AF_PACKET;
-		} else if (strcmp(opt, "-D") == 0) {
-			preferred_family = AF_DECnet;
 		} else if (strcmp(opt, "-M") == 0) {
 			preferred_family = AF_MPLS;
 		} else if (strcmp(opt, "-B") == 0) {
@@ -254,7 +248,11 @@ int main(int argc, char **argv)
 			++timestamp;
 			++timestamp_short;
 		} else if (matches(opt, "-Version") == 0) {
-			printf("ip utility, iproute2-ss%s\n", SNAPSHOT);
+			printf("ip utility, iproute2-%s", version);
+			libbpf_version = get_libbpf_version();
+			if (libbpf_version)
+				printf(", libbpf %s", libbpf_version);
+			printf("\n");
 			exit(0);
 		} else if (matches(opt, "-force") == 0) {
 			++force;
@@ -315,11 +313,14 @@ int main(int argc, char **argv)
 
 	rtnl_set_strict_dump(&rth);
 
-	if (strlen(basename) > 2)
-		return do_cmd(basename+2, argc, argv);
+	if (strlen(basename) > 2) {
+		int ret = do_cmd(basename+2, argc, argv, false);
+		if (ret != EXIT_FAILURE)
+			return ret;
+	}
 
 	if (argc > 1)
-		return do_cmd(argv[1], argc-1, argv+1);
+		return do_cmd(argv[1], argc-1, argv+1, true);
 
 	rtnl_close(&rth);
 	usage();

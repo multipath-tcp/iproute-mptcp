@@ -23,6 +23,8 @@ ip-macsec \- MACsec device configuration
 ] [
 .BR validate " { " strict " | " check " | " disabled " } ] ["
 .BI encodingsa " SA"
+] [
+.BR offload " { " off " | " phy " | " mac " }"
 ]
 
 .BI "ip macsec add " DEV " tx sa"
@@ -52,6 +54,9 @@ ip-macsec \- MACsec device configuration
 .br
 .BI "ip macsec del " DEV " rx " SCI " sa"
 .RI "{ " 0..3 " }"
+
+.BI "ip macsec offload " DEV
+.RB "{ " off " | " phy " | " mac " }"
 
 .B ip macsec show
 .RI [ " DEV " ]
@@ -83,7 +88,7 @@ type.
 
 .SH EXAMPLES
 .PP
-.SS Create a MACsec device on link eth0
+.SS Create a MACsec device on link eth0 (offload is disabled by default)
 .nf
 # ip link add link eth0 macsec0 type macsec port 11 encrypt on
 .PP
@@ -102,11 +107,19 @@ type.
 .SS Display MACsec configuration
 .nf
 # ip macsec show
+.PP
+.SS Configure offloading on an interface
+.nf
+# ip macsec offload macsec0 phy
+.PP
+.SS Configure offloading upon MACsec device creation
+.nf
+# ip link add link eth0 macsec0 type macsec port 11 encrypt on offload mac
 
 .SH NOTES
 This tool can be used to configure the 802.1AE keys of the interface. Note that 802.1AE uses GCM-AES
 with a initialization vector (IV) derived from the packet number. The same key must not be used
-with the same IV more than once. Instead, keys must be frequently regenerated and distibuted.
+with the same IV more than once. Instead, keys must be frequently regenerated and distributed.
 This tool is thus mostly for debugging and testing, or in combination with a user-space application
 that reconfigures the keys. It is wrong to just configure the keys statically and assume them to work
 indefinitely. The suggested and standardized way for key management is 802.1X-2010, which is implemented

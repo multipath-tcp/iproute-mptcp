@@ -23,12 +23,16 @@
 #include "ll_map.h"
 #include "libgenl.h"
 
-static const char * const values_on_off[] = { "off", "on" };
-
 static const char * const validate_str[] = {
 	[MACSEC_VALIDATE_DISABLED] = "disabled",
 	[MACSEC_VALIDATE_CHECK] = "check",
 	[MACSEC_VALIDATE_STRICT] = "strict",
+};
+
+static const char * const offload_str[] = {
+	[MACSEC_OFFLOAD_OFF] = "off",
+	[MACSEC_OFFLOAD_PHY] = "phy",
+	[MACSEC_OFFLOAD_MAC] = "mac",
 };
 
 struct sci {
@@ -93,31 +97,13 @@ static void ipmacsec_usage(void)
 		"       ip macsec del DEV rx SCI sa { 0..3 }\n"
 		"       ip macsec show\n"
 		"       ip macsec show DEV\n"
+		"       ip macsec offload DEV [ off | phy | mac ]\n"
 		"where  OPTS := [ pn <u32> ] [ on | off ]\n"
 		"       ID   := 128-bit hex string\n"
 		"       KEY  := 128-bit or 256-bit hex string\n"
 		"       SCI  := { sci <u64> | port { 1..2^16-1 } address <lladdr> }\n");
 
 	exit(-1);
-}
-
-static int one_of(const char *msg, const char *realval, const char * const *list,
-		  size_t len, int *index)
-{
-	int i;
-
-	for (i = 0; i < len; i++) {
-		if (matches(realval, list[i]) == 0) {
-			*index = i;
-			return 0;
-		}
-	}
-
-	fprintf(stderr, "Error: argument of \"%s\" must be one of ", msg);
-	for (i = 0; i < len; i++)
-		fprintf(stderr, "\"%s\", ", list[i]);
-	fprintf(stderr, "not \"%s\"\n", realval);
-	return -1;
 }
 
 static int get_an(__u8 *val, const char *arg)
@@ -354,6 +340,7 @@ enum cmd {
 	CMD_ADD,
 	CMD_DEL,
 	CMD_UPD,
+	CMD_OFFLOAD,
 	__CMD_MAX
 };
 
@@ -369,6 +356,9 @@ static const enum macsec_nl_commands macsec_commands[__CMD_MAX][2][2] = {
 	[CMD_DEL] = {
 		[0] = {-1, MACSEC_CMD_DEL_RXSC},
 		[1] = {MACSEC_CMD_DEL_TXSA, MACSEC_CMD_DEL_RXSA},
+	},
+	[CMD_OFFLOAD] = {
+		[0] = {-1, MACSEC_CMD_UPD_OFFLOAD },
 	},
 };
 
@@ -529,6 +519,43 @@ static int do_modify(enum cmd c, int argc, char **argv)
 	return -1;
 }
 
+static int do_offload(enum cmd c, int argc, char **argv)
+{
+	enum macsec_offload offload;
+	struct rtattr *attr;
+	int ifindex, ret;
+
+	if (argc == 0)
+		ipmacsec_usage();
+
+	ifindex = ll_name_to_index(*argv);
+	if (!ifindex) {
+		fprintf(stderr, "Device \"%s\" does not exist.\n", *argv);
+		return -1;
+	}
+	argc--; argv++;
+
+	if (argc == 0)
+		ipmacsec_usage();
+
+	offload = parse_one_of("offload", *argv, offload_str, ARRAY_SIZE(offload_str), &ret);
+	if (ret)
+		ipmacsec_usage();
+
+	MACSEC_GENL_REQ(req, MACSEC_BUFLEN, macsec_commands[c][0][1], NLM_F_REQUEST);
+
+	addattr32(&req.n, MACSEC_BUFLEN, MACSEC_ATTR_IFINDEX, ifindex);
+
+	attr = addattr_nest(&req.n, MACSEC_BUFLEN, MACSEC_ATTR_OFFLOAD);
+	addattr8(&req.n, MACSEC_BUFLEN, MACSEC_OFFLOAD_ATTR_TYPE, offload);
+	addattr_nest_end(&req.n, attr);
+
+	if (rtnl_talk(&genl_rth, &req.n, NULL) < 0)
+		return -2;
+
+	return 0;
+}
+
 /* dump/show */
 static struct {
 	int ifindex;
@@ -605,6 +632,22 @@ static const char *cs_id_to_name(__u64 cid)
 	}
 }
 
+static const char *validate_to_str(__u8 validate)
+{
+	if (validate >= ARRAY_SIZE(validate_str))
+		return "(unknown)";
+
+	return validate_str[validate];
+}
+
+static const char *offload_to_str(__u8 offload)
+{
+	if (offload >= ARRAY_SIZE(offload_str))
+		return "(unknown)";
+
+	return offload_str[offload];
+}
+
 static void print_attrs(struct rtattr *attrs[])
 {
 	print_flag(attrs, "protect", MACSEC_SECY_ATTR_PROTECT);
@@ -613,7 +656,7 @@ static void print_attrs(struct rtattr *attrs[])
 		__u8 val = rta_getattr_u8(attrs[MACSEC_SECY_ATTR_VALIDATE]);
 
 		print_string(PRINT_ANY, "validate",
-			     "validate %s ", validate_str[val]);
+			     "validate %s ", validate_to_str(val));
 	}
 
 	print_flag(attrs, "sc", MACSEC_RXSC_ATTR_ACTIVE);
@@ -997,6 +1040,19 @@ static int process(struct nlmsghdr *n, void *arg)
 	if (attrs[MACSEC_ATTR_RXSC_LIST])
 		print_rxsc_list(attrs[MACSEC_ATTR_RXSC_LIST]);
 
+	if (attrs[MACSEC_ATTR_OFFLOAD]) {
+		struct rtattr *attrs_offload[MACSEC_OFFLOAD_ATTR_MAX + 1];
+		__u8 offload;
+
+		parse_rtattr_nested(attrs_offload, MACSEC_OFFLOAD_ATTR_MAX,
+				    attrs[MACSEC_ATTR_OFFLOAD]);
+
+		offload = rta_getattr_u8(attrs_offload[MACSEC_OFFLOAD_ATTR_TYPE]);
+		print_string(PRINT_ANY, "offload",
+			     "    offload: %s ", offload_to_str(offload));
+		print_nl();
+	}
+
 	close_json_object();
 
 	return 0;
@@ -1068,6 +1124,8 @@ int do_ipmacsec(int argc, char **argv)
 		return do_modify(CMD_UPD, argc-1, argv+1);
 	if (matches(*argv, "delete") == 0)
 		return do_modify(CMD_DEL, argc-1, argv+1);
+	if (matches(*argv, "offload") == 0)
+		return do_offload(CMD_OFFLOAD, argc-1, argv+1);
 
 	fprintf(stderr, "Command \"%s\" is unknown, try \"ip macsec help\".\n",
 		*argv);
@@ -1137,7 +1195,16 @@ static void macsec_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 		print_string(PRINT_ANY,
 			     "validation",
 			     "validate %s ",
-			     validate_str[val]);
+			     validate_to_str(val));
+	}
+
+	if (tb[IFLA_MACSEC_OFFLOAD]) {
+		__u8 val = rta_getattr_u8(tb[IFLA_MACSEC_OFFLOAD]);
+
+		print_string(PRINT_ANY,
+			     "offload",
+			     "offload %s ",
+			     offload_to_str(val));
 	}
 
 	const char *inc_sci, *es, *replay;
@@ -1188,6 +1255,7 @@ static void usage(FILE *f)
 		"                  [ replay { on | off} window { 0..2^32-1 } ]\n"
 		"                  [ validate { strict | check | disabled } ]\n"
 		"                  [ encodingsa { 0..3 } ]\n"
+		"                  [ offload { mac | phy | off } ]\n"
 		);
 }
 
@@ -1197,6 +1265,7 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 	int ret;
 	__u8 encoding_sa = 0xff;
 	__u32 window = -1;
+	enum macsec_offload offload;
 	struct cipher_args cipher = {0};
 	enum macsec_validation_type validate;
 	bool es = false, scb = false, send_sci = false;
@@ -1243,8 +1312,7 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			int i;
 
-			ret = one_of("encrypt", *argv, values_on_off,
-				     ARRAY_SIZE(values_on_off), &i);
+			i = parse_on_off("encrypt", *argv, &ret);
 			if (ret != 0)
 				return ret;
 			addattr8(n, MACSEC_BUFLEN, IFLA_MACSEC_ENCRYPT, i);
@@ -1252,8 +1320,7 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			int i;
 
-			ret = one_of("send_sci", *argv, values_on_off,
-				     ARRAY_SIZE(values_on_off), &i);
+			i = parse_on_off("send_sci", *argv, &ret);
 			if (ret != 0)
 				return ret;
 			send_sci = i;
@@ -1263,8 +1330,7 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			int i;
 
-			ret = one_of("end_station", *argv, values_on_off,
-				     ARRAY_SIZE(values_on_off), &i);
+			i = parse_on_off("end_station", *argv, &ret);
 			if (ret != 0)
 				return ret;
 			es = i;
@@ -1273,8 +1339,7 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			int i;
 
-			ret = one_of("scb", *argv, values_on_off,
-				     ARRAY_SIZE(values_on_off), &i);
+			i = parse_on_off("scb", *argv, &ret);
 			if (ret != 0)
 				return ret;
 			scb = i;
@@ -1283,8 +1348,7 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			int i;
 
-			ret = one_of("protect", *argv, values_on_off,
-				     ARRAY_SIZE(values_on_off), &i);
+			i = parse_on_off("protect", *argv, &ret);
 			if (ret != 0)
 				return ret;
 			addattr8(n, MACSEC_BUFLEN, IFLA_MACSEC_PROTECT, i);
@@ -1292,8 +1356,7 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 			NEXT_ARG();
 			int i;
 
-			ret = one_of("replay", *argv, values_on_off,
-				     ARRAY_SIZE(values_on_off), &i);
+			i = parse_on_off("replay", *argv, &ret);
 			if (ret != 0)
 				return ret;
 			replay_protect = !!i;
@@ -1304,9 +1367,8 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 				invarg("expected replay window size", *argv);
 		} else if (strcmp(*argv, "validate") == 0) {
 			NEXT_ARG();
-			ret = one_of("validate", *argv,
-				     validate_str, ARRAY_SIZE(validate_str),
-				     (int *)&validate);
+			validate = parse_one_of("validate", *argv, validate_str,
+						ARRAY_SIZE(validate_str), &ret);
 			if (ret != 0)
 				return ret;
 			addattr8(n, MACSEC_BUFLEN,
@@ -1318,6 +1380,14 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 			ret = get_an(&encoding_sa, *argv);
 			if (ret)
 				invarg("expected an { 0..3 }", *argv);
+		} else if (strcmp(*argv, "offload") == 0) {
+			NEXT_ARG();
+			offload = parse_one_of("offload", *argv, offload_str,
+					       ARRAY_SIZE(offload_str), &ret);
+			if (ret != 0)
+				return ret;
+			addattr8(n, MACSEC_BUFLEN,
+				 IFLA_MACSEC_OFFLOAD, offload);
 		} else {
 			fprintf(stderr, "macsec: unknown command \"%s\"?\n",
 				*argv);

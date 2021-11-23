@@ -50,14 +50,16 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"Usage: ip neigh { add | del | change | replace }\n"
-		"		{ ADDR [ lladdr LLADDR ] [ nud STATE ] | proxy ADDR } [ dev DEV ]\n"
-		"		[ router ] [ extern_learn ] [ protocol PROTO ]\n"
+		"                { ADDR [ lladdr LLADDR ] [ nud STATE ] proxy ADDR }\n"
+		"                [ dev DEV ] [ router ] [ extern_learn ] [ protocol PROTO ]\n"
 		"\n"
-		"	ip neigh { show | flush } [ proxy ] [ to PREFIX ] [ dev DEV ] [ nud STATE ]\n"
-		"				  [ vrf NAME ]\n"
+		"       ip neigh { show | flush } [ proxy ] [ to PREFIX ] [ dev DEV ] [ nud STATE ]\n"
+		"                                 [ vrf NAME ]\n"
 		"\n"
-		"STATE := { permanent | noarp | stale | reachable | none |\n"
-		"           incomplete | delay | probe | failed }\n");
+		"       ip neigh get { ADDR | proxy ADDR } dev DEV\n"
+		"\n"
+		"STATE := { delay | failed | incomplete | noarp | none |\n"
+		"           permanent | probe | reachable | stale }\n");
 	exit(-1);
 }
 
@@ -250,6 +252,51 @@ static void print_neigh_state(unsigned int nud)
 	close_json_array(PRINT_JSON, NULL);
 }
 
+static int print_neigh_brief(FILE *fp, struct ndmsg *r, struct rtattr *tb[])
+{
+	if (tb[NDA_DST]) {
+		const char *dst;
+		int family = r->ndm_family;
+
+		if (family == AF_BRIDGE) {
+			if (RTA_PAYLOAD(tb[NDA_DST]) == sizeof(struct in6_addr))
+				family = AF_INET6;
+			else
+				family = AF_INET;
+		}
+
+		dst = format_host_rta(family, tb[NDA_DST]);
+		print_color_string(PRINT_ANY, ifa_family_color(family),
+				   "dst", "%-39s ", dst);
+	}
+
+	if (!filter.index && r->ndm_ifindex) {
+		print_color_string(PRINT_ANY, COLOR_IFNAME,
+				   "dev", "%-16s ",
+				   ll_index_to_name(r->ndm_ifindex));
+	}
+
+	if (tb[NDA_LLADDR]) {
+		const char *lladdr;
+
+		SPRINT_BUF(b1);
+
+		lladdr = ll_addr_n2a(RTA_DATA(tb[NDA_LLADDR]),
+				     RTA_PAYLOAD(tb[NDA_LLADDR]),
+				     ll_index_to_type(r->ndm_ifindex),
+				     b1, sizeof(b1));
+
+		print_color_string(PRINT_ANY, COLOR_MAC,
+				   "lladdr", "%s", lladdr);
+	}
+
+	print_string(PRINT_FP, NULL, "%s", "\n");
+	close_json_object();
+	fflush(fp);
+
+	return 0;
+}
+
 int print_neigh(struct nlmsghdr *n, void *arg)
 {
 	FILE *fp = (FILE *)arg;
@@ -282,8 +329,7 @@ int print_neigh(struct nlmsghdr *n, void *arg)
 	if (!(filter.state&r->ndm_state) &&
 	    !(r->ndm_flags & NTF_PROXY) &&
 	    !(r->ndm_flags & NTF_EXT_LEARNED) &&
-	    (r->ndm_state || !(filter.state&0x100)) &&
-	    (r->ndm_family != AF_DECnet))
+	    (r->ndm_state || !(filter.state&0x100)))
 		return 0;
 
 	if (filter.master && !(n->nlmsg_flags & NLM_F_DUMP_FILTERED)) {
@@ -335,6 +381,9 @@ int print_neigh(struct nlmsghdr *n, void *arg)
 		print_bool(PRINT_ANY, "deleted", "Deleted ", true);
 	else if (n->nlmsg_type == RTM_GETNEIGH)
 		print_null(PRINT_ANY, "miss", "%s ", "miss");
+
+	if (brief)
+		return print_neigh_brief(fp, r, tb);
 
 	if (tb[NDA_DST]) {
 		const char *dst;
@@ -411,7 +460,7 @@ int print_neigh(struct nlmsghdr *n, void *arg)
 
 	print_string(PRINT_FP, NULL, "\n", "");
 	close_json_object();
-	fflush(stdout);
+	fflush(fp);
 
 	return 0;
 }
@@ -599,6 +648,82 @@ static int do_show_or_flush(int argc, char **argv, int flush)
 	return 0;
 }
 
+static int ipneigh_get(int argc, char **argv)
+{
+	struct {
+		struct nlmsghdr	n;
+		struct ndmsg		ndm;
+		char			buf[1024];
+	} req = {
+		.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg)),
+		.n.nlmsg_flags = NLM_F_REQUEST,
+		.n.nlmsg_type = RTM_GETNEIGH,
+		.ndm.ndm_family = preferred_family,
+	};
+	struct nlmsghdr *answer;
+	char  *d = NULL;
+	int dst_ok = 0;
+	int dev_ok = 0;
+	inet_prefix dst;
+
+	while (argc > 0) {
+		if (strcmp(*argv, "dev") == 0) {
+			NEXT_ARG();
+			d = *argv;
+			dev_ok = 1;
+		} else if (matches(*argv, "proxy") == 0) {
+			NEXT_ARG();
+			if (matches(*argv, "help") == 0)
+				usage();
+			if (dst_ok)
+				duparg("address", *argv);
+			get_addr(&dst, *argv, preferred_family);
+			dst_ok = 1;
+			dev_ok = 1;
+			req.ndm.ndm_flags |= NTF_PROXY;
+		} else {
+			if (strcmp(*argv, "to") == 0)
+				NEXT_ARG();
+
+			if (matches(*argv, "help") == 0)
+				usage();
+			if (dst_ok)
+				duparg2("to", *argv);
+			get_addr(&dst, *argv, preferred_family);
+			dst_ok = 1;
+		}
+		argc--; argv++;
+	}
+
+	if (!dev_ok || !dst_ok || dst.family == AF_UNSPEC) {
+		fprintf(stderr, "Device and address are required arguments.\n");
+		return -1;
+	}
+
+	req.ndm.ndm_family = dst.family;
+	if (addattr_l(&req.n, sizeof(req), NDA_DST, &dst.data, dst.bytelen) < 0)
+		return -1;
+
+	if (d) {
+		req.ndm.ndm_ifindex = ll_name_to_index(d);
+		if (!req.ndm.ndm_ifindex) {
+			fprintf(stderr, "Cannot find device \"%s\"\n", d);
+			return -1;
+		}
+	}
+
+	if (rtnl_talk(&rth, &req.n, &answer) < 0)
+		return -2;
+
+	ipneigh_reset_filter(0);
+	if (print_neigh(answer, stdout) < 0) {
+		fprintf(stderr, "An error :-)\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 int do_ipneigh(int argc, char **argv)
 {
 	if (argc > 0) {
@@ -611,10 +736,8 @@ int do_ipneigh(int argc, char **argv)
 			return ipneigh_modify(RTM_NEWNEIGH, NLM_F_CREATE|NLM_F_REPLACE, argc-1, argv+1);
 		if (matches(*argv, "delete") == 0)
 			return ipneigh_modify(RTM_DELNEIGH, 0, argc-1, argv+1);
-		if (matches(*argv, "get") == 0) {
-			fprintf(stderr, "Sorry, \"neigh get\" is not implemented :-(\n");
-			return -1;
-		}
+		if (matches(*argv, "get") == 0)
+			return ipneigh_get(argc-1, argv+1);
 		if (matches(*argv, "show") == 0 ||
 		    matches(*argv, "lst") == 0 ||
 		    matches(*argv, "list") == 0)

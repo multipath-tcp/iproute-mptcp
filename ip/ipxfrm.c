@@ -34,6 +34,7 @@
 #include <netdb.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+#include <linux/udp.h>
 
 #include "utils.h"
 #include "xfrm.h"
@@ -648,6 +649,10 @@ static void xfrm_output_mark_print(struct rtattr *tb[], FILE *fp)
 	__u32 output_mark = rta_getattr_u32(tb[XFRMA_OUTPUT_MARK]);
 
 	fprintf(fp, "output-mark 0x%x", output_mark);
+	if (tb[XFRMA_SET_MARK_MASK]) {
+		__u32 mask = rta_getattr_u32(tb[XFRMA_SET_MARK_MASK]);
+		fprintf(fp, "/0x%x", mask);
+	}
 }
 
 int xfrm_parse_mark(struct xfrm_mark *mark, int *argcp, char ***argvp)
@@ -753,11 +758,14 @@ void xfrm_xfrma_print(struct rtattr *tb[], __u16 family,
 
 		fprintf(fp, "type ");
 		switch (e->encap_type) {
-		case 1:
+		case UDP_ENCAP_ESPINUDP_NON_IKE:
 			fprintf(fp, "espinudp-nonike ");
 			break;
-		case 2:
+		case UDP_ENCAP_ESPINUDP:
 			fprintf(fp, "espinudp ");
+			break;
+		case TCP_ENCAP_ESPINTCP:
+			fprintf(fp, "espintcp ");
 			break;
 		default:
 			fprintf(fp, "%u ", e->encap_type);
@@ -899,6 +907,14 @@ void xfrm_xfrma_print(struct rtattr *tb[], __u16 family,
 		fprintf(fp, "if_id %#x", if_id);
 		fprintf(fp, "%s", _SL_);
 	}
+	if (tb[XFRMA_TFCPAD]) {
+		__u32 tfcpad = rta_getattr_u32(tb[XFRMA_TFCPAD]);
+
+		if (prefix)
+			fputs(prefix, fp);
+		fprintf(fp, "tfcpad %u", tfcpad);
+		fprintf(fp, "%s", _SL_);
+	}
 }
 
 static int xfrm_selector_iszero(struct xfrm_selector *s)
@@ -906,6 +922,19 @@ static int xfrm_selector_iszero(struct xfrm_selector *s)
 	struct xfrm_selector s0 = {};
 
 	return (memcmp(&s0, s, sizeof(s0)) == 0);
+}
+
+static void xfrm_sec_ctx_print(FILE *fp, struct rtattr *attr)
+{
+	struct xfrm_user_sec_ctx *sctx;
+
+	fprintf(fp, "\tsecurity context ");
+
+	if (RTA_PAYLOAD(attr) < sizeof(*sctx))
+		fprintf(fp, "(ERROR truncated)");
+
+	sctx = RTA_DATA(attr);
+	fprintf(fp, "%.*s %s", sctx->ctx_len, (char *)(sctx + 1), _SL_);
 }
 
 void xfrm_state_info_print(struct xfrm_usersa_info *xsinfo,
@@ -949,6 +978,9 @@ void xfrm_state_info_print(struct xfrm_usersa_info *xsinfo,
 		XFRM_FLAG_PRINT(fp, extra_flags,
 				XFRM_SA_XFLAG_DONT_ENCAP_DSCP,
 				"dont-encap-dscp");
+		XFRM_FLAG_PRINT(fp, extra_flags,
+				XFRM_SA_XFLAG_OSEQ_MAY_WRAP,
+				"oseq-may-wrap");
 		if (extra_flags)
 			fprintf(fp, "%x", extra_flags);
 	}
@@ -972,19 +1004,8 @@ void xfrm_state_info_print(struct xfrm_usersa_info *xsinfo,
 		xfrm_stats_print(&xsinfo->stats, fp, buf);
 	}
 
-	if (tb[XFRMA_SEC_CTX]) {
-		struct xfrm_user_sec_ctx *sctx;
-
-		fprintf(fp, "\tsecurity context ");
-
-		if (RTA_PAYLOAD(tb[XFRMA_SEC_CTX]) < sizeof(*sctx))
-			fprintf(fp, "(ERROR truncated)");
-
-		sctx = RTA_DATA(tb[XFRMA_SEC_CTX]);
-
-		fprintf(fp, "%s %s", (char *)(sctx + 1), _SL_);
-	}
-
+	if (tb[XFRMA_SEC_CTX])
+		xfrm_sec_ctx_print(fp, tb[XFRMA_SEC_CTX]);
 }
 
 void xfrm_policy_info_print(struct xfrm_userpolicy_info *xpinfo,
@@ -995,19 +1016,8 @@ void xfrm_policy_info_print(struct xfrm_userpolicy_info *xpinfo,
 
 	xfrm_selector_print(&xpinfo->sel, preferred_family, fp, title);
 
-	if (tb[XFRMA_SEC_CTX]) {
-		struct xfrm_user_sec_ctx *sctx;
-
-		fprintf(fp, "\tsecurity context ");
-
-		if (RTA_PAYLOAD(tb[XFRMA_SEC_CTX]) < sizeof(*sctx))
-			fprintf(fp, "(ERROR truncated)");
-
-		sctx = RTA_DATA(tb[XFRMA_SEC_CTX]);
-
-		fprintf(fp, "%s ", (char *)(sctx + 1));
-		fprintf(fp, "%s", _SL_);
-	}
+	if (tb[XFRMA_SEC_CTX])
+		xfrm_sec_ctx_print(fp, tb[XFRMA_SEC_CTX]);
 
 	if (prefix)
 		strlcat(buf, prefix, sizeof(buf));
@@ -1208,9 +1218,11 @@ int xfrm_encap_type_parse(__u16 *type, int *argcp, char ***argvp)
 	char **argv = *argvp;
 
 	if (strcmp(*argv, "espinudp-nonike") == 0)
-		*type = 1;
+		*type = UDP_ENCAP_ESPINUDP_NON_IKE;
 	else if (strcmp(*argv, "espinudp") == 0)
-		*type = 2;
+		*type = UDP_ENCAP_ESPINUDP;
+	else if (strcmp(*argv, "espintcp") == 0)
+		*type = TCP_ENCAP_ESPINTCP;
 	else
 		invarg("ENCAP-TYPE value is invalid", *argv);
 

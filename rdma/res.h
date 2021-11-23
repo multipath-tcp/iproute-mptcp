@@ -22,25 +22,49 @@ int res_cm_id_parse_cb(const struct nlmsghdr *nlh, void *data);
 int res_cm_id_idx_parse_cb(const struct nlmsghdr *nlh, void *data);
 int res_qp_parse_cb(const struct nlmsghdr *nlh, void *data);
 int res_qp_idx_parse_cb(const struct nlmsghdr *nlh, void *data);
+int res_ctx_parse_cb(const struct nlmsghdr *nlh, void *data);
+int res_ctx_idx_parse_cb(const struct nlmsghdr *nlh, void *data);
+int res_srq_parse_cb(const struct nlmsghdr *nlh, void *data);
+int res_srq_idx_parse_cb(const struct nlmsghdr *nlh, void *data);
+
+static inline uint32_t res_get_command(uint32_t command, struct rd *rd)
+{
+	if (!rd->show_raw)
+		return command;
+
+	switch (command) {
+	case RDMA_NLDEV_CMD_RES_QP_GET:
+		return RDMA_NLDEV_CMD_RES_QP_GET_RAW;
+	case RDMA_NLDEV_CMD_RES_CQ_GET:
+		return RDMA_NLDEV_CMD_RES_CQ_GET_RAW;
+	case RDMA_NLDEV_CMD_RES_MR_GET:
+		return RDMA_NLDEV_CMD_RES_MR_GET_RAW;
+	default:
+		return command;
+	}
+}
 
 #define RES_FUNC(name, command, valid_filters, strict_port, id)                        \
 	static inline int _##name(struct rd *rd)                                       \
 	{                                                                              \
-		uint32_t idx;                                                          \
+		uint32_t idx, _command;                                                \
 		int ret;                                                               \
+		_command = res_get_command(command, rd);			       \
 		if (id) {                                                              \
 			ret = rd_doit_index(rd, &idx);                                 \
 			if (ret) {                                                     \
 				rd->suppress_errors = true;                            \
-				ret = _res_send_idx_msg(rd, command,                   \
+				ret = _res_send_idx_msg(rd, _command,                  \
 							name##_idx_parse_cb,           \
 							idx, id);                      \
-				if (!ret)                                              \
+				if (!ret || rd->show_raw)                              \
 					return ret;                                    \
-				/* Fallback for old systems without .doit callbacks */ \
+				/* Fallback for old systems without .doit callbacks.   \
+				 * Kernel that supports raw, for sure supports doit.   \
+				 */						       \
 			}                                                              \
 		}                                                                      \
-		return _res_send_msg(rd, command, name##_parse_cb);                    \
+		return _res_send_msg(rd, _command, name##_parse_cb);                   \
 	}                                                                              \
 	static inline int name(struct rd *rd)                                          \
 	{                                                                              \
@@ -135,7 +159,30 @@ filters qp_valid_filters[MAX_NUMBER_OF_FILTERS] = {
 RES_FUNC(res_qp, RDMA_NLDEV_CMD_RES_QP_GET, qp_valid_filters, false,
 	 RDMA_NLDEV_ATTR_RES_LQPN);
 
-char *get_task_name(uint32_t pid);
+static const
+struct filters ctx_valid_filters[MAX_NUMBER_OF_FILTERS] = {
+	{ .name = "dev", .is_number = false },
+	{ .name = "pid", .is_number = true },
+	{ .name = "ctxn", .is_number = true, .is_doit = true },
+};
+
+RES_FUNC(res_ctx, RDMA_NLDEV_CMD_RES_CTX_GET, ctx_valid_filters, true,
+	 RDMA_NLDEV_ATTR_RES_CTXN);
+
+static const
+struct filters srq_valid_filters[MAX_NUMBER_OF_FILTERS] = {
+	{ .name = "dev", .is_number = false },
+	{ .name = "pid", .is_number = true },
+	{ .name = "srqn", .is_number = true, .is_doit = true },
+	{ .name = "type", .is_number = false },
+	{ .name = "pdn", .is_number = true },
+	{ .name = "cqn", .is_number = true },
+	{ .name = "lqpn", .is_number = true },
+};
+
+RES_FUNC(res_srq, RDMA_NLDEV_CMD_RES_SRQ_GET, srq_valid_filters, true,
+	 RDMA_NLDEV_ATTR_RES_SRQN);
+
 void print_dev(struct rd *rd, uint32_t idx, const char *name);
 void print_link(struct rd *rd, uint32_t idx, const char *name, uint32_t port,
 		struct nlattr **nla_line);
@@ -145,5 +192,5 @@ void res_print_uint(struct rd *rd, const char *name, uint64_t val,
 		    struct nlattr *nlattr);
 void print_comm(struct rd *rd, const char *str, struct nlattr **nla_line);
 const char *qp_types_to_str(uint8_t idx);
-
+void print_qp_type(struct rd *rd, uint32_t val);
 #endif /* _RDMA_TOOL_RES_H_ */

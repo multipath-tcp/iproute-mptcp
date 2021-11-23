@@ -13,8 +13,6 @@
 #include <string.h>
 #include <errno.h>
 
-#include <libmnl/libmnl.h>
-
 #include "cmdl.h"
 
 static const struct cmd *find_cmd(const struct cmd *cmds, char *str)
@@ -33,7 +31,7 @@ static const struct cmd *find_cmd(const struct cmd *cmds, char *str)
 	return match;
 }
 
-static struct opt *find_opt(struct opt *opts, char *str)
+struct opt *find_opt(struct opt *opts, char *str)
 {
 	struct opt *o;
 	struct opt *match = NULL;

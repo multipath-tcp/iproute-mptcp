@@ -30,17 +30,21 @@
 #include "rt_names.h"
 #include "utils.h"
 
-static unsigned int filter_index, filter_vlan, filter_state, filter_master;
+static unsigned int filter_index, filter_dynamic, filter_master,
+	filter_state, filter_vlan;
 
 static void usage(void)
 {
 	fprintf(stderr,
 		"Usage: bridge fdb { add | append | del | replace } ADDR dev DEV\n"
 		"              [ self ] [ master ] [ use ] [ router ] [ extern_learn ]\n"
-		"              [ sticky ] [ local | static | dynamic ] [ dst IPADDR ]\n"
-		"              [ vlan VID ] [ port PORT] [ vni VNI ] [ via DEV ]\n"
-		"              [ src_vni VNI ]\n"
-		"       bridge fdb [ show [ br BRDEV ] [ brport DEV ] [ vlan VID ] [ state STATE ] ]\n");
+		"              [ sticky ] [ local | static | dynamic ] [ vlan VID ]\n"
+		"              { [ dst IPADDR ] [ port PORT] [ vni VNI ] | [ nhid NHID ] }\n"
+		"	       [ via DEV ] [ src_vni VNI ]\n"
+		"       bridge fdb [ show [ br BRDEV ] [ brport DEV ] [ vlan VID ]\n"
+		"              [ state STATE ] [ dynamic ] ]\n"
+		"       bridge fdb get [ to ] LLADDR [ br BRDEV ] { brport | dev } DEV\n"
+		"              [ vlan VID ] [ vni VNI ] [ self ] [ master ] [ dynamic ]\n");
 	exit(-1);
 }
 
@@ -60,7 +64,10 @@ static const char *state_n2a(unsigned int s)
 	if (s & NUD_REACHABLE)
 		return "";
 
-	sprintf(buf, "state=%#x", s);
+	if (is_json_context())
+		sprintf(buf, "%#x", s);
+	else
+		sprintf(buf, "state=%#x", s);
 	return buf;
 }
 
@@ -165,6 +172,9 @@ int print_fdb(struct nlmsghdr *n, void *arg)
 	if (filter_vlan && filter_vlan != vid)
 		return 0;
 
+	if (filter_dynamic && (r->ndm_state & NUD_PERMANENT))
+		return 0;
+
 	open_json_object(NULL);
 	if (n->nlmsg_type == RTM_DELNEIGH)
 		print_bool(PRINT_ANY, "deleted", "Deleted ", true);
@@ -182,10 +192,13 @@ int print_fdb(struct nlmsghdr *n, void *arg)
 				   "mac", "%s ", lladdr);
 	}
 
-	if (!filter_index && r->ndm_ifindex)
+	if (!filter_index && r->ndm_ifindex) {
+		print_string(PRINT_FP, NULL, "dev ", NULL);
+
 		print_color_string(PRINT_ANY, COLOR_IFNAME,
-				   "ifname", "dev %s ",
+				   "ifname", "%s ",
 				   ll_index_to_name(r->ndm_ifindex));
+	}
 
 	if (tb[NDA_DST]) {
 		int family = AF_INET;
@@ -198,9 +211,11 @@ int print_fdb(struct nlmsghdr *n, void *arg)
 				  RTA_PAYLOAD(tb[NDA_DST]),
 				  RTA_DATA(tb[NDA_DST]));
 
+		print_string(PRINT_FP, NULL, "dst ", NULL);
+
 		print_color_string(PRINT_ANY,
 				   ifa_family_color(family),
-				    "dst", "dst %s ", dst);
+				   "dst", "%s ", dst);
 	}
 
 	if (vid)
@@ -234,6 +249,10 @@ int print_fdb(struct nlmsghdr *n, void *arg)
 					   "viaIf", "via %s ",
 					   ll_index_to_name(ifindex));
 	}
+
+	if (tb[NDA_NH_ID])
+		print_uint(PRINT_ANY, "nhid", "nhid %u ",
+			   rta_getattr_u32(tb[NDA_NH_ID]));
 
 	if (tb[NDA_LINK_NETNSID])
 		print_uint(PRINT_ANY,
@@ -320,6 +339,8 @@ static int fdb_show(int argc, char **argv)
 			if (state_a2n(&state, *argv))
 				invarg("invalid state", *argv);
 			filter_state |= state;
+		} else if (strcmp(*argv, "dynamic") == 0) {
+			filter_dynamic = 1;
 		} else {
 			if (matches(*argv, "help") == 0)
 				usage();
@@ -388,6 +409,7 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 	unsigned int via = 0;
 	char *endptr;
 	short vid = -1;
+	__u32 nhid = 0;
 
 	while (argc > 0) {
 		if (strcmp(*argv, "dev") == 0) {
@@ -399,6 +421,10 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 				duparg2("dst", *argv);
 			get_addr(&dst, *argv, preferred_family);
 			dst_ok = 1;
+		} else if (strcmp(*argv, "nhid") == 0) {
+			NEXT_ARG();
+			if (get_u32(&nhid, *argv, 0))
+				invarg("\"id\" value is invalid\n", *argv);
 		} else if (strcmp(*argv, "port") == 0) {
 
 			NEXT_ARG();
@@ -473,6 +499,11 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 		return -1;
 	}
 
+	if (nhid && (dst_ok || port || vni != ~0)) {
+		fprintf(stderr, "dst, port, vni are mutually exclusive with nhid\n");
+		return -1;
+	}
+
 	/* Assume self */
 	if (!(req.ndm.ndm_flags&(NTF_SELF|NTF_MASTER)))
 		req.ndm.ndm_flags |= NTF_SELF;
@@ -494,6 +525,8 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 
 	if (vid >= 0)
 		addattr16(&req.n, sizeof(req), NDA_VLAN, vid);
+	if (nhid > 0)
+		addattr32(&req.n, sizeof(req), NDA_NH_ID, nhid);
 
 	if (port) {
 		unsigned short dport;
@@ -518,6 +551,121 @@ static int fdb_modify(int cmd, int flags, int argc, char **argv)
 	return 0;
 }
 
+static int fdb_get(int argc, char **argv)
+{
+	struct {
+		struct nlmsghdr	n;
+		struct ndmsg		ndm;
+		char			buf[1024];
+	} req = {
+		.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg)),
+		.n.nlmsg_flags = NLM_F_REQUEST,
+		.n.nlmsg_type = RTM_GETNEIGH,
+		.ndm.ndm_family = AF_BRIDGE,
+	};
+	char  *d = NULL, *br = NULL;
+	struct nlmsghdr *answer;
+	unsigned long vni = ~0;
+	char abuf[ETH_ALEN];
+	int br_ifindex = 0;
+	char *addr = NULL;
+	short vlan = -1;
+	char *endptr;
+
+	while (argc > 0) {
+		if ((strcmp(*argv, "brport") == 0) || strcmp(*argv, "dev") == 0) {
+			NEXT_ARG();
+			d = *argv;
+		} else if (strcmp(*argv, "br") == 0) {
+			NEXT_ARG();
+			br = *argv;
+		} else if (strcmp(*argv, "dev") == 0) {
+			NEXT_ARG();
+			d = *argv;
+		} else if (strcmp(*argv, "vni") == 0) {
+			NEXT_ARG();
+			vni = strtoul(*argv, &endptr, 0);
+			if ((endptr && *endptr) ||
+			    (vni >> 24) || vni == ULONG_MAX)
+				invarg("invalid VNI\n", *argv);
+		} else if (strcmp(*argv, "self") == 0) {
+			req.ndm.ndm_flags |= NTF_SELF;
+		} else if (matches(*argv, "master") == 0) {
+			req.ndm.ndm_flags |= NTF_MASTER;
+		} else if (matches(*argv, "vlan") == 0) {
+			if (vlan >= 0)
+				duparg2("vlan", *argv);
+			NEXT_ARG();
+			vlan = atoi(*argv);
+		} else if (matches(*argv, "dynamic") == 0) {
+			filter_dynamic = 1;
+		} else {
+			if (strcmp(*argv, "to") == 0)
+				NEXT_ARG();
+
+			if (matches(*argv, "help") == 0)
+				usage();
+			if (addr)
+				duparg2("to", *argv);
+			addr = *argv;
+		}
+		argc--; argv++;
+	}
+
+	if ((d == NULL && br == NULL) || addr == NULL) {
+		fprintf(stderr, "Device or master and address are required arguments.\n");
+		return -1;
+	}
+
+	if (sscanf(addr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+		   abuf, abuf+1, abuf+2,
+		   abuf+3, abuf+4, abuf+5) != 6) {
+		fprintf(stderr, "Invalid mac address %s\n", addr);
+		return -1;
+	}
+
+	addattr_l(&req.n, sizeof(req), NDA_LLADDR, abuf, ETH_ALEN);
+
+	if (vlan >= 0)
+		addattr16(&req.n, sizeof(req), NDA_VLAN, vlan);
+
+	if (vni != ~0)
+		addattr32(&req.n, sizeof(req), NDA_VNI, vni);
+
+	if (d) {
+		req.ndm.ndm_ifindex = ll_name_to_index(d);
+		if (!req.ndm.ndm_ifindex) {
+			fprintf(stderr, "Cannot find device \"%s\"\n", d);
+			return -1;
+		}
+	}
+
+	if (br) {
+		br_ifindex = ll_name_to_index(br);
+		if (!br_ifindex) {
+			fprintf(stderr, "Cannot find bridge device \"%s\"\n", br);
+			return -1;
+		}
+		addattr32(&req.n, sizeof(req), NDA_MASTER, br_ifindex);
+	}
+
+	if (rtnl_talk(&rth, &req.n, &answer) < 0)
+		return -2;
+
+	/*
+	 * Initialize a json_writer and open an array object
+	 * if -json was specified.
+	 */
+	new_json_obj(json);
+	if (print_fdb(answer, stdout) < 0) {
+		fprintf(stderr, "An error :-)\n");
+		return -1;
+	}
+	delete_json_obj();
+
+	return 0;
+}
+
 int do_fdb(int argc, char **argv)
 {
 	ll_init_map(&rth);
@@ -531,6 +679,8 @@ int do_fdb(int argc, char **argv)
 			return fdb_modify(RTM_NEWNEIGH, NLM_F_CREATE|NLM_F_REPLACE, argc-1, argv+1);
 		if (matches(*argv, "delete") == 0)
 			return fdb_modify(RTM_DELNEIGH, 0, argc-1, argv+1);
+		if (matches(*argv, "get") == 0)
+			return fdb_get(argc-1, argv+1);
 		if (matches(*argv, "show") == 0 ||
 		    matches(*argv, "lst") == 0 ||
 		    matches(*argv, "list") == 0)

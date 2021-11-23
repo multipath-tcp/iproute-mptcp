@@ -60,8 +60,8 @@ pedit - generic packet editor action
 
 .ti -8
 .IR IP6HDR_FIELD " := { "
-.BR src " | " dst " | " flow_lbl " | " payload_len " | " nexthdr " |"
-.BR hoplimit " }"
+.BR src " | " dst " | " traffic_class " | " flow_lbl " | " payload_len " | "
+.BR nexthdr " | " hoplimit " }"
 
 .ti -8
 .IR TCPHDR_FIELD " := { "
@@ -77,6 +77,7 @@ pedit - generic packet editor action
 .IR VAL " | "
 .BR add
 .IR VAL " | "
+.BR decrement " | "
 .BR preserve " } [ " retain
 .IR RVAL " ]"
 
@@ -90,14 +91,13 @@ action can be used to change arbitrary packet data. The location of data to
 change can either be specified by giving an offset and size as in
 .IR RAW_OP ,
 or for header values by naming the header and field to edit the size is then
-chosen automatically based on the header field size. Currently this is supported
-only for IPv4 headers.
+chosen automatically based on the header field size.
 .SH OPTIONS
 .TP
 .B ex
 Use extended pedit.
 .I EXTENDED_LAYERED_OP
-and the add
+and the add/decrement
 .I CMD_SPEC
 are allowed only in this mode.
 .TP
@@ -229,6 +229,8 @@ are:
 .TQ
 .B dst
 .TQ
+.B traffic_class
+.TQ
 .B flow_lbl
 .TQ
 .B payload_len
@@ -286,6 +288,11 @@ Add the addressed data by a specific value. The size of
 is defined by the size of the addressed header field in
 .IR EXTENDED_LAYERED_OP .
 This operation is supported only for extended layered op.
+.TP
+.BI decrement
+Decrease the addressed data by one.
+This operation is supported only for
+.BR ip " " ttl " and " ip6 " " hoplimit "."
 .TP
 .B preserve
 Keep the addressed data as is.
@@ -367,6 +374,28 @@ tc filter add dev eth0 parent ffff: u32 \\
 	action pedit ex munge tcp dport set 22
 .EE
 .RE
+
+To rewrite just part of a field, use the
+.B retain
+directive. E.g. to overwrite the DSCP part of a dsfield with $DSCP, without
+touching ECN:
+
+.RS
+.EX
+tc filter add dev eth0 ingress flower ... \\
+	action pedit ex munge ip dsfield set $((DSCP << 2)) retain 0xfc
+.EE
+.RE
+
+And vice versa, to set ECN to e.g. 1 without impacting DSCP:
+
+.RS
+.EX
+tc filter add dev eth0 ingress flower ... \\
+	action pedit ex munge ip dsfield set 1 retain 0x3
+.EE
+.RE
+
 .SH SEE ALSO
 .BR tc (8),
 .BR tc-htb (8),

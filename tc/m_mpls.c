@@ -17,17 +17,21 @@ static const char * const action_names[] = {
 	[TCA_MPLS_ACT_PUSH] = "push",
 	[TCA_MPLS_ACT_MODIFY] = "modify",
 	[TCA_MPLS_ACT_DEC_TTL] = "dec_ttl",
+	[TCA_MPLS_ACT_MAC_PUSH] = "mac_push",
 };
 
 static void explain(void)
 {
 	fprintf(stderr,
-		"Usage: mpls pop [ protocol MPLS_PROTO ]\n"
+		"Usage: mpls pop [ protocol MPLS_PROTO ] [CONTROL]\n"
 		"       mpls push [ protocol MPLS_PROTO ] [ label MPLS_LABEL ] [ tc MPLS_TC ]\n"
 		"                 [ ttl MPLS_TTL ] [ bos MPLS_BOS ] [CONTROL]\n"
-		"       mpls modify [ label MPLS_LABEL ] [ tc MPLS_TC ] [ ttl MPLS_TTL ] [CONTROL]\n"
-		"           for pop MPLS_PROTO is next header of packet - e.g. ip or mpls_uc\n"
-		"           for push MPLS_PROTO is one of mpls_uc or mpls_mc\n"
+		"       mpls mac_push [ protocol MPLS_PROTO ] [ label MPLS_LABEL ] [ tc MPLS_TC ]\n"
+		"                     [ ttl MPLS_TTL ] [ bos MPLS_BOS ] [CONTROL]\n"
+		"       mpls modify [ label MPLS_LABEL ] [ tc MPLS_TC ] [ ttl MPLS_TTL ]\n"
+		"                   [ bos MPLS_BOS ] [CONTROL]\n"
+		"           for pop, MPLS_PROTO is next header of packet - e.g. ip or mpls_uc\n"
+		"           for push and mac_push, MPLS_PROTO is one of mpls_uc or mpls_mc\n"
 		"               with default: mpls_uc\n"
 		"       CONTROL := reclassify | pipe | drop | continue | pass |\n"
 		"                  goto chain <CHAIN_INDEX>\n");
@@ -41,12 +45,14 @@ static void usage(void)
 
 static bool can_modify_mpls_fields(unsigned int action)
 {
-	return action == TCA_MPLS_ACT_PUSH || action == TCA_MPLS_ACT_MODIFY;
+	return action == TCA_MPLS_ACT_PUSH || action == TCA_MPLS_ACT_MAC_PUSH ||
+		action == TCA_MPLS_ACT_MODIFY;
 }
 
-static bool can_modify_ethtype(unsigned int action)
+static bool can_set_ethtype(unsigned int action)
 {
-	return action == TCA_MPLS_ACT_PUSH || action == TCA_MPLS_ACT_POP;
+	return action == TCA_MPLS_ACT_PUSH || action == TCA_MPLS_ACT_MAC_PUSH ||
+		action == TCA_MPLS_ACT_POP;
 }
 
 static bool is_valid_label(__u32 label)
@@ -98,37 +104,46 @@ static int parse_mpls(struct action_util *a, int *argc_p, char ***argv_p,
 			if (check_double_action(action, *argv))
 				return -1;
 			action = TCA_MPLS_ACT_MODIFY;
+		} else if (matches(*argv, "mac_push") == 0) {
+			if (check_double_action(action, *argv))
+				return -1;
+			action = TCA_MPLS_ACT_MAC_PUSH;
 		} else if (matches(*argv, "dec_ttl") == 0) {
 			if (check_double_action(action, *argv))
 				return -1;
 			action = TCA_MPLS_ACT_DEC_TTL;
 		} else if (matches(*argv, "label") == 0) {
 			if (!can_modify_mpls_fields(action))
-				invarg("only valid for push/modify", *argv);
+				invarg("only valid for push, mac_push and modify",
+				       *argv);
 			NEXT_ARG();
 			if (get_u32(&label, *argv, 0) || !is_valid_label(label))
 				invarg("label must be <=0xFFFFF", *argv);
 		} else if (matches(*argv, "tc") == 0) {
 			if (!can_modify_mpls_fields(action))
-				invarg("only valid for push/modify", *argv);
+				invarg("only valid for push, mac_push and modify",
+				       *argv);
 			NEXT_ARG();
 			if (get_u8(&tc, *argv, 0) || (tc & ~0x7))
 				invarg("tc field is 3 bits max", *argv);
 		} else if (matches(*argv, "ttl") == 0) {
 			if (!can_modify_mpls_fields(action))
-				invarg("only valid for push/modify", *argv);
+				invarg("only valid for push, mac_push and modify",
+				       *argv);
 			NEXT_ARG();
 			if (get_u8(&ttl, *argv, 0) || !ttl)
 				invarg("ttl must be >0 and <=255", *argv);
 		} else if (matches(*argv, "bos") == 0) {
 			if (!can_modify_mpls_fields(action))
-				invarg("only valid for push/modify", *argv);
+				invarg("only valid for push, mac_push and modify",
+				       *argv);
 			NEXT_ARG();
 			if (get_u8(&bos, *argv, 0) || (bos & ~0x1))
 				invarg("bos must be 0 or 1", *argv);
 		} else if (matches(*argv, "protocol") == 0) {
-			if (!can_modify_ethtype(action))
-				invarg("only valid for push/pop", *argv);
+			if (!can_set_ethtype(action))
+				invarg("only valid for push, mac_push and pop",
+				       *argv);
 			NEXT_ARG();
 			if (ll_proto_a2n(&proto, *argv))
 				invarg("protocol is invalid", *argv);
@@ -156,13 +171,15 @@ static int parse_mpls(struct action_util *a, int *argc_p, char ***argv_p,
 		}
 	}
 
-	if (action == TCA_MPLS_ACT_PUSH && !label)
+	if (action == TCA_MPLS_ACT_PUSH && label == 0xffffffff)
 		missarg("label");
 
-	if (action == TCA_MPLS_ACT_PUSH && proto &&
+	if ((action == TCA_MPLS_ACT_PUSH || action == TCA_MPLS_ACT_MAC_PUSH) &&
+	    proto &&
 	    proto != htons(ETH_P_MPLS_UC) && proto != htons(ETH_P_MPLS_MC)) {
 		fprintf(stderr,
-			"invalid push protocol \"0x%04x\" - use mpls_(uc|mc)\n",
+			"invalid %spush protocol \"0x%04x\" - use mpls_(uc|mc)\n",
+			action == TCA_MPLS_ACT_MAC_PUSH ? "mac_" : "",
 			ntohs(proto));
 		return -1;
 	}
@@ -197,8 +214,9 @@ static int print_mpls(struct action_util *au, FILE *f, struct rtattr *arg)
 	SPRINT_BUF(b1);
 	__u32 val;
 
+	print_string(PRINT_ANY, "kind", "%s ", "mpls");
 	if (!arg)
-		return -1;
+		return 0;
 
 	parse_rtattr_nested(tb, TCA_MPLS_MAX, arg);
 
@@ -208,7 +226,6 @@ static int print_mpls(struct action_util *au, FILE *f, struct rtattr *arg)
 	}
 	parm = RTA_DATA(tb[TCA_MPLS_PARMS]);
 
-	print_string(PRINT_ANY, "kind", "%s ", "mpls");
 	print_string(PRINT_ANY, "mpls_action", " %s",
 		     action_names[parm->m_action]);
 
@@ -223,6 +240,7 @@ static int print_mpls(struct action_util *au, FILE *f, struct rtattr *arg)
 		}
 		break;
 	case TCA_MPLS_ACT_PUSH:
+	case TCA_MPLS_ACT_MAC_PUSH:
 		if (tb[TCA_MPLS_PROTO]) {
 			__u16 proto;
 
@@ -252,7 +270,8 @@ static int print_mpls(struct action_util *au, FILE *f, struct rtattr *arg)
 	}
 	print_action_control(f, " ", parm->action, "");
 
-	print_uint(PRINT_ANY, "index", "\n\t index %u", parm->index);
+	print_nl();
+	print_uint(PRINT_ANY, "index", "\t index %u", parm->index);
 	print_int(PRINT_ANY, "ref", " ref %d", parm->refcnt);
 	print_int(PRINT_ANY, "bind", " bind %d", parm->bindcnt);
 
@@ -264,7 +283,7 @@ static int print_mpls(struct action_util *au, FILE *f, struct rtattr *arg)
 		}
 	}
 
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 
 	return 0;
 }

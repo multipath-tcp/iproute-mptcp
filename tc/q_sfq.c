@@ -206,9 +206,6 @@ static int sfq_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	struct tc_sfq_qopt *qopt;
 	struct tc_sfq_qopt_v1 *qopt_ext = NULL;
 
-	SPRINT_BUF(b1);
-	SPRINT_BUF(b2);
-	SPRINT_BUF(b3);
 	if (opt == NULL)
 		return 0;
 
@@ -217,35 +214,47 @@ static int sfq_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	if (RTA_PAYLOAD(opt) >= sizeof(*qopt_ext))
 		qopt_ext = RTA_DATA(opt);
 	qopt = RTA_DATA(opt);
-	fprintf(f, "limit %up ", qopt->limit);
-	fprintf(f, "quantum %s ", sprint_size(qopt->quantum, b1));
-	if (qopt_ext && qopt_ext->depth)
-		fprintf(f, "depth %u ", qopt_ext->depth);
-	if (qopt_ext && qopt_ext->headdrop)
-		fprintf(f, "headdrop ");
 
-	if (show_details) {
-		fprintf(f, "flows %u/%u ", qopt->flows, qopt->divisor);
-	}
-	fprintf(f, "divisor %u ", qopt->divisor);
+	print_uint(PRINT_ANY, "limit", "limit %up ", qopt->limit);
+	print_size(PRINT_ANY, "quantum", "quantum %s ", qopt->quantum);
+
+	if (qopt_ext && qopt_ext->depth)
+		print_uint(PRINT_ANY, "depth", "depth %u ", qopt_ext->depth);
+	if (qopt_ext && qopt_ext->headdrop)
+		print_bool(PRINT_ANY, "headdrop", "headdrop ", true);
+	if (show_details)
+		print_uint(PRINT_ANY, "flows", "flows %u ", qopt->flows);
+
+	print_uint(PRINT_ANY, "divisor", "divisor %u ", qopt->divisor);
+
 	if (qopt->perturb_period)
-		fprintf(f, "perturb %dsec ", qopt->perturb_period);
+		print_int(PRINT_ANY, "perturb", "perturb %dsec ",
+			   qopt->perturb_period);
 	if (qopt_ext && qopt_ext->qth_min) {
-		fprintf(f, "\n ewma %u ", qopt_ext->Wlog);
-		fprintf(f, "min %s max %s probability %g ",
-			sprint_size(qopt_ext->qth_min, b2),
-			sprint_size(qopt_ext->qth_max, b3),
-			qopt_ext->max_P / pow(2, 32));
+		print_uint(PRINT_ANY, "ewma", "ewma %u ", qopt_ext->Wlog);
+		print_size(PRINT_ANY, "min", "min %s ", qopt_ext->qth_min);
+		print_size(PRINT_ANY, "max", "max %s ", qopt_ext->qth_max);
+		print_float(PRINT_ANY, "probability", "probability %lg ",
+			    qopt_ext->max_P / pow(2, 32));
 		tc_red_print_flags(qopt_ext->flags);
 		if (show_stats) {
-			fprintf(f, "\n prob_mark %u prob_mark_head %u prob_drop %u",
-				qopt_ext->stats.prob_mark,
-				qopt_ext->stats.prob_mark_head,
-				qopt_ext->stats.prob_drop);
-			fprintf(f, "\n forced_mark %u forced_mark_head %u forced_drop %u",
-				qopt_ext->stats.forced_mark,
-				qopt_ext->stats.forced_mark_head,
-				qopt_ext->stats.forced_drop);
+			print_nl();
+			print_uint(PRINT_ANY, "prob_mark", "  prob_mark %u",
+				   qopt_ext->stats.prob_mark);
+			print_uint(PRINT_ANY, "prob_mark_head",
+				   " prob_mark_head %u",
+				   qopt_ext->stats.prob_mark_head);
+			print_uint(PRINT_ANY, "prob_drop", " prob_drop %u",
+				   qopt_ext->stats.prob_drop);
+			print_nl();
+			print_uint(PRINT_ANY, "forced_mark",
+				   "  forced_mark %u",
+				   qopt_ext->stats.forced_mark);
+			print_uint(PRINT_ANY, "forced_mark_head",
+				   " forced_mark_head %u",
+				   qopt_ext->stats.forced_mark_head);
+			print_uint(PRINT_ANY, "forced_drop", " forced_drop %u",
+				   qopt_ext->stats.forced_drop);
 		}
 	}
 	return 0;
@@ -262,8 +271,8 @@ static int sfq_print_xstats(struct qdisc_util *qu, FILE *f,
 		return -1;
 	st = RTA_DATA(xstats);
 
-	fprintf(f, " allot %d ", st->allot);
-	fprintf(f, "\n");
+	print_int(PRINT_ANY, "allot", "  allot %d", st->allot);
+
 	return 0;
 }
 

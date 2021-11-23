@@ -97,6 +97,7 @@ static int cake_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 	unsigned int interval = 0;
 	unsigned int diffserv = 0;
 	unsigned int memlimit = 0;
+	unsigned int fwmark = 0;
 	unsigned int target = 0;
 	__u64 bandwidth = 0;
 	int ack_filter = -1;
@@ -107,7 +108,6 @@ static int cake_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 	int autorate = -1;
 	int ingress = -1;
 	int overhead = 0;
-	int fwmark = -1;
 	int wash = -1;
 	int nat = -1;
 	int atm = -1;
@@ -299,8 +299,7 @@ static int cake_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 
 			NEXT_ARG();
 			overhead = strtol(*argv, &p, 10);
-			if (!p || *p || !*argv ||
-			    overhead < -64 || overhead > 256) {
+			if (!p || *p || overhead < -64 || overhead > 256) {
 				fprintf(stderr,
 					"Illegal \"overhead\", valid range is -64 to 256\\n");
 				return -1;
@@ -312,7 +311,7 @@ static int cake_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 
 			NEXT_ARG();
 			mpu = strtol(*argv, &p, 10);
-			if (!p || *p || !*argv || mpu < 0 || mpu > 256) {
+			if (!p || *p || mpu < 0 || mpu > 256) {
 				fprintf(stderr,
 					"Illegal \"mpu\", valid range is 0 to 256\\n");
 				return -1;
@@ -335,15 +334,12 @@ static int cake_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 				return -1;
 			}
 		} else if (strcmp(*argv, "fwmark") == 0) {
-			unsigned int fwm;
-
 			NEXT_ARG();
-			if (get_u32(&fwm, *argv, 0)) {
+			if (get_u32(&fwmark, *argv, 0)) {
 				fprintf(stderr,
 					"Illegal value for \"fwmark\": \"%s\"\n", *argv);
 				return -1;
 			}
-			fwmark = fwm;
 		} else if (strcmp(*argv, "help") == 0) {
 			explain();
 			return -1;
@@ -388,7 +384,7 @@ static int cake_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 	if (memlimit)
 		addattr_l(n, 1024, TCA_CAKE_MEMORY, &memlimit,
 			  sizeof(memlimit));
-	if (fwmark != -1)
+	if (fwmark)
 		addattr_l(n, 1024, TCA_CAKE_FWMARK, &fwmark,
 			  sizeof(fwmark));
 	if (nat != -1)
@@ -437,7 +433,6 @@ static int cake_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	int atm = 0;
 	int nat = 0;
 
-	SPRINT_BUF(b1);
 	SPRINT_BUF(b2);
 
 	if (opt == NULL)
@@ -448,11 +443,10 @@ static int cake_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	if (tb[TCA_CAKE_BASE_RATE64] &&
 	    RTA_PAYLOAD(tb[TCA_CAKE_BASE_RATE64]) >= sizeof(bandwidth)) {
 		bandwidth = rta_getattr_u64(tb[TCA_CAKE_BASE_RATE64]);
-		if (bandwidth) {
-			print_uint(PRINT_JSON, "bandwidth", NULL, bandwidth);
-			print_string(PRINT_FP, NULL, "bandwidth %s ",
-				     sprint_rate(bandwidth, b1));
-		} else
+		if (bandwidth)
+			tc_print_rate(PRINT_ANY, "bandwidth", "bandwidth %s ",
+				      bandwidth);
+		else
 			print_string(PRINT_ANY, "bandwidth", "bandwidth %s ",
 				     "unlimited");
 	}
@@ -523,6 +517,10 @@ static int cake_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	    RTA_PAYLOAD(tb[TCA_CAKE_RTT]) >= sizeof(__u32)) {
 		interval = rta_getattr_u32(tb[TCA_CAKE_RTT]);
 	}
+	if (tb[TCA_CAKE_MEMORY] &&
+		RTA_PAYLOAD(tb[TCA_CAKE_MEMORY]) >= sizeof(__u32)) {
+		memlimit = rta_getattr_u32(tb[TCA_CAKE_MEMORY]);
+	}
 	if (tb[TCA_CAKE_FWMARK] &&
 	    RTA_PAYLOAD(tb[TCA_CAKE_FWMARK]) >= sizeof(__u32)) {
 		fwmark = rta_getattr_u32(tb[TCA_CAKE_FWMARK]);
@@ -573,11 +571,8 @@ static int cake_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	if (mpu)
 		print_uint(PRINT_ANY, "mpu", "mpu %u ", mpu);
 
-	if (memlimit) {
-		print_uint(PRINT_JSON, "memlimit", NULL, memlimit);
-		print_string(PRINT_FP, NULL, "memlimit %s",
-			     sprint_size(memlimit, b1));
-	}
+	if (memlimit)
+		print_size(PRINT_ANY, "memlimit", "memlimit %s ", memlimit);
 
 	if (fwmark)
 		print_uint(PRINT_FP, NULL, "fwmark 0x%x ", fwmark);
@@ -637,11 +632,11 @@ static int cake_print_xstats(struct qdisc_util *qu, FILE *f,
 
 	if (st[TCA_CAKE_STATS_MEMORY_USED] &&
 	    st[TCA_CAKE_STATS_MEMORY_LIMIT]) {
-		print_string(PRINT_FP, NULL, " memory used: %s",
-			sprint_size(GET_STAT_U32(MEMORY_USED), b1));
+		print_size(PRINT_FP, NULL, " memory used: %s",
+			   GET_STAT_U32(MEMORY_USED));
 
-		print_string(PRINT_FP, NULL, " of %s\n",
-			sprint_size(GET_STAT_U32(MEMORY_LIMIT), b1));
+		print_size(PRINT_FP, NULL, " of %s\n",
+			   GET_STAT_U32(MEMORY_LIMIT));
 
 		print_uint(PRINT_JSON, "memory_used", NULL,
 			GET_STAT_U32(MEMORY_USED));
@@ -649,12 +644,10 @@ static int cake_print_xstats(struct qdisc_util *qu, FILE *f,
 			GET_STAT_U32(MEMORY_LIMIT));
 	}
 
-	if (st[TCA_CAKE_STATS_CAPACITY_ESTIMATE64]) {
-		print_string(PRINT_FP, NULL, " capacity estimate: %s\n",
-			sprint_rate(GET_STAT_U64(CAPACITY_ESTIMATE64), b1));
-		print_uint(PRINT_JSON, "capacity_estimate", NULL,
-			GET_STAT_U64(CAPACITY_ESTIMATE64));
-	}
+	if (st[TCA_CAKE_STATS_CAPACITY_ESTIMATE64])
+		tc_print_rate(PRINT_ANY, "capacity_estimate",
+			      " capacity estimate: %s\n",
+			      GET_STAT_U64(CAPACITY_ESTIMATE64));
 
 	if (st[TCA_CAKE_STATS_MIN_NETLEN] &&
 	    st[TCA_CAKE_STATS_MAX_NETLEN]) {
@@ -681,7 +674,7 @@ static int cake_print_xstats(struct qdisc_util *qu, FILE *f,
 
 	/* class stats */
 	if (st[TCA_CAKE_STATS_DEFICIT])
-		print_int(PRINT_ANY, "deficit", "  deficit %u",
+		print_int(PRINT_ANY, "deficit", "  deficit %d",
 			  GET_STAT_S32(DEFICIT));
 	if (st[TCA_CAKE_STATS_COBALT_COUNT])
 		print_uint(PRINT_ANY, "count", " count %u",
@@ -694,7 +687,7 @@ static int cake_print_xstats(struct qdisc_util *qu, FILE *f,
 
 			if (drop_next < 0) {
 				print_string(PRINT_FP, NULL, " drop_next -%s",
-					sprint_time(drop_next, b1));
+					sprint_time(-drop_next, b1));
 			} else {
 				print_uint(PRINT_JSON, "drop_next", NULL,
 					drop_next);
@@ -766,7 +759,7 @@ static int cake_print_xstats(struct qdisc_util *qu, FILE *f,
 			fprintf(f, "          ");
 			for (i = 0; i < num_tins; i++)
 				fprintf(f, "        Tin %u", i);
-			fprintf(f, "\n");
+			fprintf(f, "%s", _SL_);
 		};
 
 #define GET_TSTAT(i, attr) (tstat[i][TCA_CAKE_TIN_STATS_ ## attr])
@@ -775,7 +768,7 @@ static int cake_print_xstats(struct qdisc_util *qu, FILE *f,
 				fprintf(f, name);		\
 				for (i = 0; i < num_tins; i++)	\
 					fprintf(f, " %12" fmts,	val);	\
-				fprintf(f, "\n");			\
+				fprintf(f, "%s", _SL_);			\
 			}						\
 		} while (0)
 
@@ -789,7 +782,14 @@ static int cake_print_xstats(struct qdisc_util *qu, FILE *f,
 #define PRINT_TSTAT_U64(name, attr)	PRINT_TSTAT(			\
 			name, attr, "llu", rta_getattr_u64(GET_TSTAT(i, attr)))
 
-		SPRINT_TSTAT(rate, u64, "  thresh  ", THRESHOLD_RATE64);
+		if (GET_TSTAT(0, THRESHOLD_RATE64)) {
+			fprintf(f, "  thresh  ");
+			for (i = 0; i < num_tins; i++)
+				tc_print_rate(PRINT_FP, NULL, " %12s",
+					      rta_getattr_u64(GET_TSTAT(i, THRESHOLD_RATE64)));
+			fprintf(f, "%s", _SL_);
+		}
+
 		SPRINT_TSTAT(time, u32, "  target  ", TARGET_US);
 		SPRINT_TSTAT(time, u32, "  interval", INTERVAL_US);
 		SPRINT_TSTAT(time, u32, "  pk_delay", PEAK_DELAY_US);

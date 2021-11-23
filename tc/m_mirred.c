@@ -281,8 +281,9 @@ print_mirred(struct action_util *au, FILE *f, struct rtattr *arg)
 	struct rtattr *tb[TCA_MIRRED_MAX + 1];
 	const char *dev;
 
+	print_string(PRINT_ANY, "kind", "%s ", "mirred");
 	if (arg == NULL)
-		return -1;
+		return 0;
 
 	parse_rtattr_nested(tb, TCA_MIRRED_MAX, arg);
 
@@ -298,7 +299,6 @@ print_mirred(struct action_util *au, FILE *f, struct rtattr *arg)
 		return -1;
 	}
 
-	print_string(PRINT_ANY, "kind", "%s ", "mirred");
 	print_string(PRINT_FP, NULL, "(%s", mirred_n2a(p->eaction));
 	print_string(PRINT_JSON, "mirred_action", NULL,
 		     mirred_action(p->eaction));
@@ -307,7 +307,8 @@ print_mirred(struct action_util *au, FILE *f, struct rtattr *arg)
 	print_string(PRINT_ANY, "to_dev", " to device %s)", dev);
 	print_action_control(f, " ", p->action, "");
 
-	print_uint(PRINT_ANY, "index", "\n \tindex %u", p->index);
+	print_nl();
+	print_uint(PRINT_ANY, "index", "\tindex %u", p->index);
 	print_int(PRINT_ANY, "ref", " ref %d", p->refcnt);
 	print_int(PRINT_ANY, "bind", " bind %d", p->bindcnt);
 
@@ -318,7 +319,7 @@ print_mirred(struct action_util *au, FILE *f, struct rtattr *arg)
 			print_tm(f, tm);
 		}
 	}
-	print_string(PRINT_FP, NULL, "%s", "\n ");
+	print_nl();
 	return 0;
 }
 

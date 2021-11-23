@@ -164,32 +164,6 @@ char *sprint_tc_classid(__u32 h, char *buf)
 	return buf;
 }
 
-/* See http://physics.nist.gov/cuu/Units/binary.html */
-static const struct rate_suffix {
-	const char *name;
-	double scale;
-} suffixes[] = {
-	{ "bit",	1. },
-	{ "Kibit",	1024. },
-	{ "kbit",	1000. },
-	{ "mibit",	1024.*1024. },
-	{ "mbit",	1000000. },
-	{ "gibit",	1024.*1024.*1024. },
-	{ "gbit",	1000000000. },
-	{ "tibit",	1024.*1024.*1024.*1024. },
-	{ "tbit",	1000000000000. },
-	{ "Bps",	8. },
-	{ "KiBps",	8.*1024. },
-	{ "KBps",	8000. },
-	{ "MiBps",	8.*1024*1024. },
-	{ "MBps",	8000000. },
-	{ "GiBps",	8.*1024.*1024.*1024. },
-	{ "GBps",	8000000000. },
-	{ "TiBps",	8.*1024.*1024.*1024.*1024. },
-	{ "TBps",	8000000000000. },
-	{ NULL }
-};
-
 /* Parse a percent e.g: '30%'
  * return: 0 = ok, -1 = error, 1 = out of range
  */
@@ -273,119 +247,15 @@ int get_percent_rate64(__u64 *rate, const char *str, const char *dev)
 	return get_rate64(rate, r_str);
 }
 
-int get_rate(unsigned int *rate, const char *str)
+void tc_print_rate(enum output_type t, const char *key, const char *fmt,
+		   unsigned long long rate)
 {
-	char *p;
-	double bps = strtod(str, &p);
-	const struct rate_suffix *s;
-
-	if (p == str)
-		return -1;
-
-	for (s = suffixes; s->name; ++s) {
-		if (strcasecmp(s->name, p) == 0) {
-			bps *= s->scale;
-			p += strlen(p);
-			break;
-		}
-	}
-
-	if (*p)
-		return -1; /* unknown suffix */
-
-	bps /= 8; /* -> bytes per second */
-	*rate = bps;
-	/* detect if an overflow happened */
-	if (*rate != floor(bps))
-		return -1;
-	return 0;
-}
-
-int get_rate64(__u64 *rate, const char *str)
-{
-	char *p;
-	double bps = strtod(str, &p);
-	const struct rate_suffix *s;
-
-	if (p == str)
-		return -1;
-
-	for (s = suffixes; s->name; ++s) {
-		if (strcasecmp(s->name, p) == 0) {
-			bps *= s->scale;
-			p += strlen(p);
-			break;
-		}
-	}
-
-	if (*p)
-		return -1; /* unknown suffix */
-
-	bps /= 8; /* -> bytes per second */
-	*rate = bps;
-	return 0;
-}
-
-void print_rate(char *buf, int len, __u64 rate)
-{
-	extern int use_iec;
-	unsigned long kilo = use_iec ? 1024 : 1000;
-	const char *str = use_iec ? "i" : "";
-	static char *units[5] = {"", "K", "M", "G", "T"};
-	int i;
-
-	rate <<= 3; /* bytes/sec -> bits/sec */
-
-	for (i = 0; i < ARRAY_SIZE(units) - 1; i++)  {
-		if (rate < kilo)
-			break;
-		if (((rate % kilo) != 0) && rate < 1000*kilo)
-			break;
-		rate /= kilo;
-	}
-
-	snprintf(buf, len, "%.0f%s%sbit", (double)rate, units[i], str);
-}
-
-char *sprint_rate(__u64 rate, char *buf)
-{
-	print_rate(buf, SPRINT_BSIZE-1, rate);
-	return buf;
+	print_rate(use_iec, t, key, fmt, rate);
 }
 
 char *sprint_ticks(__u32 ticks, char *buf)
 {
 	return sprint_time(tc_core_tick2time(ticks), buf);
-}
-
-int get_size(unsigned int *size, const char *str)
-{
-	double sz;
-	char *p;
-
-	sz = strtod(str, &p);
-	if (p == str)
-		return -1;
-
-	if (*p) {
-		if (strcasecmp(p, "kb") == 0 || strcasecmp(p, "k") == 0)
-			sz *= 1024;
-		else if (strcasecmp(p, "gb") == 0 || strcasecmp(p, "g") == 0)
-			sz *= 1024*1024*1024;
-		else if (strcasecmp(p, "gbit") == 0)
-			sz *= 1024*1024*1024/8;
-		else if (strcasecmp(p, "mb") == 0 || strcasecmp(p, "m") == 0)
-			sz *= 1024*1024;
-		else if (strcasecmp(p, "mbit") == 0)
-			sz *= 1024*1024/8;
-		else if (strcasecmp(p, "kbit") == 0)
-			sz *= 1024/8;
-		else if (strcasecmp(p, "b") != 0)
-			return -1;
-	}
-
-	*size = sz;
-	return 0;
 }
 
 int get_size_and_cell(unsigned int *size, int *cell_log, char *str)
@@ -426,24 +296,6 @@ void print_devname(enum output_type type, int ifindex)
 
 	print_color_string(type, COLOR_IFNAME,
 			   "dev", "%s ", ifname);
-}
-
-static void print_size(char *buf, int len, __u32 sz)
-{
-	double tmp = sz;
-
-	if (sz >= 1024*1024 && fabs(1024*1024*rint(tmp/(1024*1024)) - sz) < 1024)
-		snprintf(buf, len, "%gMb", rint(tmp/(1024*1024)));
-	else if (sz >= 1024 && fabs(1024*rint(tmp/1024) - sz) < 16)
-		snprintf(buf, len, "%gKb", rint(tmp/1024));
-	else
-		snprintf(buf, len, "%ub", sz);
-}
-
-char *sprint_size(__u32 size, char *buf)
-{
-	print_size(buf, SPRINT_BSIZE-1, size);
-	return buf;
 }
 
 static const char *action_n2a(int action)
@@ -745,21 +597,21 @@ void print_tm(FILE *f, const struct tcf_t *tm)
 {
 	int hz = get_user_hz();
 
-	if (tm->install != 0) {
-		print_uint(PRINT_JSON, "installed", NULL, tm->install);
-		print_uint(PRINT_FP, NULL, " installed %u sec",
-			   (unsigned int)(tm->install/hz));
-	}
-	if (tm->lastuse != 0) {
-		print_uint(PRINT_JSON, "last_used", NULL, tm->lastuse);
-		print_uint(PRINT_FP, NULL, " used %u sec",
-			   (unsigned int)(tm->lastuse/hz));
-	}
-	if (tm->expires != 0) {
-		print_uint(PRINT_JSON, "expires", NULL, tm->expires);
-		print_uint(PRINT_FP, NULL, " expires %u sec",
-			   (unsigned int)(tm->expires/hz));
-	}
+	if (tm->install != 0)
+		print_uint(PRINT_ANY, "installed", " installed %u sec",
+			   tm->install / hz);
+
+	if (tm->lastuse != 0)
+		print_uint(PRINT_ANY, "last_used", " used %u sec",
+			   tm->lastuse / hz);
+
+	if (tm->firstuse != 0)
+		print_uint(PRINT_ANY, "first_used", " firstused %u sec",
+			   tm->firstuse / hz);
+
+	if (tm->expires != 0)
+		print_uint(PRINT_ANY, "expires", " expires %u sec",
+			   tm->expires / hz);
 }
 
 static void print_tcstats_basic_hw(struct rtattr **tbs, char *prefix)
@@ -783,7 +635,7 @@ static void print_tcstats_basic_hw(struct rtattr **tbs, char *prefix)
 			   sizeof(bs)));
 
 		if (bs.bytes >= bs_hw.bytes && bs.packets >= bs_hw.packets) {
-			print_string(PRINT_FP, NULL, "%s", _SL_);
+			print_nl();
 			print_string(PRINT_FP, NULL, "%s", prefix);
 			print_lluint(PRINT_ANY, "sw_bytes",
 				     "Sent software %llu bytes",
@@ -793,7 +645,7 @@ static void print_tcstats_basic_hw(struct rtattr **tbs, char *prefix)
 		}
 	}
 
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	print_string(PRINT_FP, NULL, "%s", prefix);
 	print_lluint(PRINT_ANY, "hw_bytes", "Sent hardware %llu bytes",
 		     bs_hw.bytes);
@@ -802,24 +654,34 @@ static void print_tcstats_basic_hw(struct rtattr **tbs, char *prefix)
 
 void print_tcstats2_attr(FILE *fp, struct rtattr *rta, char *prefix, struct rtattr **xstats)
 {
-	SPRINT_BUF(b1);
 	struct rtattr *tbs[TCA_STATS_MAX + 1];
 
 	parse_rtattr_nested(tbs, TCA_STATS_MAX, rta);
 
 	if (tbs[TCA_STATS_BASIC]) {
 		struct gnet_stats_basic bs = {0};
+		__u64 packets64 = 0;
 
-		memcpy(&bs, RTA_DATA(tbs[TCA_STATS_BASIC]), MIN(RTA_PAYLOAD(tbs[TCA_STATS_BASIC]), sizeof(bs)));
+		if (tbs[TCA_STATS_PKT64])
+			packets64 = rta_getattr_u64(tbs[TCA_STATS_PKT64]);
+
+		memcpy(&bs, RTA_DATA(tbs[TCA_STATS_BASIC]),
+		       MIN(RTA_PAYLOAD(tbs[TCA_STATS_BASIC]), sizeof(bs)));
 		print_string(PRINT_FP, NULL, "%s", prefix);
 		print_lluint(PRINT_ANY, "bytes", "Sent %llu bytes", bs.bytes);
-		print_uint(PRINT_ANY, "packets", " %u pkt", bs.packets);
+		if (packets64)
+			print_lluint(PRINT_ANY, "packets",
+				     " %llu pkt", packets64);
+		else
+			print_uint(PRINT_ANY, "packets",
+				   " %u pkt", bs.packets);
 	}
 
 	if (tbs[TCA_STATS_QUEUE]) {
 		struct gnet_stats_queue q = {0};
 
-		memcpy(&q, RTA_DATA(tbs[TCA_STATS_QUEUE]), MIN(RTA_PAYLOAD(tbs[TCA_STATS_QUEUE]), sizeof(q)));
+		memcpy(&q, RTA_DATA(tbs[TCA_STATS_QUEUE]),
+		       MIN(RTA_PAYLOAD(tbs[TCA_STATS_QUEUE]), sizeof(q)));
 		print_uint(PRINT_ANY, "drops", " (dropped %u", q.drops);
 		print_uint(PRINT_ANY, "overlimits", ", overlimits %u",
 			   q.overlimits);
@@ -837,8 +699,7 @@ void print_tcstats2_attr(FILE *fp, struct rtattr *rta, char *prefix, struct rtat
 			   sizeof(re)));
 		print_string(PRINT_FP, NULL, "\n%s", prefix);
 		print_lluint(PRINT_JSON, "rate", NULL, re.bps);
-		print_string(PRINT_FP, NULL, "rate %s",
-			     sprint_rate(re.bps, b1));
+		tc_print_rate(PRINT_FP, NULL, "rate %s", re.bps);
 		print_lluint(PRINT_ANY, "pps", " %llupps", re.pps);
 	} else if (tbs[TCA_STATS_RATE_EST]) {
 		struct gnet_stats_rate_est re = {0};
@@ -847,21 +708,19 @@ void print_tcstats2_attr(FILE *fp, struct rtattr *rta, char *prefix, struct rtat
 		       MIN(RTA_PAYLOAD(tbs[TCA_STATS_RATE_EST]), sizeof(re)));
 		print_string(PRINT_FP, NULL, "\n%s", prefix);
 		print_uint(PRINT_JSON, "rate", NULL, re.bps);
-		print_string(PRINT_FP, NULL, "rate %s",
-			     sprint_rate(re.bps, b1));
+		tc_print_rate(PRINT_FP, NULL, "rate %s", re.bps);
 		print_uint(PRINT_ANY, "pps", " %upps", re.pps);
 	}
 
 	if (tbs[TCA_STATS_QUEUE]) {
 		struct gnet_stats_queue q = {0};
 
-		memcpy(&q, RTA_DATA(tbs[TCA_STATS_QUEUE]), MIN(RTA_PAYLOAD(tbs[TCA_STATS_QUEUE]), sizeof(q)));
+		memcpy(&q, RTA_DATA(tbs[TCA_STATS_QUEUE]),
+		       MIN(RTA_PAYLOAD(tbs[TCA_STATS_QUEUE]), sizeof(q)));
 		if (!tbs[TCA_STATS_RATE_EST])
-			print_string(PRINT_FP, NULL, "\n", "");
-		print_uint(PRINT_JSON, "backlog", NULL, q.backlog);
+			print_nl();
 		print_string(PRINT_FP, NULL, "%s", prefix);
-		print_string(PRINT_FP, NULL, "backlog %s",
-			     sprint_size(q.backlog, b1));
+		print_size(PRINT_ANY, "backlog", "backlog %s", q.backlog);
 		print_uint(PRINT_ANY, "qlen", " %up", q.qlen);
 		print_uint(PRINT_FP, NULL, " requeues %u", q.requeues);
 	}
@@ -870,10 +729,9 @@ void print_tcstats2_attr(FILE *fp, struct rtattr *rta, char *prefix, struct rtat
 		*xstats = tbs[TCA_STATS_APP] ? : NULL;
 }
 
-void print_tcstats_attr(FILE *fp, struct rtattr *tb[], char *prefix, struct rtattr **xstats)
+void print_tcstats_attr(FILE *fp, struct rtattr *tb[], char *prefix,
+			struct rtattr **xstats)
 {
-	SPRINT_BUF(b1);
-
 	if (tb[TCA_STATS2]) {
 		print_tcstats2_attr(fp, tb[TCA_STATS2], prefix, xstats);
 		if (xstats && !*xstats)
@@ -885,25 +743,29 @@ void print_tcstats_attr(FILE *fp, struct rtattr *tb[], char *prefix, struct rtat
 		struct tc_stats st = {};
 
 		/* handle case where kernel returns more/less than we know about */
-		memcpy(&st, RTA_DATA(tb[TCA_STATS]), MIN(RTA_PAYLOAD(tb[TCA_STATS]), sizeof(st)));
+		memcpy(&st, RTA_DATA(tb[TCA_STATS]),
+		       MIN(RTA_PAYLOAD(tb[TCA_STATS]), sizeof(st)));
 
-		fprintf(fp, "%sSent %llu bytes %u pkts (dropped %u, overlimits %u) ",
-			prefix, (unsigned long long)st.bytes, st.packets, st.drops,
-			st.overlimits);
+		fprintf(fp,
+			"%sSent %llu bytes %u pkts (dropped %u, overlimits %u) ",
+			prefix, (unsigned long long)st.bytes,
+			st.packets, st.drops, st.overlimits);
 
 		if (st.bps || st.pps || st.qlen || st.backlog) {
 			fprintf(fp, "\n%s", prefix);
 			if (st.bps || st.pps) {
 				fprintf(fp, "rate ");
 				if (st.bps)
-					fprintf(fp, "%s ", sprint_rate(st.bps, b1));
+					tc_print_rate(PRINT_FP, NULL, "%s ",
+						      st.bps);
 				if (st.pps)
 					fprintf(fp, "%upps ", st.pps);
 			}
 			if (st.qlen || st.backlog) {
 				fprintf(fp, "backlog ");
 				if (st.backlog)
-					fprintf(fp, "%s ", sprint_size(st.backlog, b1));
+					print_size(PRINT_FP, NULL, "%s ",
+						   st.backlog);
 				if (st.qlen)
 					fprintf(fp, "%up ", st.qlen);
 			}
@@ -983,5 +845,17 @@ void print_masked_u8(const char *name, struct rtattr *attr,
 		     struct rtattr *mask_attr, bool newline)
 {
 	print_masked_type(UINT8_MAX,  __rta_getattr_u8_u32, name, attr,
+			  mask_attr, newline);
+}
+
+static __u32 __rta_getattr_be16_u32(const struct rtattr *attr)
+{
+	return rta_getattr_be16(attr);
+}
+
+void print_masked_be16(const char *name, struct rtattr *attr,
+		       struct rtattr *mask_attr, bool newline)
+{
+	print_masked_type(UINT16_MAX, __rta_getattr_be16_u32, name, attr,
 			  mask_attr, newline);
 }

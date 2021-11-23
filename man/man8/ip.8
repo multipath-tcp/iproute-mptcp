@@ -22,7 +22,7 @@ ip \- show / manipulate routing, network devices, interfaces and tunnels
 .BR link " | " address " | " addrlabel " | " route " | " rule " | " neigh " | "\
  ntable " | " tunnel " | " tuntap " | " maddress " | "  mroute " | " mrule " | "\
  monitor " | " xfrm " | " netns " | "  l2tp " | "  tcp_metrics " | " token " | "\
- macsec " }"
+ macsec " | " vrf " | " mptcp " | " ioam " }"
 .sp
 
 .ti -8
@@ -37,8 +37,6 @@ ip \- show / manipulate routing, network devices, interfaces and tunnels
 .BR inet " | " inet6 " | " link " } | "
 \fB-4\fR |
 \fB-6\fR |
-\fB-I\fR |
-\fB-D\fR |
 \fB-B\fR |
 \fB-0\fR |
 \fB-l\fR[\fIoops\fR] { \fBmaximum-addr-flush-attempts\fR } |
@@ -227,7 +225,7 @@ print human readable rates in IEC units (e.g. 1Ki = 1024).
 .BR "\-br" , " \-brief"
 Print only basic information in a tabular format for better
 readability. This option is currently only supported by
-.BR "ip addr show " and " ip link show " commands.
+.BR "ip addr show ", " ip link show " & " ip neigh show " commands.
 
 .TP
 .BR "\-j", " \-json"
@@ -253,6 +251,10 @@ readability.
 - label configuration for protocol address selection.
 
 .TP
+.B ioam
+- manage IOAM namespaces and IOAM schemas.
+
+.TP
 .B l2tp
 - tunnel ethernet over IP (L2TPv3).
 
@@ -267,6 +269,10 @@ readability.
 .TP
 .B monitor
 - watch for netlink messages.
+
+.TP
+.B mptcp
+- manage MPTCP path manager.
 
 .TP
 .B mroute
@@ -311,6 +317,10 @@ readability.
 .TP
 .B tuntap
 - manage TUN/TAP devices.
+
+.TP
+.B vrf
+- manage virtual routing and forwarding devices.
 
 .TP
 .B xfrm
@@ -382,7 +392,6 @@ Bring up interface x.
 .RE
 .PP
 ip link set x down
-.RE
 .RS 4
 Bring down interface x.
 .RE
@@ -398,10 +407,12 @@ was written by Alexey N. Kuznetsov and added in Linux 2.2.
 .SH SEE ALSO
 .BR ip-address (8),
 .BR ip-addrlabel (8),
+.BR ip-ioam (8),
 .BR ip-l2tp (8),
 .BR ip-link (8),
 .BR ip-maddress (8),
 .BR ip-monitor (8),
+.BR ip-mptcp (8),
 .BR ip-mroute (8),
 .BR ip-neighbour (8),
 .BR ip-netns (8),
@@ -411,6 +422,7 @@ was written by Alexey N. Kuznetsov and added in Linux 2.2.
 .BR ip-tcp_metrics (8),
 .BR ip-token (8),
 .BR ip-tunnel (8),
+.BR ip-vrf (8),
 .BR ip-xfrm (8)
 .br
 .RB "IP Command reference " ip-cref.ps

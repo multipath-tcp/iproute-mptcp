@@ -146,8 +146,9 @@ print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 	SPRINT_BUF(buf2);
 	int len;
 
+	print_string(PRINT_ANY, "type", " %s ", "nat");
 	if (arg == NULL)
-		return -1;
+		return 0;
 
 	parse_rtattr_nested(tb, TCA_NAT_MAX, arg);
 
@@ -160,7 +161,6 @@ print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 	len = ffs(sel->mask);
 	len = len ? 33 - len : 0;
 
-	print_string(PRINT_ANY, "type", " %s ", "nat");
 	print_string(PRINT_ANY, "direction", "%s",
 		     sel->flags & TCA_NAT_FLAG_EGRESS ? "egress" : "ingress");
 
@@ -172,7 +172,7 @@ print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 		     format_host_r(AF_INET, 4, &sel->new_addr, buf1, sizeof(buf1)));
 
 	print_action_control(f, " ", sel->action, "");
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 	print_uint(PRINT_ANY, "index", "\t index %u", sel->index);
 	print_int(PRINT_ANY, "ref", " ref %d", sel->refcnt);
 	print_int(PRINT_ANY, "bind", " bind %d", sel->bindcnt);
@@ -185,7 +185,7 @@ print_nat(struct action_util *au, FILE * f, struct rtattr *arg)
 		}
 	}
 
-	print_string(PRINT_FP, NULL, "%s", _SL_);
+	print_nl();
 
 	return 0;
 }

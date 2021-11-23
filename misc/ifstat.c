@@ -33,7 +33,7 @@
 
 #include "libnetlink.h"
 #include "json_writer.h"
-#include "SNAPSHOT.h"
+#include "version.h"
 #include "utils.h"
 
 int dump_zeros;
@@ -104,7 +104,7 @@ static int match(const char *id)
 		return 1;
 
 	for (i = 0; i < npatterns; i++) {
-		if (!fnmatch(patterns[i], id, 0))
+		if (!fnmatch(patterns[i], id, FNM_CASEFOLD))
 			return 1;
 	}
 	return 0;
@@ -251,7 +251,7 @@ static void load_raw_table(FILE *fp)
 			buf[strlen(buf)-1] = 0;
 			if (info_source[0] && strcmp(info_source, buf+1))
 				source_mismatch = 1;
-			strncpy(info_source, buf+1, sizeof(info_source)-1);
+			strlcpy(info_source, buf+1, sizeof(info_source));
 			continue;
 		}
 		if ((n = malloc(sizeof(*n))) == NULL)
@@ -869,7 +869,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'v':
 		case 'V':
-			printf("ifstat utility, iproute2-ss%s\n", SNAPSHOT);
+			printf("ifstat utility, iproute2-%s\n", version);
 			exit(0);
 		case 'h':
 		case '?':

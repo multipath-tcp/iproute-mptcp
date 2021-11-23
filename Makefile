@@ -55,15 +55,17 @@ WFLAGS += -Wmissing-declarations -Wold-style-definition -Wformat=2
 CFLAGS := $(WFLAGS) $(CCOPTS) -I../include -I../include/uapi $(DEFINES) $(CFLAGS)
 YACCFLAGS = -d -t -v
 
-SUBDIRS=lib ip tc bridge misc netem genl tipc devlink rdma man
+SUBDIRS=lib ip tc bridge misc netem genl tipc devlink rdma dcb man vdpa
 
 LIBNETLINK=../lib/libutil.a ../lib/libnetlink.a
 LDLIBS += $(LIBNETLINK)
 
-all: config.mk
+all: config
 	@set -e; \
 	for i in $(SUBDIRS); \
-	do echo; echo $$i; $(MAKE) $(MFLAGS) -C $$i; done
+	do echo; echo $$i; $(MAKE) -C $$i; done
+
+.PHONY: clean clobber distclean check cscope version
 
 help:
 	@echo "Make Targets:"
@@ -73,13 +75,15 @@ help:
 	@echo " install             - install binaries on local machine"
 	@echo " check               - run tests"
 	@echo " cscope              - build cscope database"
-	@echo " snapshot            - generate version number header"
+	@echo " version             - update version"
 	@echo ""
 	@echo "Make Arguments:"
 	@echo " V=[0|1]             - set build verbosity level"
 
-config.mk:
-	sh configure $(KERNEL_INCLUDE)
+config:
+	@if [ ! -f config.mk -o configure -nt config.mk ]; then \
+		sh configure $(KERNEL_INCLUDE); \
+	fi
 
 install: all
 	install -m 0755 -d $(DESTDIR)$(SBINDIR)
@@ -90,19 +94,20 @@ install: all
 	install -m 0644 $(shell find etc/iproute2 -maxdepth 1 -type f) $(DESTDIR)$(CONFDIR)
 	install -m 0755 -d $(DESTDIR)$(BASH_COMPDIR)
 	install -m 0644 bash-completion/tc $(DESTDIR)$(BASH_COMPDIR)
+	install -m 0644 bash-completion/devlink $(DESTDIR)$(BASH_COMPDIR)
 	install -m 0644 include/bpf_elf.h $(DESTDIR)$(HDRDIR)
 
-snapshot:
-	echo "static const char SNAPSHOT[] = \""`date +%y%m%d`"\";" \
-		> include/SNAPSHOT.h
+version:
+	echo "static const char version[] = \""`git describe --tags --long`"\";" \
+		> include/version.h
 
 clean:
 	@for i in $(SUBDIRS) testsuite; \
-	do $(MAKE) $(MFLAGS) -C $$i clean; done
+	do $(MAKE) -C $$i clean; done
 
 clobber:
 	touch config.mk
-	$(MAKE) $(MFLAGS) clean
+	$(MAKE) clean
 	rm -f config.mk cscope.*
 
 distclean: clobber

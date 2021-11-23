@@ -54,12 +54,14 @@ static void explain(void)
 					"[ memory_limit BYTES ]\n"
 					"[ target TIME ] [ interval TIME ]\n"
 					"[ quantum BYTES ] [ [no]ecn ]\n"
-					"[ ce_threshold TIME ]\n");
+					"[ ce_threshold TIME ]\n"
+					"[ drop_batch SIZE ]\n");
 }
 
 static int fq_codel_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 			      struct nlmsghdr *n, const char *dev)
 {
+	unsigned int drop_batch = 0;
 	unsigned int limit = 0;
 	unsigned int flows = 0;
 	unsigned int target = 0;
@@ -87,6 +89,12 @@ static int fq_codel_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 			NEXT_ARG();
 			if (get_unsigned(&quantum, *argv, 0)) {
 				fprintf(stderr, "Illegal \"quantum\"\n");
+				return -1;
+			}
+		} else if (strcmp(*argv, "drop_batch") == 0) {
+			NEXT_ARG();
+			if (get_unsigned(&drop_batch, *argv, 0)) {
+				fprintf(stderr, "Illegal \"drop_batch\"\n");
 				return -1;
 			}
 		} else if (strcmp(*argv, "target") == 0) {
@@ -147,6 +155,8 @@ static int fq_codel_parse_opt(struct qdisc_util *qu, int argc, char **argv,
 	if (memory != ~0U)
 		addattr_l(n, 1024, TCA_FQ_CODEL_MEMORY_LIMIT,
 			  &memory, sizeof(memory));
+	if (drop_batch)
+		addattr_l(n, 1024, TCA_FQ_CODEL_DROP_BATCH_SIZE, &drop_batch, sizeof(drop_batch));
 
 	addattr_nest_end(n, tail);
 	return 0;
@@ -163,6 +173,7 @@ static int fq_codel_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt
 	unsigned int quantum;
 	unsigned int ce_threshold;
 	unsigned int memory_limit;
+	unsigned int drop_batch;
 
 	SPRINT_BUF(b1);
 
@@ -210,15 +221,20 @@ static int fq_codel_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt
 	if (tb[TCA_FQ_CODEL_MEMORY_LIMIT] &&
 	    RTA_PAYLOAD(tb[TCA_FQ_CODEL_MEMORY_LIMIT]) >= sizeof(__u32)) {
 		memory_limit = rta_getattr_u32(tb[TCA_FQ_CODEL_MEMORY_LIMIT]);
-		print_uint(PRINT_JSON, "memory_limit", NULL, memory_limit);
-		print_string(PRINT_FP, NULL, "memory_limit %s ",
-			     sprint_size(memory_limit, b1));
+		print_size(PRINT_ANY, "memory_limit", "memory_limit %s ",
+			   memory_limit);
 	}
 	if (tb[TCA_FQ_CODEL_ECN] &&
 	    RTA_PAYLOAD(tb[TCA_FQ_CODEL_ECN]) >= sizeof(__u32)) {
 		ecn = rta_getattr_u32(tb[TCA_FQ_CODEL_ECN]);
 		if (ecn)
 			print_bool(PRINT_ANY, "ecn", "ecn ", true);
+	}
+	if (tb[TCA_FQ_CODEL_DROP_BATCH_SIZE] &&
+	    RTA_PAYLOAD(tb[TCA_FQ_CODEL_DROP_BATCH_SIZE]) >= sizeof(__u32)) {
+		drop_batch = rta_getattr_u32(tb[TCA_FQ_CODEL_DROP_BATCH_SIZE]);
+		if (drop_batch)
+			print_uint(PRINT_ANY, "drop_batch", "drop_batch %u ", drop_batch);
 	}
 
 	return 0;
@@ -257,13 +273,14 @@ static int fq_codel_print_xstats(struct qdisc_util *qu, FILE *f,
 		if (st->qdisc_stats.drop_overmemory)
 			print_uint(PRINT_ANY, "drop_overmemory", " drop_overmemory %u",
 				st->qdisc_stats.drop_overmemory);
-		print_uint(PRINT_ANY, "new_flows_len", "\n  new_flows_len %u",
+		print_nl();
+		print_uint(PRINT_ANY, "new_flows_len", "  new_flows_len %u",
 			st->qdisc_stats.new_flows_len);
 		print_uint(PRINT_ANY, "old_flows_len", " old_flows_len %u",
 			st->qdisc_stats.old_flows_len);
 	}
 	if (st->type == TCA_FQ_CODEL_XSTATS_CLASS) {
-		print_uint(PRINT_ANY, "deficit", "  deficit %u",
+		print_int(PRINT_ANY, "deficit", "  deficit %d",
 			st->class_stats.deficit);
 		print_uint(PRINT_ANY, "count", " count %u",
 			st->class_stats.count);
@@ -275,12 +292,12 @@ static int fq_codel_print_xstats(struct qdisc_util *qu, FILE *f,
 			sprint_time(st->class_stats.ldelay, b1));
 		if (st->class_stats.dropping) {
 			print_bool(PRINT_ANY, "dropping", " dropping", true);
+			print_int(PRINT_JSON, "drop_next", NULL,
+				  st->class_stats.drop_next);
 			if (st->class_stats.drop_next < 0)
 				print_string(PRINT_FP, NULL, " drop_next -%s",
 					sprint_time(-st->class_stats.drop_next, b1));
 			else {
-				print_uint(PRINT_JSON, "drop_next", NULL,
-					st->class_stats.drop_next);
 				print_string(PRINT_FP, NULL, " drop_next %s",
 					sprint_time(st->class_stats.drop_next, b1));
 			}

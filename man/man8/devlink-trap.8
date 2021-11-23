@@ -26,7 +26,7 @@ devlink-trap \- devlink trap configuration
 
 .ti -8
 .BI "devlink trap set " DEV " trap " TRAP
-.RB "[ " action " { " trap " | " drop " } ]"
+.RB "[ " action " { " trap " | " drop " | " mirror " } ]"
 
 .ti -8
 .B "devlink trap group show"
@@ -36,7 +36,18 @@ devlink-trap \- devlink trap configuration
 
 .ti -8
 .BI "devlink trap group set " DEV " group " GROUP
-.RB "[ " action " { " trap " | " drop " } ]"
+.RB "[ " action " { " trap " | " drop " | " mirror " } ]"
+.br
+.RB "[ " policer
+.IB "POLICER " ]
+.RB "[ " nopolicer " ]"
+
+.ti -8
+.BI "devlink trap policer set " DEV " policer " POLICER
+.RB "[ " rate
+.IR "RATE " ]
+.RB "[ " burst
+.IR "BURST " ]
 
 .ti -8
 .B devlink trap help
@@ -65,7 +76,7 @@ Only applicable if a devlink device is also specified.
 - specifies the packet trap.
 
 .TP
-.BR action " { " trap " | " drop " } "
+.BR action " { " trap " | " drop " | " mirror " } "
 packet trap action.
 
 .I trap
@@ -73,6 +84,9 @@ packet trap action.
 
 .I drop
 - the packet is dropped by the underlying device and a copy is not sent to the CPU.
+
+.I mirror
+- the packet is forwarded by the underlying device and a copy is sent to the CPU.
 
 .SS devlink trap group show - display available packet trap groups and their attributes
 
@@ -97,10 +111,37 @@ Only applicable if a devlink device is also specified.
 - specifies the packet trap group.
 
 .TP
-.BR action " { " trap " | " drop " } "
+.BR action " { " trap " | " drop " | " mirror " } "
 packet trap action. The action is set for all the packet traps member in the
 trap group. The actions of non-drop traps cannot be changed and are thus
 skipped.
+
+.TP
+.BI policer " POLICER"
+packet trap policer. The policer to bind to the packet trap group. A value of
+"0" will unbind the currently bound policer.
+
+.TP
+.B nopolicer
+Unbind packet trap policer from the packet trap group.
+
+.SS devlink trap policer set - set attributes of packet trap policer
+
+.PP
+.I "DEV"
+- specifies the devlink device the packet trap policer belongs to.
+
+.PP
+.BI "policer " POLICER
+- specifies the packet trap policer.
+
+.PP
+.BI rate " RATE "
+- packet trap policer rate in packets per second.
+
+.PP
+.BI burst " BURST "
+- packet trap policer burst size in packets.
 
 .SH "EXAMPLES"
 .PP
@@ -127,6 +168,22 @@ Show attributes and statistics of a specific packet trap group.
 devlink trap set pci/0000:01:00.0 trap source_mac_is_multicast action trap
 .RS 4
 Set the action of a specific packet trap to 'trap'.
+.RE
+.PP
+devlink trap policer show
+.RS 4
+List available packet trap policers.
+.RE
+.PP
+devlink -s trap policer show pci/0000:01:00.0 policer 1
+.RS 4
+Show attributes and statistics of a specific packet trap policer.
+.RE
+.PP
+devlink trap policer set pci/0000:01:00.0 policer 1 rate 1000 burst 128
+.RS 4
+Set the rate and burst size of a specific packet trap policer.
+.RE
 
 .SH SEE ALSO
 .BR devlink (8),

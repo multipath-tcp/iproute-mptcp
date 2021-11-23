@@ -7,14 +7,6 @@
 #include "res.h"
 #include <inttypes.h>
 
-static void print_qp_type(struct rd *rd, uint32_t val)
-{
-	if (rd->json_output)
-		jsonw_string_field(rd->jw, "qp-type", qp_types_to_str(val));
-	else
-		pr_out("qp-type %s ", qp_types_to_str(val));
-}
-
 static const char *cm_id_state_to_str(uint8_t idx)
 {
 	static const char *const cm_id_states_str[] = {
@@ -47,34 +39,26 @@ static const char *cm_id_ps_to_str(uint32_t ps)
 
 static void print_cm_id_state(struct rd *rd, uint8_t state)
 {
-	if (rd->json_output) {
-		jsonw_string_field(rd->jw, "state", cm_id_state_to_str(state));
-		return;
-	}
-	pr_out("state %s ", cm_id_state_to_str(state));
+	print_color_string(PRINT_ANY, COLOR_NONE, "state", "state %s ",
+			   cm_id_state_to_str(state));
 }
 
 static void print_ps(struct rd *rd, uint32_t ps)
 {
-	if (rd->json_output) {
-		jsonw_string_field(rd->jw, "ps", cm_id_ps_to_str(ps));
-		return;
-	}
-	pr_out("ps %s ", cm_id_ps_to_str(ps));
+	print_color_string(PRINT_ANY, COLOR_NONE, "ps", "ps %s ",
+			   cm_id_ps_to_str(ps));
 }
 
 static void print_ipaddr(struct rd *rd, const char *key, char *addrstr,
 			 uint16_t port)
 {
-	if (rd->json_output) {
-		int name_size = INET6_ADDRSTRLEN + strlen(":65535");
-		char json_name[name_size];
+	int name_size = INET6_ADDRSTRLEN + strlen(":65535");
+	char json_name[name_size];
 
-		snprintf(json_name, name_size, "%s:%u", addrstr, port);
-		jsonw_string_field(rd->jw, key, json_name);
-		return;
-	}
-	pr_out("%s %s:%u ", key, addrstr, port);
+	snprintf(json_name, name_size, "%s:%u", addrstr, port);
+	print_color_string(PRINT_ANY, COLOR_NONE, key, key, json_name);
+	print_color_string(PRINT_FP, COLOR_NONE, NULL, " %s:", addrstr);
+	print_color_uint(PRINT_FP, COLOR_NONE, NULL, "%u ", port);
 }
 
 static int ss_ntop(struct nlattr *nla_line, char *addr_str, uint16_t *port)
@@ -120,11 +104,8 @@ static int res_cm_id_line(struct rd *rd, const char *name, int idx,
 	char *comm = NULL;
 
 	if (!nla_line[RDMA_NLDEV_ATTR_RES_STATE] ||
-	    !nla_line[RDMA_NLDEV_ATTR_RES_PS] ||
-	    (!nla_line[RDMA_NLDEV_ATTR_RES_PID] &&
-	     !nla_line[RDMA_NLDEV_ATTR_RES_KERN_NAME])) {
+	    !nla_line[RDMA_NLDEV_ATTR_RES_PS])
 		return MNL_CB_ERROR;
-	}
 
 	if (nla_line[RDMA_NLDEV_ATTR_PORT_INDEX])
 		port = mnl_attr_get_u32(nla_line[RDMA_NLDEV_ATTR_PORT_INDEX]);
@@ -198,9 +179,7 @@ static int res_cm_id_line(struct rd *rd, const char *name, int idx,
 			nla_line[RDMA_NLDEV_ATTR_RES_KERN_NAME]);
 	}
 
-	if (rd->json_output)
-		jsonw_start_array(rd->jw);
-
+	open_json_object(NULL);
 	print_link(rd, idx, name, port, nla_line);
 	res_print_uint(rd, "cm-idn", cm_idn,
 		       nla_line[RDMA_NLDEV_ATTR_RES_CM_IDN]);

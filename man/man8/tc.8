@@ -77,9 +77,13 @@ tc \- show / manipulate traffic control settings
 .B tc
 .RI "[ " OPTIONS " ]"
 .RI "[ " FORMAT " ]"
-.B qdisc show [ dev
+.B qdisc { show | list } [ dev
 \fIDEV\fR
-.B ]
+.B ] [ root | ingress | handle
+\fIQHANDLE\fR
+.B | parent
+\fICLASSID\fR
+.B ] [ invisible ]
 .P
 .B tc
 .RI "[ " OPTIONS " ]"
@@ -254,6 +258,25 @@ Traffic control filter that matches every packet. See
 .BR tc-matchall (8)
 for details.
 
+.SH QEVENTS
+Qdiscs may invoke user-configured actions when certain interesting events
+take place in the qdisc. Each qevent can either be unused, or can have a
+block attached to it. To this block are then attached filters using the "tc
+block BLOCK_IDX" syntax. The block is executed when the qevent associated
+with the attachment point takes place. For example, packet could be
+dropped, or delayed, etc., depending on the qdisc and the qevent in
+question.
+
+For example:
+.PP
+.RS
+tc qdisc add dev eth0 root handle 1: red limit 500K avpkt 1K \\
+   qevent early_drop block 10
+.RE
+.RS
+tc filter add block 10 matchall action mirred egress mirror dev eth1
+.RE
+
 .SH CLASSLESS QDISCS
 The classless qdiscs are:
 .TP
@@ -283,6 +306,13 @@ incoming packets into different flows and is used to provide a fair share of the
 bandwidth to all the flows using the queue. Each such flow is managed by the
 CoDel queuing discipline. Reordering within a flow is avoided since Codel
 internally uses a FIFO queue.
+.TP
+fq_pie
+FQ-PIE (Flow Queuing with Proportional Integral controller Enhanced) is a
+queuing discipline that combines Flow Queuing with the PIE AQM scheme. FQ-PIE
+uses a Jenkins hash function to classify incoming packets into different flows
+and is used to provide a fair share of the bandwidth to all the flows using the
+qdisc. Each such flow is managed by the PIE algorithm.
 .TP
 gred
 Generalized Random Early Detection combines multiple RED queues in order to
@@ -394,6 +424,12 @@ DSMARK
 Classify packets based on TOS field, change TOS field of packets based on
 classification.
 .TP
+ETS
+The ETS qdisc is a queuing discipline that merges functionality of PRIO and DRR
+qdiscs in one scheduler. ETS makes it easy to configure a set of strict and
+bandwidth-sharing bands to implement the transmission selection described in
+802.1Qaz.
+.TP
 HFSC
 Hierarchical Fair Service Curve guarantees precise bandwidth and delay allocation for leaf classes and allocates excess bandwidth fairly. Unlike HTB, it makes use of packet dropping to achieve low delays which interactive sessions benefit from.
 .TP
@@ -441,7 +477,7 @@ qdiscs will use all three:
 tc filters
 If tc filters are attached to a class, they are consulted first
 for relevant instructions. Filters can match on all fields of a packet header,
-as well as on the firewall mark applied by ipchains or iptables.
+as well as on the firewall mark applied by iptables.
 .TP
 Type of Service
 Some qdiscs have built in rules for classifying packets based on the TOS field.
@@ -818,6 +854,12 @@ option for creating
 alias.
 .RE
 
+.TP
+.BR "\-br" , " \-brief"
+Print only essential data needed to identify the filter and action (handle,
+cookie, etc.) and stats. This option is currently only supported by
+.BR "tc filter show " and " tc actions ls " commands.
+
 .SH "EXAMPLES"
 .PP
 tc -g class show dev eth0
@@ -828,6 +870,7 @@ Shows classes as ASCII graph on eth0 interface.
 tc -g -s class show dev eth0
 .RS 4
 Shows classes as ASCII graph with stats info under each class.
+.RE
 
 .SH HISTORY
 .B tc
@@ -843,10 +886,12 @@ was written by Alexey N. Kuznetsov and added in Linux 2.2.
 .BR tc-codel (8),
 .BR tc-drr (8),
 .BR tc-ematch (8),
+.BR tc-ets (8),
 .BR tc-flow (8),
 .BR tc-flower (8),
 .BR tc-fq (8),
 .BR tc-fq_codel (8),
+.BR tc-fq_pie (8),
 .BR tc-fw (8),
 .BR tc-hfsc (7),
 .BR tc-hfsc (8),

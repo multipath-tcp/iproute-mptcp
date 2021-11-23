@@ -225,7 +225,7 @@ static int ipvrf_pids(int argc, char **argv)
 		return -1;
 	}
 
-	mnt = find_cgroup2_mount();
+	mnt = find_cgroup2_mount(true);
 	if (!mnt)
 		return -1;
 
@@ -256,8 +256,8 @@ static int prog_load(int idx)
 		BPF_EXIT_INSN(),
 	};
 
-	return bpf_prog_load(BPF_PROG_TYPE_CGROUP_SOCK, prog, sizeof(prog),
-			     "GPL", bpf_log_buf, sizeof(bpf_log_buf));
+	return bpf_program_load(BPF_PROG_TYPE_CGROUP_SOCK, prog, sizeof(prog),
+			        "GPL", bpf_log_buf, sizeof(bpf_log_buf));
 }
 
 static int vrf_configure_cgroup(const char *path, int ifindex)
@@ -278,8 +278,8 @@ static int vrf_configure_cgroup(const char *path, int ifindex)
 	 */
 	prog_fd = prog_load(ifindex);
 	if (prog_fd < 0) {
-		fprintf(stderr, "Failed to load BPF prog: '%s'\n",
-			strerror(errno));
+		fprintf(stderr, "Failed to load BPF prog: '%s'\n%s",
+			strerror(errno), bpf_log_buf);
 
 		if (errno != EPERM) {
 			fprintf(stderr,
@@ -288,7 +288,7 @@ static int vrf_configure_cgroup(const char *path, int ifindex)
 		goto out;
 	}
 
-	if (bpf_prog_attach_fd(prog_fd, cg_fd, BPF_CGROUP_INET_SOCK_CREATE)) {
+	if (bpf_program_attach(prog_fd, cg_fd, BPF_CGROUP_INET_SOCK_CREATE)) {
 		fprintf(stderr, "Failed to attach prog to cgroup: '%s'\n",
 			strerror(errno));
 		goto out;
@@ -366,7 +366,7 @@ static int vrf_switch(const char *name)
 		}
 	}
 
-	mnt = find_cgroup2_mount();
+	mnt = find_cgroup2_mount(true);
 	if (!mnt)
 		return -1;
 
@@ -566,9 +566,12 @@ static int ipvrf_print(struct nlmsghdr *n)
 		return 0;
 	}
 
-	printf("%-16s %5u", name, tb_id);
+	open_json_object(NULL);
+	print_string(PRINT_ANY, "name", "%-16s", name);
+	print_uint(PRINT_ANY, "table", " %5u", tb_id);
+	print_string(PRINT_FP, NULL, "%s", "\n");
+	close_json_object();
 
-	printf("\n");
 	return 1;
 }
 
@@ -597,15 +600,21 @@ static int ipvrf_show(int argc, char **argv)
 	if (ip_link_list(ipvrf_filter_req, &linfo) == 0) {
 		struct nlmsg_list *l;
 		unsigned nvrf = 0;
-		int n;
 
-		n = printf("%-16s  %5s\n", "Name", "Table");
-		printf("%.*s\n", n-1, "-----------------------");
+		new_json_obj(json);
+
+		print_string(PRINT_FP, NULL, "%-16s", "Name");
+		print_string(PRINT_FP, NULL, "  %5s\n", "Table");
+		print_string(PRINT_FP, NULL, "%s\n",
+			     "-----------------------");
+
 		for (l = linfo.head; l; l = l->next)
 			nvrf += ipvrf_print(&l->h);
 
 		if (!nvrf)
-			printf("No VRF has been configured\n");
+			print_string(PRINT_FP, NULL, "%s\n",
+				     "No VRF has been configured");
+		delete_json_obj();
 	} else
 		rc = 1;
 

@@ -166,7 +166,7 @@ static int print_simple(struct action_util *au, FILE *f, struct rtattr *arg)
 	char *simpdata;
 
 	if (arg == NULL)
-		return -1;
+		return 0;
 
 	parse_rtattr_nested(tb, TCA_DEF_MAX, arg);
 
@@ -194,7 +194,7 @@ static int print_simple(struct action_util *au, FILE *f, struct rtattr *arg)
 			print_tm(f, tm);
 		}
 	}
-	fprintf(f, "\n");
+	print_nl();
 
 	return 0;
 }

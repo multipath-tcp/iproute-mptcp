@@ -6,6 +6,7 @@
 
 #include "rdma.h"
 #include "res.h"
+#include "stat.h"
 #include <inttypes.h>
 
 static int stat_help(struct rd *rd)
@@ -22,6 +23,7 @@ static int stat_help(struct rd *rd)
 	pr_out("where  OBJECT: = { qp }\n");
 	pr_out("       CRITERIA : = { type }\n");
 	pr_out("       COUNTER_SCOPE: = { link | dev }\n");
+	pr_out("       FILTER_NAME: = { cntn | lqpn | pid }\n");
 	pr_out("Examples:\n");
 	pr_out("       %s statistic qp show\n", rd->filename);
 	pr_out("       %s statistic qp show link mlx5_2/1\n", rd->filename);
@@ -46,6 +48,7 @@ struct counter_param {
 
 static struct counter_param auto_params[] = {
 	{ "type", RDMA_COUNTER_MASK_QP_TYPE, },
+	{ "pid", RDMA_COUNTER_MASK_PID, },
 	{ NULL },
 };
 
@@ -54,6 +57,7 @@ static int prepare_auto_mode_str(struct nlattr **tb, uint32_t mask,
 {
 	char s[] = "qp auto";
 	int i, outlen = strlen(s);
+	bool first = true;
 
 	memset(output, 0, len);
 	snprintf(output, len, "%s", s);
@@ -64,7 +68,12 @@ static int prepare_auto_mode_str(struct nlattr **tb, uint32_t mask,
 				outlen += strlen(auto_params[i].name) + 1;
 				if (outlen >= len)
 					return -EINVAL;
-				strcat(output, " ");
+				if (first) {
+					strcat(output, " ");
+					first = false;
+				} else
+					strcat(output, ",");
+
 				strcat(output, auto_params[i].name);
 			}
 		}
@@ -114,14 +123,10 @@ static int qp_link_get_mode_parse_cb(const struct nlmsghdr *nlh, void *data)
 		snprintf(output, sizeof(output), "qp auto off");
 	}
 
-	if (rd->json_output) {
-		jsonw_uint_field(rd->jw, "ifindex", idx);
-		jsonw_uint_field(rd->jw, "port", port);
-		jsonw_string_field(rd->jw, "mode", output);
-	} else {
-		pr_out("%u/%u: %s/%u: %s\n", idx, port, name, port, output);
-	}
-
+	open_json_object(NULL);
+	print_link(rd, idx, name, port, tb);
+	print_color_string(PRINT_ANY, COLOR_NONE, "mode", "mode %s ", output);
+	newline(rd);
 	return MNL_CB_OK;
 }
 
@@ -148,12 +153,7 @@ static int stat_one_qp_link_get_mode(struct rd *rd)
 	if (ret)
 		return ret;
 
-	if (rd->json_output)
-		jsonw_start_object(rd->jw);
 	ret = rd_recv_msg(rd, qp_link_get_mode_parse_cb, rd, seq);
-	if (rd->json_output)
-		jsonw_end_object(rd->jw);
-
 	return ret;
 }
 
@@ -174,7 +174,7 @@ static int stat_qp_get_mode(struct rd *rd)
 	return rd_exec_cmd(rd, cmds, "parameter");
 }
 
-static int res_get_hwcounters(struct rd *rd, struct nlattr *hwc_table, bool print)
+int res_get_hwcounters(struct rd *rd, struct nlattr *hwc_table, bool print)
 {
 	struct nlattr *nla_entry;
 	const char *nm;
@@ -209,7 +209,7 @@ static int res_get_hwcounters(struct rd *rd, struct nlattr *hwc_table, bool prin
 static int res_counter_line(struct rd *rd, const char *name, int index,
 		       struct nlattr **nla_line)
 {
-	uint32_t cntn, port = 0, pid = 0, qpn;
+	uint32_t cntn, port = 0, pid = 0, qpn, qp_type = 0;
 	struct nlattr *hwc_table, *qp_table;
 	struct nlattr *nla_entry;
 	const char *comm = NULL;
@@ -228,6 +228,13 @@ static int res_counter_line(struct rd *rd, const char *name, int index,
 	cntn = mnl_attr_get_u32(nla_line[RDMA_NLDEV_ATTR_STAT_COUNTER_ID]);
 	if (rd_is_filtered_attr(rd, "cntn", cntn,
 				nla_line[RDMA_NLDEV_ATTR_STAT_COUNTER_ID]))
+		return MNL_CB_OK;
+
+	if (nla_line[RDMA_NLDEV_ATTR_RES_TYPE])
+		qp_type = mnl_attr_get_u8(nla_line[RDMA_NLDEV_ATTR_RES_TYPE]);
+
+	if (rd_is_string_filtered_attr(rd, "qp-type", qp_types_to_str(qp_type),
+				       nla_line[RDMA_NLDEV_ATTR_RES_TYPE]))
 		return MNL_CB_OK;
 
 	if (nla_line[RDMA_NLDEV_ATTR_RES_PID]) {
@@ -261,31 +268,19 @@ static int res_counter_line(struct rd *rd, const char *name, int index,
 	err = res_get_hwcounters(rd, hwc_table, false);
 	if (err != MNL_CB_OK)
 		return err;
-
-	if (rd->json_output) {
-		jsonw_string_field(rd->jw, "ifname", name);
-		if (port)
-			jsonw_uint_field(rd->jw, "port", port);
-		jsonw_uint_field(rd->jw, "cntn", cntn);
-	} else {
-		if (port)
-			pr_out("link %s/%u cntn %u ", name, port, cntn);
-		else
-			pr_out("dev %s cntn %u ", name, cntn);
-	}
-
+	open_json_object(NULL);
+	print_link(rd, index, name, port, nla_line);
+	print_color_uint(PRINT_ANY, COLOR_NONE, "cntn", "cntn %u ", cntn);
+	if (nla_line[RDMA_NLDEV_ATTR_RES_TYPE])
+		print_qp_type(rd, qp_type);
 	res_print_uint(rd, "pid", pid, nla_line[RDMA_NLDEV_ATTR_RES_PID]);
 	print_comm(rd, comm, nla_line);
-
 	res_get_hwcounters(rd, hwc_table, true);
-
 	isfirst = true;
+	open_json_array(PRINT_JSON, "lqpn");
+	print_color_string(PRINT_FP, COLOR_NONE, NULL, "\n    LQPN: <", NULL);
 	mnl_attr_for_each_nested(nla_entry, qp_table) {
 		struct nlattr *qp_line[RDMA_NLDEV_ATTR_MAX] = {};
-
-		if (isfirst && !rd->json_output)
-			pr_out("\n    LQPN: <");
-
 		err = mnl_attr_parse_nested(nla_entry, rd_attr_cb, qp_line);
 		if (err != MNL_CB_OK)
 			return -EINVAL;
@@ -294,19 +289,14 @@ static int res_counter_line(struct rd *rd, const char *name, int index,
 			return -EINVAL;
 
 		qpn = mnl_attr_get_u32(qp_line[RDMA_NLDEV_ATTR_RES_LQPN]);
-		if (rd->json_output) {
-			jsonw_uint_field(rd->jw, "lqpn", qpn);
-		} else {
-			if (isfirst)
-				pr_out("%d", qpn);
-			else
-				pr_out(", %d", qpn);
-		}
+		if (!isfirst)
+			print_color_string(PRINT_FP, COLOR_NONE, NULL, ",",
+					   NULL);
+		print_color_uint(PRINT_ANY, COLOR_NONE, NULL, "%d", qpn);
 		isfirst = false;
 	}
-
-	if (!rd->json_output)
-		pr_out(">\n");
+	close_json_array(PRINT_ANY, ">");
+	newline(rd);
 	return MNL_CB_OK;
 }
 
@@ -317,7 +307,7 @@ static int stat_qp_show_parse_cb(const struct nlmsghdr *nlh, void *data)
 	struct rd *rd = data;
 	const char *name;
 	uint32_t idx;
-	int ret;
+	int ret = MNL_CB_OK;
 
 	mnl_attr_parse(nlh, 0, rd_attr_cb, tb);
 	if (!tb[RDMA_NLDEV_ATTR_DEV_INDEX] || !tb[RDMA_NLDEV_ATTR_DEV_NAME] ||
@@ -347,6 +337,7 @@ static const struct filters stat_valid_filters[MAX_NUMBER_OF_FILTERS] = {
 	{ .name = "cntn", .is_number = true },
 	{ .name = "lqpn", .is_number = true },
 	{ .name = "pid", .is_number = true },
+	{ .name = "qp-type", .is_number = false },
 };
 
 static int stat_qp_show_one_link(struct rd *rd)
@@ -370,12 +361,7 @@ static int stat_qp_show_one_link(struct rd *rd)
 	if (ret)
 		return ret;
 
-	if (rd->json_output)
-		jsonw_start_object(rd->jw);
 	ret = rd_recv_msg(rd, stat_qp_show_parse_cb, rd, seq);
-	if (rd->json_output)
-		jsonw_end_object(rd->jw);
-
 	return ret;
 }
 
@@ -413,37 +399,67 @@ static int stat_qp_set_link_auto_sendmsg(struct rd *rd, uint32_t mask)
 	return rd_sendrecv_msg(rd, seq);
 }
 
-static int stat_one_qp_set_link_auto_off(struct rd *rd)
+static int stat_get_auto_mode_mask(struct rd *rd)
 {
-	return stat_qp_set_link_auto_sendmsg(rd, 0);
-}
+	char *modes = rd_argv(rd), *mode, *saved_ptr;
+	const char *delim = ",";
+	int mask = 0, found, i;
 
-static int stat_one_qp_set_auto_type_on(struct rd *rd)
-{
-	return stat_qp_set_link_auto_sendmsg(rd, RDMA_COUNTER_MASK_QP_TYPE);
-}
+	if (!modes)
+		return mask;
 
-static int stat_one_qp_set_link_auto_type(struct rd *rd)
-{
-	const struct rd_cmd cmds[] = {
-		{ NULL,		stat_help },
-		{ "on",		stat_one_qp_set_auto_type_on },
-		{ 0 }
-	};
+	mode = strtok_r(modes, delim, &saved_ptr);
+	do {
+		if (!mode)
+			break;
 
-	return rd_exec_cmd(rd, cmds, "parameter");
+		found = false;
+		for (i = 0;  auto_params[i].name != NULL; i++) {
+			if (!strcmp(mode, auto_params[i].name)) {
+				mask |= auto_params[i].attr;
+				found = true;
+				break;
+			}
+		}
+
+		if (!found) {
+			pr_err("Unknown auto mode '%s'.\n", mode);
+			mask = 0;
+			break;
+		}
+
+		mode = strtok_r(NULL, delim, &saved_ptr);
+	} while(1);
+
+	if (mask)
+		rd_arg_inc(rd);
+
+	return mask;
 }
 
 static int stat_one_qp_set_link_auto(struct rd *rd)
 {
-	const struct rd_cmd cmds[] = {
-		{ NULL,		stat_one_qp_link_get_mode },
-		{ "off",	stat_one_qp_set_link_auto_off },
-		{ "type",	stat_one_qp_set_link_auto_type },
-		{ 0 }
-	};
+	int auto_mask = 0;
 
-	return rd_exec_cmd(rd, cmds, "parameter");
+	if (!rd_argc(rd))
+		return -EINVAL;
+
+	if (!strcmpx(rd_argv(rd), "off")) {
+		rd_arg_inc(rd);
+		return stat_qp_set_link_auto_sendmsg(rd, 0);
+	}
+
+	auto_mask = stat_get_auto_mode_mask(rd);
+	if (!auto_mask || !rd_argc(rd))
+		return -EINVAL;
+
+	if (!strcmpx(rd_argv(rd), "on")) {
+		rd_arg_inc(rd);
+		return stat_qp_set_link_auto_sendmsg(rd, auto_mask);
+	} else {
+		pr_err("Unknown parameter '%s'.\n", rd_argv(rd));
+		return -EINVAL;
+	}
 }
 
 static int stat_one_qp_set_link(struct rd *rd)
@@ -486,6 +502,12 @@ static int stat_get_arg(struct rd *rd, const char *arg)
 		return -EINVAL;
 
 	rd_arg_inc(rd);
+
+	if (rd_is_multiarg(rd)) {
+		pr_err("The parameter %s shouldn't include range\n", arg);
+		return -EINVAL;
+	}
+
 	value = strtol(rd_argv(rd), &endp, 10);
 	rd_arg_inc(rd);
 
@@ -507,6 +529,8 @@ static int stat_one_qp_bind(struct rd *rd)
 		return ret;
 
 	lqpn = stat_get_arg(rd, "lqpn");
+	if (lqpn < 0)
+		return lqpn;
 
 	rd_prepare_msg(rd, RDMA_NLDEV_CMD_STAT_SET,
 		       &seq, (NLM_F_REQUEST | NLM_F_ACK));
@@ -521,6 +545,9 @@ static int stat_one_qp_bind(struct rd *rd)
 
 	if (rd_argc(rd)) {
 		cntn = stat_get_arg(rd, "cntn");
+		if (cntn < 0)
+			return cntn;
+
 		mnl_attr_put_u32(rd->nlh, RDMA_NLDEV_ATTR_STAT_COUNTER_ID,
 				 cntn);
 	}
@@ -591,13 +618,23 @@ static int stat_one_qp_unbind(struct rd *rd)
 	unsigned int portid;
 	uint32_t seq;
 
+	if (rd_no_arg(rd)) {
+		stat_help(rd);
+		return -EINVAL;
+	}
+
 	ret = rd_build_filter(rd, stat_valid_filters);
 	if (ret)
 		return ret;
 
 	cntn = stat_get_arg(rd, "cntn");
+	if (cntn < 0)
+		return cntn;
+
 	if (rd_argc(rd)) {
 		lqpn = stat_get_arg(rd, "lqpn");
+		if (lqpn < 0)
+			return lqpn;
 		return do_stat_qp_unbind_lqpn(rd, cntn, lqpn);
 	}
 
@@ -694,17 +731,12 @@ static int stat_show_parse_cb(const struct nlmsghdr *nlh, void *data)
 
 	name = mnl_attr_get_str(tb[RDMA_NLDEV_ATTR_DEV_NAME]);
 	port = mnl_attr_get_u32(tb[RDMA_NLDEV_ATTR_PORT_INDEX]);
-	if (rd->json_output) {
-		jsonw_string_field(rd->jw, "ifname", name);
-		jsonw_uint_field(rd->jw, "port", port);
-	} else {
-		pr_out("link %s/%u ", name, port);
-	}
-
+	open_json_object(NULL);
+	print_color_string(PRINT_ANY, COLOR_NONE, "ifname", "link %s/", name);
+	print_color_uint(PRINT_ANY, COLOR_NONE, "port", "%u ", port);
 	ret = res_get_hwcounters(rd, tb[RDMA_NLDEV_ATTR_STAT_HWCOUNTERS], true);
 
-	if (!rd->json_output)
-		pr_out("\n");
+	newline(rd);
 	return ret;
 }
 
@@ -737,6 +769,7 @@ static int stat_show(struct rd *rd)
 	const struct rd_cmd cmds[] = {
 		{ NULL,		stat_show_link },
 		{ "link",	stat_show_link },
+		{ "mr",		stat_mr },
 		{ "help",	stat_help },
 		{ 0 }
 	};
@@ -752,6 +785,7 @@ int cmd_stat(struct rd *rd)
 		{ "list",	stat_show },
 		{ "help",	stat_help },
 		{ "qp",		stat_qp },
+		{ "mr",		stat_mr },
 		{ 0 }
 	};
 

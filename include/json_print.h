@@ -15,6 +15,9 @@
 #include "json_writer.h"
 #include "color.h"
 
+#define _IS_JSON_CONTEXT(type) (is_json_context() && (type & PRINT_JSON || type & PRINT_ANY))
+#define _IS_FP_CONTEXT(type)   (!is_json_context() && (type & PRINT_FP || type & PRINT_ANY))
+
 json_writer_t *get_json_writer(void);
 
 /*
@@ -31,10 +34,10 @@ enum output_type {
 
 void new_json_obj(int json);
 void delete_json_obj(void);
+void new_json_obj_plain(int json);
+void delete_json_obj_plain(void);
 
 bool is_json_context(void);
-
-void fflush_fp(void);
 
 void open_json_object(const char *str);
 void close_json_object(void);
@@ -44,26 +47,32 @@ void close_json_array(enum output_type type, const char *delim);
 void print_nl(void);
 
 #define _PRINT_FUNC(type_name, type)					\
-	void print_color_##type_name(enum output_type t,		\
-				     enum color_attr color,		\
-				     const char *key,			\
-				     const char *fmt,			\
-				     type value);			\
+	int print_color_##type_name(enum output_type t,			\
+				    enum color_attr color,		\
+				    const char *key,			\
+				    const char *fmt,			\
+				    type value);			\
 									\
-	static inline void print_##type_name(enum output_type t,	\
-					     const char *key,		\
-					     const char *fmt,		\
-					     type value)		\
+	static inline int print_##type_name(enum output_type t,		\
+					    const char *key,		\
+					    const char *fmt,		\
+					    type value)			\
 	{								\
-		print_color_##type_name(t, COLOR_NONE, key, fmt, value);	\
+		return print_color_##type_name(t, COLOR_NONE, key, fmt,	\
+					       value);			\
 	}
 
+/* These functions return 0 if printing to a JSON context, number of
+ * characters printed otherwise (as calculated by printf(3)).
+ */
 _PRINT_FUNC(int, int)
 _PRINT_FUNC(s64, int64_t)
 _PRINT_FUNC(bool, bool)
+_PRINT_FUNC(on_off, bool)
 _PRINT_FUNC(null, const char*)
 _PRINT_FUNC(string, const char*)
 _PRINT_FUNC(uint, unsigned int)
+_PRINT_FUNC(size, __u32)
 _PRINT_FUNC(u64, uint64_t)
 _PRINT_FUNC(hhu, unsigned char)
 _PRINT_FUNC(hu, unsigned short)
@@ -72,6 +81,27 @@ _PRINT_FUNC(0xhex, unsigned long long)
 _PRINT_FUNC(luint, unsigned long)
 _PRINT_FUNC(lluint, unsigned long long)
 _PRINT_FUNC(float, double)
+_PRINT_FUNC(tv, const struct timeval *)
 #undef _PRINT_FUNC
+
+#define _PRINT_NAME_VALUE_FUNC(type_name, type, format_char)		  \
+	void print_##type_name##_name_value(const char *name, type value) \
+
+_PRINT_NAME_VALUE_FUNC(uint, unsigned int, u);
+_PRINT_NAME_VALUE_FUNC(string, const char*, s);
+#undef _PRINT_NAME_VALUE_FUNC
+
+int print_color_rate(bool use_iec, enum output_type t, enum color_attr color,
+		     const char *key, const char *fmt, unsigned long long rate);
+
+static inline int print_rate(bool use_iec, enum output_type t,
+			     const char *key, const char *fmt,
+			     unsigned long long rate)
+{
+	return print_color_rate(use_iec, t, COLOR_NONE, key, fmt, rate);
+}
+
+/* A backdoor to the size formatter. Please use print_size() instead. */
+char *sprint_size(__u32 sz, char *buf);
 
 #endif /* _JSON_PRINT_H_ */

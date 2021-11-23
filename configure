@@ -1,8 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 # This is not an autoconf generated configure
-#
-INCLUDE=${1:-"$PWD/include"}
+
+INCLUDE="$PWD/include"
 
 # Output file which is input to Makefile
 CONFIG=config.mk
@@ -16,9 +16,11 @@ check_toolchain()
     : ${PKG_CONFIG:=pkg-config}
     : ${AR=ar}
     : ${CC=gcc}
+    : ${YACC=bison}
     echo "PKG_CONFIG:=${PKG_CONFIG}" >>$CONFIG
     echo "AR:=${AR}" >>$CONFIG
     echo "CC:=${CC}" >>$CONFIG
+    echo "YACC:=${YACC}" >>$CONFIG
 }
 
 check_atm()
@@ -195,6 +197,31 @@ EOF
     rm -f $TMPDIR/setnstest.c $TMPDIR/setnstest
 }
 
+check_name_to_handle_at()
+{
+    cat >$TMPDIR/name_to_handle_at_test.c <<EOF
+#define _GNU_SOURCE
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+int main(int argc, char **argv)
+{
+	struct file_handle *fhp;
+	int mount_id, flags, dirfd;
+	char *pathname;
+	name_to_handle_at(dirfd, pathname, fhp, &mount_id, flags);
+	return 0;
+}
+EOF
+    if $CC -I$INCLUDE -o $TMPDIR/name_to_handle_at_test $TMPDIR/name_to_handle_at_test.c >/dev/null 2>&1; then
+        echo "yes"
+        echo "CFLAGS += -DHAVE_HANDLE_AT" >>$CONFIG
+    else
+        echo "no"
+    fi
+    rm -f $TMPDIR/name_to_handle_at_test.c $TMPDIR/name_to_handle_at_test
+}
+
 check_ipset()
 {
     cat >$TMPDIR/ipsettest.c <<EOF
@@ -206,7 +233,7 @@ typedef unsigned short ip_set_id_t;
 #include <linux/netfilter/xt_set.h>
 
 struct xt_set_info info;
-#if IPSET_PROTOCOL == 6
+#if IPSET_PROTOCOL == 6 || IPSET_PROTOCOL == 7
 int main(void)
 {
 	return IPSET_MAXNAMELEN;
@@ -236,6 +263,111 @@ check_elf()
     else
 	echo "no"
     fi
+}
+
+have_libbpf_basic()
+{
+    cat >$TMPDIR/libbpf_test.c <<EOF
+#include <bpf/libbpf.h>
+int main(int argc, char **argv) {
+    bpf_program__set_autoload(NULL, false);
+    bpf_map__ifindex(NULL);
+    bpf_map__set_pin_path(NULL, NULL);
+    bpf_object__open_file(NULL, NULL);
+    return 0;
+}
+EOF
+
+    $CC -o $TMPDIR/libbpf_test $TMPDIR/libbpf_test.c $LIBBPF_CFLAGS $LIBBPF_LDLIBS >/dev/null 2>&1
+    local ret=$?
+
+    rm -f $TMPDIR/libbpf_test.c $TMPDIR/libbpf_test
+    return $ret
+}
+
+have_libbpf_sec_name()
+{
+    cat >$TMPDIR/libbpf_sec_test.c <<EOF
+#include <bpf/libbpf.h>
+int main(int argc, char **argv) {
+    void *ptr;
+    bpf_program__section_name(NULL);
+    return 0;
+}
+EOF
+
+    $CC -o $TMPDIR/libbpf_sec_test $TMPDIR/libbpf_sec_test.c $LIBBPF_CFLAGS $LIBBPF_LDLIBS >/dev/null 2>&1
+    local ret=$?
+
+    rm -f $TMPDIR/libbpf_sec_test.c $TMPDIR/libbpf_sec_test
+    return $ret
+}
+
+check_force_libbpf_on()
+{
+    # if set LIBBPF_FORCE=on but no libbpf support, just exist the config
+    # process to make sure we don't build without libbpf.
+    if [ "$LIBBPF_FORCE" = on ]; then
+        echo "	LIBBPF_FORCE=on set, but couldn't find a usable libbpf"
+        exit 1
+    fi
+}
+
+check_libbpf()
+{
+    # if set LIBBPF_FORCE=off, disable libbpf entirely
+    if [ "$LIBBPF_FORCE" = off ]; then
+        echo "no"
+        return
+    fi
+
+    if ! ${PKG_CONFIG} libbpf --exists && [ -z "$LIBBPF_DIR" ] ; then
+        echo "no"
+        check_force_libbpf_on
+        return
+    fi
+
+    if [ $(uname -m) = x86_64 ]; then
+        local LIBBPF_LIBDIR="${LIBBPF_DIR}/usr/lib64"
+    else
+        local LIBBPF_LIBDIR="${LIBBPF_DIR}/usr/lib"
+    fi
+
+    if [ -n "$LIBBPF_DIR" ]; then
+        LIBBPF_CFLAGS="-I${LIBBPF_DIR}/usr/include"
+        LIBBPF_LDLIBS="${LIBBPF_LIBDIR}/libbpf.a -lz -lelf"
+        LIBBPF_VERSION=$(PKG_CONFIG_LIBDIR=${LIBBPF_LIBDIR}/pkgconfig ${PKG_CONFIG} libbpf --modversion)
+    else
+        LIBBPF_CFLAGS=$(${PKG_CONFIG} libbpf --cflags)
+        LIBBPF_LDLIBS=$(${PKG_CONFIG} libbpf --libs)
+        LIBBPF_VERSION=$(${PKG_CONFIG} libbpf --modversion)
+    fi
+
+    if ! have_libbpf_basic; then
+        echo "no"
+        echo "	libbpf version $LIBBPF_VERSION is too low, please update it to at least 0.1.0"
+        check_force_libbpf_on
+        return
+    else
+        echo "HAVE_LIBBPF:=y" >> $CONFIG
+        echo 'CFLAGS += -DHAVE_LIBBPF ' $LIBBPF_CFLAGS >> $CONFIG
+        echo "CFLAGS += -DLIBBPF_VERSION=\\\"$LIBBPF_VERSION\\\"" >> $CONFIG
+        echo 'LDLIBS += ' $LIBBPF_LDLIBS >> $CONFIG
+
+        if [ -z "$LIBBPF_DIR" ]; then
+            echo "CFLAGS += -DLIBBPF_DYNAMIC" >> $CONFIG
+        fi
+    fi
+
+    # bpf_program__title() is deprecated since libbpf 0.2.0, use
+    # bpf_program__section_name() instead if we support
+    if have_libbpf_sec_name; then
+        echo "HAVE_LIBBPF_SECTION_NAME:=y" >> $CONFIG
+        echo 'CFLAGS += -DHAVE_LIBBPF_SECTION_NAME ' >> $CONFIG
+    fi
+
+    echo "yes"
+    echo "	libbpf version $LIBBPF_VERSION"
 }
 
 check_selinux()
@@ -349,6 +481,48 @@ endif
 EOF
 }
 
+usage()
+{
+	cat <<EOF
+Usage: $0 [OPTIONS]
+	--include_dir		Path to iproute2 include dir
+	--libbpf_dir		Path to libbpf DESTDIR
+	--libbpf_force		Enable/disable libbpf by force. Available options:
+				  on: require link against libbpf, quit config if no libbpf support
+				  off: disable libbpf probing
+	-h | --help		Show this usage info
+EOF
+	exit $1
+}
+
+# Compat with the old INCLUDE path setting method.
+if [ $# -eq 1 ] && [ "$(echo $1 | cut -c 1)" != '-' ]; then
+	INCLUDE="$1"
+else
+	while true; do
+		case "$1" in
+			--include_dir)
+				INCLUDE=$2
+				shift 2 ;;
+			--libbpf_dir)
+				LIBBPF_DIR="$2"
+				shift 2 ;;
+			--libbpf_force)
+				if [ "$2" != 'on' ] && [ "$2" != 'off' ]; then
+					usage 1
+				fi
+				LIBBPF_FORCE=$2
+				shift 2 ;;
+			-h | --help)
+				usage 0 ;;
+			"")
+				break ;;
+			*)
+				shift 1 ;;
+		esac
+	done
+fi
+
 echo "# Generated config based on" $INCLUDE >$CONFIG
 quiet_config >> $CONFIG
 
@@ -380,8 +554,14 @@ fi
 echo -n "libc has setns: "
 check_setns
 
+echo -n "libc has name_to_handle_at: "
+check_name_to_handle_at
+
 echo -n "SELinux support: "
 check_selinux
+
+echo -n "libbpf support: "
+check_libbpf
 
 echo -n "ELF support: "
 check_elf

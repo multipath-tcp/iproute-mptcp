@@ -32,27 +32,19 @@ static void print_rqpn(struct rd *rd, uint32_t val, struct nlattr **nla_line)
 {
 	if (!nla_line[RDMA_NLDEV_ATTR_RES_RQPN])
 		return;
-
-	if (rd->json_output)
-		jsonw_uint_field(rd->jw, "rqpn", val);
-	else
-		pr_out("rqpn %u ", val);
+	print_color_uint(PRINT_ANY, COLOR_NONE, "rqpn", "rqpn %d ", val);
 }
 
 static void print_type(struct rd *rd, uint32_t val)
 {
-	if (rd->json_output)
-		jsonw_string_field(rd->jw, "type", qp_types_to_str(val));
-	else
-		pr_out("type %s ", qp_types_to_str(val));
+	print_color_string(PRINT_ANY, COLOR_NONE, "type", "type %s ",
+			   qp_types_to_str(val));
 }
 
 static void print_state(struct rd *rd, uint32_t val)
 {
-	if (rd->json_output)
-		jsonw_string_field(rd->jw, "state", qp_states_to_str(val));
-	else
-		pr_out("state %s ", qp_states_to_str(val));
+	print_color_string(PRINT_ANY, COLOR_NONE, "state", "state %s ",
+			   qp_states_to_str(val));
 }
 
 static void print_rqpsn(struct rd *rd, uint32_t val, struct nlattr **nla_line)
@@ -60,10 +52,7 @@ static void print_rqpsn(struct rd *rd, uint32_t val, struct nlattr **nla_line)
 	if (!nla_line[RDMA_NLDEV_ATTR_RES_RQ_PSN])
 		return;
 
-	if (rd->json_output)
-		jsonw_uint_field(rd->jw, "rq-psn", val);
-	else
-		pr_out("rq-psn %u ", val);
+	print_color_uint(PRINT_ANY, COLOR_NONE, "rq-psn", "rq-psn %d ", val);
 }
 
 static void print_pathmig(struct rd *rd, uint32_t val, struct nlattr **nla_line)
@@ -71,11 +60,22 @@ static void print_pathmig(struct rd *rd, uint32_t val, struct nlattr **nla_line)
 	if (!nla_line[RDMA_NLDEV_ATTR_RES_PATH_MIG_STATE])
 		return;
 
-	if (rd->json_output)
-		jsonw_string_field(rd->jw, "path-mig-state",
-				   path_mig_to_str(val));
-	else
-		pr_out("path-mig-state %s ", path_mig_to_str(val));
+	print_color_string(PRINT_ANY, COLOR_NONE, "path-mig-state",
+			   "path-mig-state %s ", path_mig_to_str(val));
+}
+
+static int res_qp_line_raw(struct rd *rd, const char *name, int idx,
+			   struct nlattr **nla_line)
+{
+	if (!nla_line[RDMA_NLDEV_ATTR_RES_RAW])
+		return MNL_CB_ERROR;
+
+	open_json_object(NULL);
+	print_link(rd, idx, name, rd->port_idx, nla_line);
+	print_raw_data(rd, nla_line);
+	newline(rd);
+
+	return MNL_CB_OK;
 }
 
 static int res_qp_line(struct rd *rd, const char *name, int idx,
@@ -90,11 +90,8 @@ static int res_qp_line(struct rd *rd, const char *name, int idx,
 	if (!nla_line[RDMA_NLDEV_ATTR_RES_LQPN] ||
 	    !nla_line[RDMA_NLDEV_ATTR_RES_SQ_PSN] ||
 	    !nla_line[RDMA_NLDEV_ATTR_RES_TYPE] ||
-	    !nla_line[RDMA_NLDEV_ATTR_RES_STATE] ||
-	    (!nla_line[RDMA_NLDEV_ATTR_RES_PID] &&
-	     !nla_line[RDMA_NLDEV_ATTR_RES_KERN_NAME])) {
+	    !nla_line[RDMA_NLDEV_ATTR_RES_STATE])
 		return MNL_CB_ERROR;
-	}
 
 	if (nla_line[RDMA_NLDEV_ATTR_PORT_INDEX])
 		port = mnl_attr_get_u32(nla_line[RDMA_NLDEV_ATTR_PORT_INDEX]);
@@ -162,11 +159,8 @@ static int res_qp_line(struct rd *rd, const char *name, int idx,
 		comm = (char *)mnl_attr_get_str(
 			nla_line[RDMA_NLDEV_ATTR_RES_KERN_NAME]);
 
-	if (rd->json_output)
-		jsonw_start_array(rd->jw);
-
+	open_json_object(NULL);
 	print_link(rd, idx, name, port, nla_line);
-
 	res_print_uint(rd, "lqpn", lqpn, nla_line[RDMA_NLDEV_ATTR_RES_LQPN]);
 	print_rqpn(rd, rqpn, nla_line);
 
@@ -204,7 +198,8 @@ int res_qp_idx_parse_cb(const struct nlmsghdr *nlh, void *data)
 	name = mnl_attr_get_str(tb[RDMA_NLDEV_ATTR_DEV_NAME]);
 	idx = mnl_attr_get_u32(tb[RDMA_NLDEV_ATTR_DEV_INDEX]);
 
-	return res_qp_line(rd, name, idx, tb);
+	return (rd->show_raw) ? res_qp_line_raw(rd, name, idx, tb) :
+		res_qp_line(rd, name, idx, tb);
 }
 
 int res_qp_parse_cb(const struct nlmsghdr *nlh, void *data)
@@ -232,7 +227,8 @@ int res_qp_parse_cb(const struct nlmsghdr *nlh, void *data)
 		if (ret != MNL_CB_OK)
 			break;
 
-		ret = res_qp_line(rd, name, idx, nla_line);
+		ret = (rd->show_raw) ? res_qp_line_raw(rd, name, idx, nla_line) :
+			res_qp_line(rd, name, idx, nla_line);
 		if (ret != MNL_CB_OK)
 			break;
 	}

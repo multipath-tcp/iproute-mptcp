@@ -12,7 +12,7 @@
 #include <string.h>
 #include <errno.h>
 
-#include "SNAPSHOT.h"
+#include "version.h"
 #include "utils.h"
 #include "br_common.h"
 #include "namespace.h"
@@ -37,10 +37,10 @@ static void usage(void)
 	fprintf(stderr,
 "Usage: bridge [ OPTIONS ] OBJECT { COMMAND | help }\n"
 "       bridge [ -force ] -batch filename\n"
-"where	OBJECT := { link | fdb | mdb | vlan | monitor }\n"
-"	OPTIONS := { -V[ersion] | -s[tatistics] | -d[etails] |\n"
-"		     -o[neline] | -t[imestamp] | -n[etns] name |\n"
-"		     -c[ompressvlans] -color -p[retty] -j[son] }\n");
+"where  OBJECT := { link | fdb | mdb | vlan | monitor }\n"
+"       OPTIONS := { -V[ersion] | -s[tatistics] | -d[etails] |\n"
+"                    -o[neline] | -t[imestamp] | -n[etns] name |\n"
+"                    -c[ompressvlans] -color -p[retty] -j[son] }\n");
 	exit(-1);
 }
 
@@ -77,20 +77,14 @@ static int do_cmd(const char *argv0, int argc, char **argv)
 	return -1;
 }
 
+static int br_batch_cmd(int argc, char *argv[], void *data)
+{
+	return do_cmd(argv[0], argc, argv);
+}
+
 static int batch(const char *name)
 {
-	char *line = NULL;
-	size_t len = 0;
-	int ret = EXIT_SUCCESS;
-
-	if (name && strcmp(name, "-") != 0) {
-		if (freopen(name, "r", stdin) == NULL) {
-			fprintf(stderr,
-				"Cannot open file \"%s\" for reading: %s\n",
-				name, strerror(errno));
-			return EXIT_FAILURE;
-		}
-	}
+	int ret;
 
 	if (rtnl_open(&rth, 0) < 0) {
 		fprintf(stderr, "Cannot open rtnetlink\n");
@@ -99,25 +93,7 @@ static int batch(const char *name)
 
 	rtnl_set_strict_dump(&rth);
 
-	cmdlineno = 0;
-	while (getcmdline(&line, &len, stdin) != -1) {
-		char *largv[100];
-		int largc;
-
-		largc = makeargs(line, largv, 100);
-		if (largc == 0)
-			continue;       /* blank line */
-
-		if (do_cmd(largv[0], largc, largv)) {
-			fprintf(stderr, "Command failed %s:%d\n",
-				name, cmdlineno);
-			ret = EXIT_FAILURE;
-			if (!force)
-				break;
-		}
-	}
-	if (line)
-		free(line);
+	ret = do_batch(name, force, br_batch_cmd, NULL);
 
 	rtnl_close(&rth);
 	return ret;
@@ -141,7 +117,7 @@ main(int argc, char **argv)
 		if (matches(opt, "-help") == 0) {
 			usage();
 		} else if (matches(opt, "-Version") == 0) {
-			printf("bridge utility, 0.0\n");
+			printf("bridge utility, %s\n", version);
 			exit(0);
 		} else if (matches(opt, "-stats") == 0 ||
 			   matches(opt, "-statistics") == 0) {
@@ -173,9 +149,9 @@ main(int argc, char **argv)
 			NEXT_ARG();
 			if (netns_switch(argv[1]))
 				exit(-1);
+		} else if (matches_color(opt, &color)) {
 		} else if (matches(opt, "-compressvlans") == 0) {
 			++compress_vlans;
-		} else if (matches_color(opt, &color)) {
 		} else if (matches(opt, "-force") == 0) {
 			++force;
 		} else if (matches(opt, "-json") == 0) {

@@ -286,7 +286,7 @@ though inverses this behaviour: the offset is applied always, and
 will fall back to zero.
 .TP
 .BI hashkey " HASHKEY"
-Spefify what packet data to use to calculate a hash key for bucket lookup. The
+Specify what packet data to use to calculate a hash key for bucket lookup. The
 kernel adjusts the value according to the hash table's size. For this to work,
 the option
 .B link
@@ -490,6 +490,7 @@ Match on source or destination ethernet address. This is dangerous: It assumes
 an ethernet header is present at the start of the packet. This will probably
 lead to unexpected things if used with layer three interfaces like e.g. tun or
 ppp.
+.RE
 .SH EXAMPLES
 .RS
 .EX

@@ -17,10 +17,7 @@
 
 static json_writer_t *_jw;
 
-#define _IS_JSON_CONTEXT(type) ((type & PRINT_JSON || type & PRINT_ANY) && _jw)
-#define _IS_FP_CONTEXT(type) (!_jw && (type & PRINT_FP || type & PRINT_ANY))
-
-void new_json_obj(int json)
+static void __new_json_obj(int json, bool have_array)
 {
 	if (json) {
 		_jw = jsonw_new(stdout);
@@ -30,16 +27,38 @@ void new_json_obj(int json)
 		}
 		if (pretty)
 			jsonw_pretty(_jw, true);
-		jsonw_start_array(_jw);
+		if (have_array)
+			jsonw_start_array(_jw);
 	}
+}
+
+static void __delete_json_obj(bool have_array)
+{
+	if (_jw) {
+		if (have_array)
+			jsonw_end_array(_jw);
+		jsonw_destroy(&_jw);
+	}
+}
+
+void new_json_obj(int json)
+{
+	__new_json_obj(json, true);
 }
 
 void delete_json_obj(void)
 {
-	if (_jw) {
-		jsonw_end_array(_jw);
-		jsonw_destroy(&_jw);
-	}
+	__delete_json_obj(true);
+}
+
+void new_json_obj_plain(int json)
+{
+	__new_json_obj(json, false);
+}
+
+void delete_json_obj_plain(void)
+{
+	__delete_json_obj(false);
 }
 
 bool is_json_context(void)
@@ -101,20 +120,22 @@ void close_json_array(enum output_type type, const char *str)
  */
 #define _PRINT_FUNC(type_name, type)					\
 	__attribute__((format(printf, 4, 0)))				\
-	void print_color_##type_name(enum output_type t,		\
-				     enum color_attr color,		\
-				     const char *key,			\
-				     const char *fmt,			\
-				     type value)			\
+	int print_color_##type_name(enum output_type t,			\
+				    enum color_attr color,		\
+				    const char *key,			\
+				    const char *fmt,			\
+				    type value)				\
 	{								\
+		int ret = 0;						\
 		if (_IS_JSON_CONTEXT(t)) {				\
 			if (!key)					\
 				jsonw_##type_name(_jw, value);		\
 			else						\
 				jsonw_##type_name##_field(_jw, key, value); \
 		} else if (_IS_FP_CONTEXT(t)) {				\
-			color_fprintf(stdout, color, fmt, value);          \
+			ret = color_fprintf(stdout, color, fmt, value); \
 		}							\
+		return ret;						\
 	}
 _PRINT_FUNC(int, int);
 _PRINT_FUNC(s64, int64_t);
@@ -127,12 +148,27 @@ _PRINT_FUNC(lluint, unsigned long long);
 _PRINT_FUNC(float, double);
 #undef _PRINT_FUNC
 
-void print_color_string(enum output_type type,
-			enum color_attr color,
-			const char *key,
-			const char *fmt,
-			const char *value)
+#define _PRINT_NAME_VALUE_FUNC(type_name, type, format_char)		 \
+	void print_##type_name##_name_value(const char *name, type value)\
+	{								 \
+		SPRINT_BUF(format);					 \
+									 \
+		snprintf(format, SPRINT_BSIZE,				 \
+			 "%s %%"#format_char, name);			 \
+		print_##type_name(PRINT_ANY, name, format, value);	 \
+	}
+_PRINT_NAME_VALUE_FUNC(uint, unsigned int, u);
+_PRINT_NAME_VALUE_FUNC(string, const char*, s);
+#undef _PRINT_NAME_VALUE_FUNC
+
+int print_color_string(enum output_type type,
+		       enum color_attr color,
+		       const char *key,
+		       const char *fmt,
+		       const char *value)
 {
+	int ret = 0;
+
 	if (_IS_JSON_CONTEXT(type)) {
 		if (key && !value)
 			jsonw_name(_jw, key);
@@ -141,8 +177,10 @@ void print_color_string(enum output_type type,
 		else
 			jsonw_string_field(_jw, key, value);
 	} else if (_IS_FP_CONTEXT(type)) {
-		color_fprintf(stdout, color, fmt, value);
+		ret = color_fprintf(stdout, color, fmt, value);
 	}
+
+	return ret;
 }
 
 /*
@@ -150,47 +188,78 @@ void print_color_string(enum output_type type,
  * a value to it, you will need to use "is_json_context()" to have different
  * branch for json and regular output. grep -r "print_bool" for example
  */
-void print_color_bool(enum output_type type,
-		      enum color_attr color,
-		      const char *key,
-		      const char *fmt,
-		      bool value)
+static int __print_color_bool(enum output_type type,
+			      enum color_attr color,
+			      const char *key,
+			      const char *fmt,
+			      bool value,
+			      const char *str)
 {
+	int ret = 0;
+
 	if (_IS_JSON_CONTEXT(type)) {
 		if (key)
 			jsonw_bool_field(_jw, key, value);
 		else
 			jsonw_bool(_jw, value);
 	} else if (_IS_FP_CONTEXT(type)) {
-		color_fprintf(stdout, color, fmt, value ? "true" : "false");
+		ret = color_fprintf(stdout, color, fmt, str);
 	}
+
+	return ret;
+}
+
+int print_color_bool(enum output_type type,
+		     enum color_attr color,
+		     const char *key,
+		     const char *fmt,
+		     bool value)
+{
+	return __print_color_bool(type, color, key, fmt, value,
+				  value ? "true" : "false");
+}
+
+int print_color_on_off(enum output_type type,
+		       enum color_attr color,
+		       const char *key,
+		       const char *fmt,
+		       bool value)
+{
+	return __print_color_bool(type, color, key, fmt, value,
+				  value ? "on" : "off");
 }
 
 /*
  * In JSON context uses hardcode %#x format: 42 -> 0x2a
  */
-void print_color_0xhex(enum output_type type,
-		       enum color_attr color,
-		       const char *key,
-		       const char *fmt,
-		       unsigned long long hex)
+int print_color_0xhex(enum output_type type,
+		      enum color_attr color,
+		      const char *key,
+		      const char *fmt,
+		      unsigned long long hex)
 {
+	int ret = 0;
+
 	if (_IS_JSON_CONTEXT(type)) {
 		SPRINT_BUF(b1);
 
 		snprintf(b1, sizeof(b1), "%#llx", hex);
 		print_string(PRINT_JSON, key, NULL, b1);
 	} else if (_IS_FP_CONTEXT(type)) {
-		color_fprintf(stdout, color, fmt, hex);
+		ret = color_fprintf(stdout, color, fmt, hex);
 	}
+
+	return ret;
 }
 
-void print_color_hex(enum output_type type,
-		     enum color_attr color,
-		     const char *key,
-		     const char *fmt,
-		     unsigned int hex)
+int print_color_hex(enum output_type type,
+		    enum color_attr color,
+		    const char *key,
+		    const char *fmt,
+		    unsigned int hex)
 {
+	int ret = 0;
+
 	if (_IS_JSON_CONTEXT(type)) {
 		SPRINT_BUF(b1);
 
@@ -200,28 +269,47 @@ void print_color_hex(enum output_type type,
 		else
 			jsonw_string(_jw, b1);
 	} else if (_IS_FP_CONTEXT(type)) {
-		color_fprintf(stdout, color, fmt, hex);
+		ret = color_fprintf(stdout, color, fmt, hex);
 	}
+
+	return ret;
 }
 
 /*
  * In JSON context we don't use the argument "value" we simply call jsonw_null
  * whereas FP context can use "value" to output anything
  */
-void print_color_null(enum output_type type,
-		      enum color_attr color,
-		      const char *key,
-		      const char *fmt,
-		      const char *value)
+int print_color_null(enum output_type type,
+		     enum color_attr color,
+		     const char *key,
+		     const char *fmt,
+		     const char *value)
 {
+	int ret = 0;
+
 	if (_IS_JSON_CONTEXT(type)) {
 		if (key)
 			jsonw_null_field(_jw, key);
 		else
 			jsonw_null(_jw);
 	} else if (_IS_FP_CONTEXT(type)) {
-		color_fprintf(stdout, color, fmt, value);
+		ret = color_fprintf(stdout, color, fmt, value);
 	}
+
+	return ret;
+}
+
+int print_color_tv(enum output_type type,
+		   enum color_attr color,
+		   const char *key,
+		   const char *fmt,
+		   const struct timeval *tv)
+{
+	double usecs = tv->tv_usec;
+	double secs = tv->tv_sec;
+	double time = secs + usecs / 1000000;
+
+	return print_color_float(type, color, key, fmt, time);
 }
 
 /* Print line separator (if not in JSON mode) */
@@ -229,4 +317,37 @@ void print_nl(void)
 {
 	if (!_jw)
 		printf("%s", _SL_);
+}
+
+int print_color_rate(bool use_iec, enum output_type type, enum color_attr color,
+		     const char *key, const char *fmt, unsigned long long rate)
+{
+	unsigned long kilo = use_iec ? 1024 : 1000;
+	const char *str = use_iec ? "i" : "";
+	static char *units[5] = {"", "K", "M", "G", "T"};
+	char *buf;
+	int rc;
+	int i;
+
+	if (_IS_JSON_CONTEXT(type))
+		return print_color_lluint(type, color, key, "%llu", rate);
+
+	rate <<= 3; /* bytes/sec -> bits/sec */
+
+	for (i = 0; i < ARRAY_SIZE(units) - 1; i++)  {
+		if (rate < kilo)
+			break;
+		if (((rate % kilo) != 0) && rate < 1000*kilo)
+			break;
+		rate /= kilo;
+	}
+
+	rc = asprintf(&buf, "%.0f%s%sbit", (double)rate, units[i],
+		      i > 0 ? str : "");
+	if (rc < 0)
+		return -1;
+
+	rc = print_color_string(type, color, key, fmt, buf);
+	free(buf);
+	return rc;
 }

@@ -13,11 +13,15 @@ bytes
 bytes
 .B [ burst
 packets
-.B ] [ ecn ] [ harddrop] [ bandwidth
+.B ] [ ecn ] [ harddrop ] [ nodrop ] [ bandwidth
 rate
 .B ] [ probability
 chance
-.B ] [ adaptive ]
+.B ] [ adaptive ] [ qevent early_drop block
+index
+.B ] [ qevent mark block
+index
+.B ]
 
 .SH DESCRIPTION
 Random Early Detection is a classless qdisc which manages its queue size
@@ -123,12 +127,28 @@ If average flow queue size is above
 .B max
 bytes, this parameter forces a drop instead of ecn marking.
 .TP
+nodrop
+With this parameter, traffic that should be marked, but is not ECN-capable, is
+enqueued. Without the parameter it is early-dropped.
+.TP
 adaptive
 (Added in linux-3.3) Sets RED in adaptive mode as described in http://icir.org/floyd/papers/adaptiveRed.pdf
 .nf
 Goal of Adaptive RED is to make 'probability' dynamic value between 1% and 50% to reach the target average queue :
 .B (max - min) / 2
 .fi
+
+.SH QEVENTS
+See tc (8) for some general notes about qevents. The RED qdisc supports the
+following qevents:
+
+.TP
+early_drop
+The associated block is executed when packets are early-dropped. This includes
+non-ECT packets in ECN mode.
+.TP
+mark
+The associated block is executed when packets are marked in ECN mode.
 
 .SH EXAMPLE
 

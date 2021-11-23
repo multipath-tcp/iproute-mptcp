@@ -190,7 +190,7 @@ throw " | " unreachable " | " prohibit " | " blackhole " | " nat " ]"
 .ti -8
 .IR ENCAP " := [ "
 .IR ENCAP_MPLS " | " ENCAP_IP " | " ENCAP_BPF " | "
-.IR ENCAP_SEG6 " | " ENCAP_SEG6LOCAL " ] "
+.IR ENCAP_SEG6 " | " ENCAP_SEG6LOCAL " | " ENCAP_IOAM6 " ] "
 
 .ti -8
 .IR ENCAP_MPLS " := "
@@ -240,7 +240,20 @@ throw " | " unreachable " | " prohibit " | " blackhole " | " nat " ]"
 .B seg6local
 .BR action
 .IR SEG6_ACTION " [ "
-.IR SEG6_ACTION_PARAM " ] "
+.IR SEG6_ACTION_PARAM " ] [ "
+.BR count " ] "
+
+.ti -8
+.IR ENCAP_IOAM6 " := "
+.B ioam6
+.BR trace
+.BR prealloc
+.BR type
+.IR IOAM6_TRACE_TYPE
+.BR ns
+.IR IOAM6_NAMESPACE
+.BR size
+.IR IOAM6_TRACE_SIZE
 
 .ti -8
 .IR ROUTE_GET_FLAGS " := "
@@ -716,6 +729,9 @@ is a string specifying the supported encapsulation type. Namely:
 .sp
 .BI seg6local
 - local SRv6 segment processing
+.sp
+.BI ioam6
+- encapsulation type IPv6 IOAM
 
 .in -8
 .I ENCAPHDR
@@ -801,8 +817,14 @@ is a set of encapsulation attributes specific to the
 .B seg6local
 .in +2
 .IR SEG6_ACTION " [ "
-.IR SEG6_ACTION_PARAM " ] "
-- Operation to perform on matching packets.
+.IR SEG6_ACTION_PARAM " ] [ "
+.BR count " ] "
+- Operation to perform on matching packets. The optional \fBcount\fR
+attribute is used to collect statistics on the processing of actions.
+Three counters are implemented: 1) packets correctly processed;
+2) bytes correctly processed; 3) packets that cause a processing error
+(i.e., missing SID List, wrong SID List, etc). To retrieve the counters
+related to an action use the \fB-s\fR flag in the \fBshow\fR command.
 The following actions are currently supported (\fBLinux 4.14+ only\fR).
 .in +2
 
@@ -827,6 +849,49 @@ rules. This action only accepts packets with either a zero Segments
 Left value or no SRH at all, and an inner IPv6 packet. Other
 matching packets are dropped.
 
+.BR End.DT6 " { " table " | " vrftable " } "
+.I TABLEID
+- Decapsulate the inner IPv6 packet and forward it according to the
+specified lookup table.
+.I TABLEID
+is either a number or a string from the file
+.BR "@SYSCONFDIR@/rt_tables" .
+If
+.B vrftable
+is used, the argument must be a VRF device associated with
+the table id. Moreover, the VRF table associated with the
+table id must be configured with the VRF strict mode turned
+on (net.vrf.strict_mode=1). This action only accepts packets
+with either a zero Segments Left value or no SRH at all,
+and an inner IPv6 packet. Other matching packets are dropped.
+
+.B End.DT4 vrftable
+.I TABLEID
+- Decapsulate the inner IPv4 packet and forward it according to the
+specified lookup table.
+.I TABLEID
+is either a number or a string from the file
+.BR "@SYSCONFDIR@/rt_tables" .
+The argument must be a VRF device associated with the table id.
+Moreover, the VRF table associated with the table id must be configured
+with the VRF strict mode turned on (net.vrf.strict_mode=1). This action
+only accepts packets with either a zero Segments Left value or no SRH
+at all, and an inner IPv4 packet. Other matching packets are dropped.
+
+.B End.DT46 vrftable
+.I TABLEID
+- Decapsulate the inner IPv4 or IPv6 packet and forward it according
+to the specified lookup table.
+.I TABLEID
+is either a number or a string from the file
+.BR "@SYSCONFDIR@/rt_tables" .
+The argument must be a VRF device associated with the table id.
+Moreover, the VRF table associated with the table id must be configured
+with the VRF strict mode turned on (net.vrf.strict_mode=1). This action
+only accepts packets with either a zero Segments Left value or no SRH
+at all, and an inner IPv4 or IPv6 packet. Other matching packets are
+dropped.
+
 .B End.B6 srh segs
 .IR SEGMENTS " [ "
 .B hmac
@@ -846,6 +911,20 @@ Additionally, encapsulate the matching packet within an outer IPv6 header
 followed by the specified SRH. The destination address of the outer IPv6
 header is set to the first segment of the new SRH. The source
 address is set as described in \fBip-sr\fR(8).
+.in -2
+
+.B ioam6
+.in +2
+.I IOAM6_TRACE_TYPE
+- List of IOAM data required in the trace, represented by a bitfield (24 bits).
+.sp
+
+.I IOAM6_NAMESPACE
+- Numerical value to represent an IOAM namespace. See \fBip-ioam\fR(8).
+.sp
+
+.I IOAM6_TRACE_SIZE
+- Size, in octets, of the pre-allocated trace data block.
 .in -4
 
 .in -8
@@ -1163,6 +1242,16 @@ Adds an ipv4 route with mpls encapsulation attributes attached to it.
 ip -6 route add 2001:db8:1::/64 encap seg6 mode encap segs 2001:db8:42::1,2001:db8:ffff::2 dev eth0
 .RS 4
 Adds an IPv6 route with SRv6 encapsulation and two segments attached.
+.RE
+.PP
+ip -6 route add 2001:db8:1::/64 encap seg6local action End.DT46 vrftable 100 dev vrf100
+.RS 4
+Adds an IPv6 route with SRv6 decapsulation and forward with lookup in VRF table.
+.RE
+.PP
+ip -6 route add 2001:db8:1::/64 encap ioam6 trace prealloc type 0x800000 ns 1 size 12 dev eth0
+.RS 4
+Adds an IPv6 route with an IOAM Pre-allocated Trace encapsulation that only includes the hop limit and the node id, configured for the IOAM namespace 1 and a pre-allocated data block of 12 octets.
 .RE
 .PP
 ip route add 10.1.1.0/30 nhid 10

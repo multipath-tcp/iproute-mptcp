@@ -17,11 +17,8 @@ static int res_pd_line(struct rd *rd, const char *name, int idx,
 	uint32_t pdn = 0;
 	uint64_t users;
 
-	if (!nla_line[RDMA_NLDEV_ATTR_RES_USECNT] ||
-	    (!nla_line[RDMA_NLDEV_ATTR_RES_PID] &&
-	     !nla_line[RDMA_NLDEV_ATTR_RES_KERN_NAME])) {
+	if (!nla_line[RDMA_NLDEV_ATTR_RES_USECNT])
 		return MNL_CB_ERROR;
-	}
 
 	if (nla_line[RDMA_NLDEV_ATTR_RES_LOCAL_DMA_LKEY])
 		local_dma_lkey = mnl_attr_get_u32(
@@ -63,9 +60,7 @@ static int res_pd_line(struct rd *rd, const char *name, int idx,
 		comm = (char *)mnl_attr_get_str(
 			nla_line[RDMA_NLDEV_ATTR_RES_KERN_NAME]);
 
-	if (rd->json_output)
-		jsonw_start_array(rd->jw);
-
+	open_json_object(NULL);
 	print_dev(rd, idx, name);
 	res_print_uint(rd, "pdn", pdn, nla_line[RDMA_NLDEV_ATTR_RES_PDN]);
 	print_key(rd, "local_dma_lkey", local_dma_lkey,

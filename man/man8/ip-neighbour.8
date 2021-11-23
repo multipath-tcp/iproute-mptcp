@@ -38,6 +38,12 @@ ip-neighbour \- neighbour/arp tables management.
 .IR NAME " ] "
 
 .ti -8
+.B ip neigh get
+.IR ADDR
+.B  dev
+.IR DEV
+
+.ti -8
 .IR STATE " := {"
 .BR permanent " | " noarp " | " stale " | " reachable " | " none " |"
 .BR incomplete " | " delay " | " probe " | " failed " }"
@@ -79,11 +85,11 @@ the interface to which this neighbour is attached.
 
 .TP
 .BI proxy
-indicates whether we are proxying for this neigbour entry
+indicates whether we are proxying for this neighbour entry
 
 .TP
 .BI router
-indicates whether neigbour is a router
+indicates whether neighbour is a router
 
 .TP
 .BI extern_learn
@@ -231,6 +237,24 @@ twice,
 also dumps all the deleted neighbours.
 .RE
 
+.TP
+ip neigh get
+lookup a neighbour entry to a destination given a device
+.RS
+
+.TP
+.BI proxy
+indicates whether we should lookup a proxy neighbour entry
+
+.TP
+.BI to " ADDRESS " (default)
+the prefix selecting the neighbour to query.
+
+.TP
+.BI dev " NAME"
+get neighbour entry attached to this device.
+.RE
+
 .SH EXAMPLES
 .PP
 ip neighbour
@@ -241,6 +265,12 @@ Shows the current neighbour table in kernel.
 ip neigh flush dev eth0
 .RS
 Removes entries in the neighbour table on device eth0.
+.RE
+.PP
+ip neigh get 10.0.1.10 dev eth0
+.RS
+Performs a neighbour lookup in the kernel and returns
+a neighbour entry.
 .RE
 
 .SH SEE ALSO

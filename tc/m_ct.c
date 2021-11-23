@@ -359,7 +359,7 @@ static void ct_print_nat(int ct_action, struct rtattr **tb)
 {
 	size_t done = 0;
 	char out[256] = "";
-	bool nat;
+	bool nat = false;
 
 	if (!(ct_action & TCA_CT_ACT_NAT))
 		return;
@@ -443,8 +443,9 @@ static int print_ct(struct action_util *au, FILE *f, struct rtattr *arg)
 	struct tc_ct *p;
 	int ct_action = 0;
 
+	print_string(PRINT_ANY, "kind", "%s", "ct");
 	if (arg == NULL)
-		return -1;
+		return 0;
 
 	parse_rtattr_nested(tb, TCA_CT_MAX, arg);
 	if (tb[TCA_CT_PARMS] == NULL) {
@@ -453,8 +454,6 @@ static int print_ct(struct action_util *au, FILE *f, struct rtattr *arg)
 	}
 
 	p = RTA_DATA(tb[TCA_CT_PARMS]);
-
-	print_string(PRINT_ANY, "kind", "%s", "ct");
 
 	if (tb[TCA_CT_ACTION])
 		ct_action = rta_getattr_u16(tb[TCA_CT_ACTION]);
@@ -473,7 +472,8 @@ static int print_ct(struct action_util *au, FILE *f, struct rtattr *arg)
 
 	print_action_control(f, " ", p->action, "");
 
-	print_uint(PRINT_ANY, "index", "\n\t index %u", p->index);
+	print_nl();
+	print_uint(PRINT_ANY, "index", "\t index %u", p->index);
 	print_int(PRINT_ANY, "ref", " ref %d", p->refcnt);
 	print_int(PRINT_ANY, "bind", " bind %d", p->bindcnt);
 
@@ -484,7 +484,7 @@ static int print_ct(struct action_util *au, FILE *f, struct rtattr *arg)
 			print_tm(f, tm);
 		}
 	}
-	print_string(PRINT_FP, NULL, "%s", "\n ");
+	print_nl();
 
 	return 0;
 }

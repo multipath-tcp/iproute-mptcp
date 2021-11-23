@@ -29,9 +29,13 @@
 
 #include <linux/seg6.h>
 #include <linux/seg6_iptunnel.h>
+#include <linux/rpl.h>
+#include <linux/rpl_iptunnel.h>
 #include <linux/seg6_hmac.h>
 #include <linux/seg6_local.h>
 #include <linux/if_tunnel.h>
+#include <linux/ioam6.h>
+#include <linux/ioam6_iptunnel.h>
 
 static const char *format_encap_type(int type)
 {
@@ -50,6 +54,10 @@ static const char *format_encap_type(int type)
 		return "seg6";
 	case LWTUNNEL_ENCAP_SEG6_LOCAL:
 		return "seg6local";
+	case LWTUNNEL_ENCAP_RPL:
+		return "rpl";
+	case LWTUNNEL_ENCAP_IOAM6:
+		return "ioam6";
 	default:
 		return "unknown";
 	}
@@ -84,6 +92,10 @@ static int read_encap_type(const char *name)
 		return LWTUNNEL_ENCAP_SEG6;
 	else if (strcmp(name, "seg6local") == 0)
 		return LWTUNNEL_ENCAP_SEG6_LOCAL;
+	else if (strcmp(name, "rpl") == 0)
+		return LWTUNNEL_ENCAP_RPL;
+	else if (strcmp(name, "ioam6") == 0)
+		return LWTUNNEL_ENCAP_IOAM6;
 	else if (strcmp(name, "help") == 0)
 		encap_type_usage();
 
@@ -162,6 +174,61 @@ static void print_encap_seg6(FILE *fp, struct rtattr *encap)
 	print_srh(fp, tuninfo->srh);
 }
 
+static void print_rpl_srh(FILE *fp, struct ipv6_rpl_sr_hdr *srh)
+{
+	int i;
+
+	if (is_json_context())
+		open_json_array(PRINT_JSON, "segs");
+	else
+		fprintf(fp, "segs %d [ ", srh->segments_left);
+
+	for (i = srh->segments_left - 1; i >= 0; i--) {
+		print_color_string(PRINT_ANY, COLOR_INET6,
+				   NULL, "%s ",
+				   rt_addr_n2a(AF_INET6, 16, &srh->rpl_segaddr[i]));
+	}
+
+	if (is_json_context())
+		close_json_array(PRINT_JSON, NULL);
+	else
+		fprintf(fp, "] ");
+}
+
+static void print_encap_rpl(FILE *fp, struct rtattr *encap)
+{
+	struct rtattr *tb[RPL_IPTUNNEL_MAX + 1];
+	struct ipv6_rpl_sr_hdr *srh;
+
+	parse_rtattr_nested(tb, RPL_IPTUNNEL_MAX, encap);
+
+	if (!tb[RPL_IPTUNNEL_SRH])
+		return;
+
+	srh = RTA_DATA(tb[RPL_IPTUNNEL_SRH]);
+
+	print_rpl_srh(fp, srh);
+}
+
+static void print_encap_ioam6(FILE *fp, struct rtattr *encap)
+{
+	struct rtattr *tb[IOAM6_IPTUNNEL_MAX + 1];
+	struct ioam6_trace_hdr *trace;
+
+	parse_rtattr_nested(tb, IOAM6_IPTUNNEL_MAX, encap);
+
+	if (!tb[IOAM6_IPTUNNEL_TRACE])
+		return;
+
+	trace = RTA_DATA(tb[IOAM6_IPTUNNEL_TRACE]);
+
+	print_null(PRINT_ANY, "trace", "trace ", NULL);
+	print_null(PRINT_ANY, "prealloc", "prealloc ", NULL);
+	print_hex(PRINT_ANY, "type", "type %#08x ", ntohl(trace->type_be32) >> 8);
+	print_uint(PRINT_ANY, "ns", "ns %u ", ntohs(trace->namespace_id));
+	print_uint(PRINT_ANY, "size", "size %u ", trace->remlen * 4);
+}
+
 static const char *seg6_action_names[SEG6_LOCAL_ACTION_MAX + 1] = {
 	[SEG6_LOCAL_ACTION_END]			= "End",
 	[SEG6_LOCAL_ACTION_END_X]		= "End.X",
@@ -178,6 +245,7 @@ static const char *seg6_action_names[SEG6_LOCAL_ACTION_MAX + 1] = {
 	[SEG6_LOCAL_ACTION_END_AS]		= "End.AS",
 	[SEG6_LOCAL_ACTION_END_AM]		= "End.AM",
 	[SEG6_LOCAL_ACTION_END_BPF]		= "End.BPF",
+	[SEG6_LOCAL_ACTION_END_DT46]		= "End.DT46",
 };
 
 static const char *format_action_type(int action)
@@ -224,10 +292,48 @@ static void print_encap_bpf_prog(FILE *fp, struct rtattr *encap,
 	}
 }
 
+static void print_seg6_local_counters(FILE *fp, struct rtattr *encap)
+{
+	struct rtattr *tb[SEG6_LOCAL_CNT_MAX + 1];
+	__u64 packets = 0, bytes = 0, errors = 0;
+
+	parse_rtattr_nested(tb, SEG6_LOCAL_CNT_MAX, encap);
+
+	if (tb[SEG6_LOCAL_CNT_PACKETS])
+		packets = rta_getattr_u64(tb[SEG6_LOCAL_CNT_PACKETS]);
+
+	if (tb[SEG6_LOCAL_CNT_BYTES])
+		bytes = rta_getattr_u64(tb[SEG6_LOCAL_CNT_BYTES]);
+
+	if (tb[SEG6_LOCAL_CNT_ERRORS])
+		errors = rta_getattr_u64(tb[SEG6_LOCAL_CNT_ERRORS]);
+
+	if (is_json_context()) {
+		open_json_object("stats64");
+
+		print_u64(PRINT_JSON, "packets", NULL, packets);
+		print_u64(PRINT_JSON, "bytes", NULL, bytes);
+		print_u64(PRINT_JSON, "errors", NULL, errors);
+
+		close_json_object();
+	} else {
+		print_string(PRINT_FP, NULL, "%s ", "packets");
+		print_num(fp, 1, packets);
+
+		print_string(PRINT_FP, NULL, "%s ", "bytes");
+		print_num(fp, 1, bytes);
+
+		print_string(PRINT_FP, NULL, "%s ", "errors");
+		print_num(fp, 1, errors);
+	}
+}
+
 static void print_encap_seg6local(FILE *fp, struct rtattr *encap)
 {
 	struct rtattr *tb[SEG6_LOCAL_MAX + 1];
 	int action;
+
+	SPRINT_BUF(b1);
 
 	parse_rtattr_nested(tb, SEG6_LOCAL_MAX, encap);
 
@@ -246,8 +352,14 @@ static void print_encap_seg6local(FILE *fp, struct rtattr *encap)
 	}
 
 	if (tb[SEG6_LOCAL_TABLE])
-		print_uint(PRINT_ANY, "table",
-			   "table %u ", rta_getattr_u32(tb[SEG6_LOCAL_TABLE]));
+		print_string(PRINT_ANY, "table", "table %s ",
+			     rtnl_rttable_n2a(rta_getattr_u32(tb[SEG6_LOCAL_TABLE]),
+			     b1, sizeof(b1)));
+
+	if (tb[SEG6_LOCAL_VRFTABLE])
+		print_string(PRINT_ANY, "vrftable", "vrftable %s ",
+			     rtnl_rttable_n2a(rta_getattr_u32(tb[SEG6_LOCAL_VRFTABLE]),
+			     b1, sizeof(b1)));
 
 	if (tb[SEG6_LOCAL_NH4]) {
 		print_string(PRINT_ANY, "nh4",
@@ -275,6 +387,9 @@ static void print_encap_seg6local(FILE *fp, struct rtattr *encap)
 
 	if (tb[SEG6_LOCAL_BPF])
 		print_encap_bpf_prog(fp, tb[SEG6_LOCAL_BPF], "endpoint");
+
+	if (tb[SEG6_LOCAL_COUNTERS] && show_stats)
+		print_seg6_local_counters(fp, tb[SEG6_LOCAL_COUNTERS]);
 }
 
 static void print_encap_mpls(FILE *fp, struct rtattr *encap)
@@ -289,6 +404,110 @@ static void print_encap_mpls(FILE *fp, struct rtattr *encap)
 	if (tb[MPLS_IPTUNNEL_TTL])
 		print_uint(PRINT_ANY, "ttl", "ttl %u ",
 			rta_getattr_u8(tb[MPLS_IPTUNNEL_TTL]));
+}
+
+static void lwtunnel_print_geneve_opts(struct rtattr *attr)
+{
+	struct rtattr *tb[LWTUNNEL_IP_OPT_GENEVE_MAX + 1];
+	struct rtattr *i = RTA_DATA(attr);
+	int rem = RTA_PAYLOAD(attr);
+	char *name = "geneve_opts";
+	int data_len, offset = 0;
+	char data[rem * 2 + 1];
+	__u16 class;
+	__u8 type;
+
+	print_nl();
+	print_string(PRINT_FP, name, "\t%s ", name);
+	open_json_array(PRINT_JSON, name);
+
+	while (rem) {
+		parse_rtattr(tb, LWTUNNEL_IP_OPT_GENEVE_MAX, i, rem);
+		class = rta_getattr_be16(tb[LWTUNNEL_IP_OPT_GENEVE_CLASS]);
+		type = rta_getattr_u8(tb[LWTUNNEL_IP_OPT_GENEVE_TYPE]);
+		data_len = RTA_PAYLOAD(tb[LWTUNNEL_IP_OPT_GENEVE_DATA]);
+		hexstring_n2a(RTA_DATA(tb[LWTUNNEL_IP_OPT_GENEVE_DATA]),
+			      data_len, data, sizeof(data));
+		offset += data_len + 20;
+		rem -= data_len + 20;
+		i = RTA_DATA(attr) + offset;
+
+		open_json_object(NULL);
+		print_uint(PRINT_ANY, "class", "%u", class);
+		print_uint(PRINT_ANY, "type", ":%u", type);
+		if (rem)
+			print_string(PRINT_ANY, "data", ":%s,", data);
+		else
+			print_string(PRINT_ANY, "data", ":%s ", data);
+		close_json_object();
+	}
+
+	close_json_array(PRINT_JSON, name);
+}
+
+static void lwtunnel_print_vxlan_opts(struct rtattr *attr)
+{
+	struct rtattr *tb[LWTUNNEL_IP_OPT_VXLAN_MAX + 1];
+	struct rtattr *i = RTA_DATA(attr);
+	int rem = RTA_PAYLOAD(attr);
+	char *name = "vxlan_opts";
+	__u32 gbp;
+
+	parse_rtattr(tb, LWTUNNEL_IP_OPT_VXLAN_MAX, i, rem);
+	gbp = rta_getattr_u32(tb[LWTUNNEL_IP_OPT_VXLAN_GBP]);
+
+	print_nl();
+	print_string(PRINT_FP, name, "\t%s ", name);
+	open_json_array(PRINT_JSON, name);
+	open_json_object(NULL);
+	print_uint(PRINT_ANY, "gbp", "%u ", gbp);
+	close_json_object();
+	close_json_array(PRINT_JSON, name);
+}
+
+static void lwtunnel_print_erspan_opts(struct rtattr *attr)
+{
+	struct rtattr *tb[LWTUNNEL_IP_OPT_ERSPAN_MAX + 1];
+	struct rtattr *i = RTA_DATA(attr);
+	char *name = "erspan_opts";
+	__u8 ver, hwid, dir;
+	__u32 idx;
+
+	parse_rtattr(tb, LWTUNNEL_IP_OPT_ERSPAN_MAX, i, RTA_PAYLOAD(attr));
+	ver = rta_getattr_u8(tb[LWTUNNEL_IP_OPT_ERSPAN_VER]);
+	if (ver == 1) {
+		idx = rta_getattr_be32(tb[LWTUNNEL_IP_OPT_ERSPAN_INDEX]);
+		dir = 0;
+		hwid = 0;
+	} else {
+		idx = 0;
+		dir = rta_getattr_u8(tb[LWTUNNEL_IP_OPT_ERSPAN_DIR]);
+		hwid = rta_getattr_u8(tb[LWTUNNEL_IP_OPT_ERSPAN_HWID]);
+	}
+
+	print_nl();
+	print_string(PRINT_FP, name, "\t%s ", name);
+	open_json_array(PRINT_JSON, name);
+	open_json_object(NULL);
+	print_uint(PRINT_ANY, "ver", "%u", ver);
+	print_uint(PRINT_ANY, "index", ":%u", idx);
+	print_uint(PRINT_ANY, "dir", ":%u", dir);
+	print_uint(PRINT_ANY, "hwid", ":%u ", hwid);
+	close_json_object();
+	close_json_array(PRINT_JSON, name);
+}
+
+static void lwtunnel_print_opts(struct rtattr *attr)
+{
+	struct rtattr *tb_opt[LWTUNNEL_IP_OPTS_MAX + 1];
+
+	parse_rtattr_nested(tb_opt, LWTUNNEL_IP_OPTS_MAX, attr);
+	if (tb_opt[LWTUNNEL_IP_OPTS_GENEVE])
+		lwtunnel_print_geneve_opts(tb_opt[LWTUNNEL_IP_OPTS_GENEVE]);
+	else if (tb_opt[LWTUNNEL_IP_OPTS_VXLAN])
+		lwtunnel_print_vxlan_opts(tb_opt[LWTUNNEL_IP_OPTS_VXLAN]);
+	else if (tb_opt[LWTUNNEL_IP_OPTS_ERSPAN])
+		lwtunnel_print_erspan_opts(tb_opt[LWTUNNEL_IP_OPTS_ERSPAN]);
 }
 
 static void print_encap_ip(FILE *fp, struct rtattr *encap)
@@ -329,6 +548,9 @@ static void print_encap_ip(FILE *fp, struct rtattr *encap)
 		if (flags & TUNNEL_SEQ)
 			print_bool(PRINT_ANY, "seq", "seq ", true);
 	}
+
+	if (tb[LWTUNNEL_IP_OPTS])
+		lwtunnel_print_opts(tb[LWTUNNEL_IP_OPTS]);
 }
 
 static void print_encap_ila(FILE *fp, struct rtattr *encap)
@@ -401,6 +623,9 @@ static void print_encap_ip6(FILE *fp, struct rtattr *encap)
 		if (flags & TUNNEL_SEQ)
 			print_bool(PRINT_ANY, "seq", "seq ", true);
 	}
+
+	if (tb[LWTUNNEL_IP6_OPTS])
+		lwtunnel_print_opts(tb[LWTUNNEL_IP6_OPTS]);
 }
 
 static void print_encap_bpf(FILE *fp, struct rtattr *encap)
@@ -453,6 +678,12 @@ void lwt_print_encap(FILE *fp, struct rtattr *encap_type,
 		break;
 	case LWTUNNEL_ENCAP_SEG6_LOCAL:
 		print_encap_seg6local(fp, encap);
+		break;
+	case LWTUNNEL_ENCAP_RPL:
+		print_encap_rpl(fp, encap);
+		break;
+	case LWTUNNEL_ENCAP_IOAM6:
+		print_encap_ioam6(fp, encap);
 		break;
 	}
 }
@@ -577,6 +808,175 @@ out:
 	return ret;
 }
 
+static struct ipv6_rpl_sr_hdr *parse_rpl_srh(char *segbuf)
+{
+	struct ipv6_rpl_sr_hdr *srh;
+	int nsegs = 0;
+	int srhlen;
+	char *s;
+	int i;
+
+	s = segbuf;
+	for (i = 0; *s; *s++ == ',' ? i++ : *s);
+	nsegs = i + 1;
+
+	srhlen = 8 + 16 * nsegs;
+
+	srh = calloc(1, srhlen);
+
+	srh->hdrlen = (srhlen >> 3) - 1;
+	srh->type = 3;
+	srh->segments_left = nsegs;
+
+	for (s = strtok(segbuf, ","); s; s = strtok(NULL, ",")) {
+		inet_prefix addr;
+
+		get_addr(&addr, s, AF_INET6);
+		memcpy(&srh->rpl_segaddr[i], addr.data, sizeof(struct in6_addr));
+		i--;
+	}
+
+	return srh;
+}
+
+static int parse_encap_rpl(struct rtattr *rta, size_t len, int *argcp,
+			   char ***argvp)
+{
+	struct ipv6_rpl_sr_hdr *srh;
+	char **argv = *argvp;
+	char segbuf[1024] = "";
+	int argc = *argcp;
+	int segs_ok = 0;
+	int ret = 0;
+	int srhlen;
+
+	while (argc > 0) {
+		if (strcmp(*argv, "segs") == 0) {
+			NEXT_ARG();
+			if (segs_ok++)
+				duparg2("segs", *argv);
+
+			strlcpy(segbuf, *argv, 1024);
+		} else {
+			break;
+		}
+		argc--; argv++;
+	}
+
+	srh = parse_rpl_srh(segbuf);
+	srhlen = (srh->hdrlen + 1) << 3;
+
+	if (rta_addattr_l(rta, len, RPL_IPTUNNEL_SRH, srh,
+			  srhlen)) {
+		ret = -1;
+		goto out;
+	}
+
+	*argcp = argc + 1;
+	*argvp = argv - 1;
+
+out:
+	free(srh);
+
+	return ret;
+}
+
+static int parse_encap_ioam6(struct rtattr *rta, size_t len, int *argcp,
+			     char ***argvp)
+{
+	struct ioam6_trace_hdr *trace;
+	char **argv = *argvp;
+	int argc = *argcp;
+	int ns_found = 0;
+	__u16 size = 0;
+	__u32 type = 0;
+	__u16 ns;
+
+	trace = calloc(1, sizeof(*trace));
+	if (!trace)
+		return -1;
+
+	if (strcmp(*argv, "trace"))
+		missarg("trace");
+
+	NEXT_ARG();
+	if (strcmp(*argv, "prealloc"))
+		missarg("prealloc");
+
+	while (NEXT_ARG_OK()) {
+		NEXT_ARG_FWD();
+
+		if (strcmp(*argv, "type") == 0) {
+			NEXT_ARG();
+
+			if (type)
+				duparg2("type", *argv);
+
+			if (get_u32(&type, *argv, 0) || !type)
+				invarg("Invalid type", *argv);
+
+			trace->type_be32 = htonl(type << 8);
+
+		} else if (strcmp(*argv, "ns") == 0) {
+			NEXT_ARG();
+
+			if (ns_found++)
+				duparg2("ns", *argv);
+
+			if (!type)
+				missarg("type");
+
+			if (get_u16(&ns, *argv, 0))
+				invarg("Invalid namespace ID", *argv);
+
+			trace->namespace_id = htons(ns);
+
+		} else if (strcmp(*argv, "size") == 0) {
+			NEXT_ARG();
+
+			if (size)
+				duparg2("size", *argv);
+
+			if (!type)
+				missarg("type");
+			if (!ns_found)
+				missarg("ns");
+
+			if (get_u16(&size, *argv, 0) || !size)
+				invarg("Invalid size", *argv);
+
+			if (size % 4)
+				invarg("Size must be a 4-octet multiple", *argv);
+			if (size > IOAM6_TRACE_DATA_SIZE_MAX)
+				invarg("Size too big", *argv);
+
+			trace->remlen = (__u8)(size / 4);
+
+		} else {
+			break;
+		}
+	}
+
+	if (!type)
+		missarg("type");
+	if (!ns_found)
+		missarg("ns");
+	if (!size)
+		missarg("size");
+
+	if (rta_addattr_l(rta, len, IOAM6_IPTUNNEL_TRACE, trace,
+			  sizeof(*trace))) {
+		free(trace);
+		return -1;
+	}
+
+	*argcp = argc + 1;
+	*argvp = argv - 1;
+
+	free(trace);
+	return 0;
+}
+
 struct lwt_x {
 	struct rtattr *rta;
 	size_t len;
@@ -626,12 +1026,39 @@ static int lwt_parse_bpf(struct rtattr *rta, size_t len,
 	return 0;
 }
 
+/* for the moment, counters are always initialized to zero by the kernel; so we
+ * do not expect to parse any argument here.
+ */
+static int seg6local_fill_counters(struct rtattr *rta, size_t len, int attr)
+{
+	struct rtattr *nest;
+	int ret;
+
+	nest = rta_nest(rta, len, attr);
+
+	ret = rta_addattr64(rta, len, SEG6_LOCAL_CNT_PACKETS, 0);
+	if (ret < 0)
+		return ret;
+
+	ret = rta_addattr64(rta, len, SEG6_LOCAL_CNT_BYTES, 0);
+	if (ret < 0)
+		return ret;
+
+	ret = rta_addattr64(rta, len, SEG6_LOCAL_CNT_ERRORS, 0);
+	if (ret < 0)
+		return ret;
+
+	rta_nest_end(rta, nest);
+	return 0;
+}
+
 static int parse_encap_seg6local(struct rtattr *rta, size_t len, int *argcp,
 				 char ***argvp)
 {
-	int segs_ok = 0, hmac_ok = 0, table_ok = 0, nh4_ok = 0, nh6_ok = 0;
-	int iif_ok = 0, oif_ok = 0, action_ok = 0, srh_ok = 0, bpf_ok = 0;
-	__u32 action = 0, table, iif, oif;
+	int segs_ok = 0, hmac_ok = 0, table_ok = 0, vrftable_ok = 0;
+	int action_ok = 0, srh_ok = 0, bpf_ok = 0, counters_ok = 0;
+	int nh4_ok = 0, nh6_ok = 0, iif_ok = 0, oif_ok = 0;
+	__u32 action = 0, table, vrftable, iif, oif;
 	struct ipv6_sr_hdr *srh;
 	char **argv = *argvp;
 	int argc = *argcp;
@@ -654,8 +1081,17 @@ static int parse_encap_seg6local(struct rtattr *rta, size_t len, int *argcp,
 			NEXT_ARG();
 			if (table_ok++)
 				duparg2("table", *argv);
-			get_u32(&table, *argv, 0);
+			if (rtnl_rttable_a2n(&table, *argv))
+				invarg("invalid table id\n", *argv);
 			ret = rta_addattr32(rta, len, SEG6_LOCAL_TABLE, table);
+		} else if (strcmp(*argv, "vrftable") == 0) {
+			NEXT_ARG();
+			if (vrftable_ok++)
+				duparg2("vrftable", *argv);
+			if (rtnl_rttable_a2n(&vrftable, *argv))
+				invarg("invalid vrf table id\n", *argv);
+			ret = rta_addattr32(rta, len, SEG6_LOCAL_VRFTABLE,
+					    vrftable);
 		} else if (strcmp(*argv, "nh4") == 0) {
 			NEXT_ARG();
 			if (nh4_ok++)
@@ -686,6 +1122,11 @@ static int parse_encap_seg6local(struct rtattr *rta, size_t len, int *argcp,
 			if (!oif)
 				exit(nodev(*argv));
 			ret = rta_addattr32(rta, len, SEG6_LOCAL_OIF, oif);
+		} else if (strcmp(*argv, "count") == 0) {
+			if (counters_ok++)
+				duparg2("count", *argv);
+			ret = seg6local_fill_counters(rta, len,
+						      SEG6_LOCAL_COUNTERS);
 		} else if (strcmp(*argv, "srh") == 0) {
 			NEXT_ARG();
 			if (srh_ok++)
@@ -795,11 +1236,189 @@ static int parse_encap_mpls(struct rtattr *rta, size_t len,
 	return 0;
 }
 
+static int lwtunnel_parse_geneve_opt(char *str, size_t len, struct rtattr *rta)
+{
+	struct rtattr *nest;
+	char *token;
+	int i, err;
+
+	nest = rta_nest(rta, len, LWTUNNEL_IP_OPTS_GENEVE | NLA_F_NESTED);
+	i = 1;
+	token = strsep(&str, ":");
+	while (token) {
+		switch (i) {
+		case LWTUNNEL_IP_OPT_GENEVE_CLASS:
+		{
+			__be16 opt_class;
+
+			if (!strlen(token))
+				break;
+			err = get_be16(&opt_class, token, 0);
+			if (err)
+				return err;
+
+			rta_addattr16(rta, len, i, opt_class);
+			break;
+		}
+		case LWTUNNEL_IP_OPT_GENEVE_TYPE:
+		{
+			__u8 opt_type;
+
+			if (!strlen(token))
+				break;
+			err = get_u8(&opt_type, token, 0);
+			if (err)
+				return err;
+
+			rta_addattr8(rta, len, i, opt_type);
+			break;
+		}
+		case LWTUNNEL_IP_OPT_GENEVE_DATA:
+		{
+			size_t token_len = strlen(token);
+			__u8 *opts;
+
+			if (!token_len)
+				break;
+			opts = malloc(token_len / 2);
+			if (!opts)
+				return -1;
+			if (hex2mem(token, opts, token_len / 2) < 0) {
+				free(opts);
+				return -1;
+			}
+			rta_addattr_l(rta, len, i, opts, token_len / 2);
+			free(opts);
+
+			break;
+		}
+		default:
+			fprintf(stderr, "Unknown \"geneve_opts\" type\n");
+			return -1;
+		}
+
+		token = strsep(&str, ":");
+		i++;
+	}
+	rta_nest_end(rta, nest);
+
+	return 0;
+}
+
+static int lwtunnel_parse_geneve_opts(char *str, size_t len, struct rtattr *rta)
+{
+	char *token;
+	int err;
+
+	token = strsep(&str, ",");
+	while (token) {
+		err = lwtunnel_parse_geneve_opt(token, len, rta);
+		if (err)
+			return err;
+
+		token = strsep(&str, ",");
+	}
+
+	return 0;
+}
+
+static int lwtunnel_parse_vxlan_opts(char *str, size_t len, struct rtattr *rta)
+{
+	struct rtattr *nest;
+	__u32 gbp;
+	int err;
+
+	nest = rta_nest(rta, len, LWTUNNEL_IP_OPTS_VXLAN | NLA_F_NESTED);
+	err = get_u32(&gbp, str, 0);
+	if (err)
+		return err;
+	rta_addattr32(rta, len, LWTUNNEL_IP_OPT_VXLAN_GBP, gbp);
+
+	rta_nest_end(rta, nest);
+	return 0;
+}
+
+static int lwtunnel_parse_erspan_opts(char *str, size_t len, struct rtattr *rta)
+{
+	struct rtattr *nest;
+	char *token;
+	int i, err;
+
+	nest = rta_nest(rta, len, LWTUNNEL_IP_OPTS_ERSPAN | NLA_F_NESTED);
+	i = 1;
+	token = strsep(&str, ":");
+	while (token) {
+		switch (i) {
+		case LWTUNNEL_IP_OPT_ERSPAN_VER:
+		{
+			__u8 opt_type;
+
+			if (!strlen(token))
+				break;
+			err = get_u8(&opt_type, token, 0);
+			if (err)
+				return err;
+
+			rta_addattr8(rta, len, i, opt_type);
+			break;
+		}
+		case LWTUNNEL_IP_OPT_ERSPAN_INDEX:
+		{
+			__be32 opt_class;
+
+			if (!strlen(token))
+				break;
+			err = get_be32(&opt_class, token, 0);
+			if (err)
+				return err;
+
+			rta_addattr32(rta, len, i, opt_class);
+			break;
+		}
+		case LWTUNNEL_IP_OPT_ERSPAN_DIR:
+		{
+			__u8 opt_type;
+
+			if (!strlen(token))
+				break;
+			err = get_u8(&opt_type, token, 0);
+			if (err)
+				return err;
+
+			rta_addattr8(rta, len, i, opt_type);
+			break;
+		}
+		case LWTUNNEL_IP_OPT_ERSPAN_HWID:
+		{
+			__u8 opt_type;
+
+			if (!strlen(token))
+				break;
+			err = get_u8(&opt_type, token, 0);
+			if (err)
+				return err;
+
+			rta_addattr8(rta, len, i, opt_type);
+			break;
+		}
+		default:
+			fprintf(stderr, "Unknown \"geneve_opts\" type\n");
+			return -1;
+		}
+
+		token = strsep(&str, ":");
+		i++;
+	}
+
+	rta_nest_end(rta, nest);
+	return 0;
+}
+
 static int parse_encap_ip(struct rtattr *rta, size_t len,
 			  int *argcp, char ***argvp)
 {
 	int id_ok = 0, dst_ok = 0, src_ok = 0, tos_ok = 0, ttl_ok = 0;
-	int key_ok = 0, csum_ok = 0, seq_ok = 0;
+	int key_ok = 0, csum_ok = 0, seq_ok = 0, opts_ok = 0;
 	char **argv = *argvp;
 	int argc = *argcp;
 	int ret = 0;
@@ -851,6 +1470,51 @@ static int parse_encap_ip(struct rtattr *rta, size_t len,
 			if (get_u8(&ttl, *argv, 0))
 				invarg("\"ttl\" value is invalid\n", *argv);
 			ret = rta_addattr8(rta, len, LWTUNNEL_IP_TTL, ttl);
+		} else if (strcmp(*argv, "geneve_opts") == 0) {
+			struct rtattr *nest;
+
+			if (opts_ok++)
+				duparg2("opts", *argv);
+
+			NEXT_ARG();
+
+			nest = rta_nest(rta, len,
+					LWTUNNEL_IP_OPTS | NLA_F_NESTED);
+			ret = lwtunnel_parse_geneve_opts(*argv, len, rta);
+			if (ret)
+				invarg("\"geneve_opts\" value is invalid\n",
+				       *argv);
+			rta_nest_end(rta, nest);
+		} else if (strcmp(*argv, "vxlan_opts") == 0) {
+			struct rtattr *nest;
+
+			if (opts_ok++)
+				duparg2("opts", *argv);
+
+			NEXT_ARG();
+
+			nest = rta_nest(rta, len,
+					LWTUNNEL_IP_OPTS | NLA_F_NESTED);
+			ret = lwtunnel_parse_vxlan_opts(*argv, len, rta);
+			if (ret)
+				invarg("\"vxlan_opts\" value is invalid\n",
+				       *argv);
+			rta_nest_end(rta, nest);
+		} else if (strcmp(*argv, "erspan_opts") == 0) {
+			struct rtattr *nest;
+
+			if (opts_ok++)
+				duparg2("opts", *argv);
+
+			NEXT_ARG();
+
+			nest = rta_nest(rta, len,
+					LWTUNNEL_IP_OPTS | NLA_F_NESTED);
+			ret = lwtunnel_parse_erspan_opts(*argv, len, rta);
+			if (ret)
+				invarg("\"erspan_opts\" value is invalid\n",
+				       *argv);
+			rta_nest_end(rta, nest);
 		} else if (strcmp(*argv, "key") == 0) {
 			if (key_ok++)
 				duparg2("key", *argv);
@@ -966,7 +1630,7 @@ static int parse_encap_ip6(struct rtattr *rta, size_t len,
 			   int *argcp, char ***argvp)
 {
 	int id_ok = 0, dst_ok = 0, src_ok = 0, tos_ok = 0, ttl_ok = 0;
-	int key_ok = 0, csum_ok = 0, seq_ok = 0;
+	int key_ok = 0, csum_ok = 0, seq_ok = 0, opts_ok = 0;
 	char **argv = *argvp;
 	int argc = *argcp;
 	int ret = 0;
@@ -1020,6 +1684,51 @@ static int parse_encap_ip6(struct rtattr *rta, size_t len,
 				       *argv);
 			ret = rta_addattr8(rta, len, LWTUNNEL_IP6_HOPLIMIT,
 					   hoplimit);
+		} else if (strcmp(*argv, "geneve_opts") == 0) {
+			struct rtattr *nest;
+
+			if (opts_ok++)
+				duparg2("opts", *argv);
+
+			NEXT_ARG();
+
+			nest = rta_nest(rta, len,
+					LWTUNNEL_IP_OPTS | NLA_F_NESTED);
+			ret = lwtunnel_parse_geneve_opts(*argv, len, rta);
+			if (ret)
+				invarg("\"geneve_opts\" value is invalid\n",
+				       *argv);
+			rta_nest_end(rta, nest);
+		} else if (strcmp(*argv, "vxlan_opts") == 0) {
+			struct rtattr *nest;
+
+			if (opts_ok++)
+				duparg2("opts", *argv);
+
+			NEXT_ARG();
+
+			nest = rta_nest(rta, len,
+					LWTUNNEL_IP_OPTS | NLA_F_NESTED);
+			ret = lwtunnel_parse_vxlan_opts(*argv, len, rta);
+			if (ret)
+				invarg("\"vxlan_opts\" value is invalid\n",
+				       *argv);
+			rta_nest_end(rta, nest);
+		} else if (strcmp(*argv, "erspan_opts") == 0) {
+			struct rtattr *nest;
+
+			if (opts_ok++)
+				duparg2("opts", *argv);
+
+			NEXT_ARG();
+
+			nest = rta_nest(rta, len,
+					LWTUNNEL_IP_OPTS | NLA_F_NESTED);
+			ret = lwtunnel_parse_erspan_opts(*argv, len, rta);
+			if (ret)
+				invarg("\"erspan_opts\" value is invalid\n",
+				       *argv);
+			rta_nest_end(rta, nest);
 		} else if (strcmp(*argv, "key") == 0) {
 			if (key_ok++)
 				duparg2("key", *argv);
@@ -1155,6 +1864,12 @@ int lwt_parse_encap(struct rtattr *rta, size_t len, int *argcp, char ***argvp,
 		break;
 	case LWTUNNEL_ENCAP_SEG6_LOCAL:
 		ret = parse_encap_seg6local(rta, len, &argc, &argv);
+		break;
+	case LWTUNNEL_ENCAP_RPL:
+		ret = parse_encap_rpl(rta, len, &argc, &argv);
+		break;
+	case LWTUNNEL_ENCAP_IOAM6:
+		ret = parse_encap_ioam6(rta, len, &argc, &argv);
 		break;
 	default:
 		fprintf(stderr, "Error: unsupported encap type\n");

@@ -30,11 +30,12 @@
 static void explain(void)
 {
 	fprintf(stderr, "Usage: ... qdisc add ... htb [default N] [r2q N]\n"
-		"                      [direct_qlen P]\n"
+		"                      [direct_qlen P] [offload]\n"
 		" default  minor id of class to which unclassified packets are sent {0}\n"
 		" r2q      DRR quantums are computed as rate in Bps/r2q {10}\n"
 		" debug    string of 16 numbers each 0-3 {0}\n\n"
 		" direct_qlen  Limit of the direct queue {in packets}\n"
+		" offload  enable hardware offload\n"
 		"... class add ... htb rate R1 [burst B1] [mpu B] [overhead O]\n"
 		"                      [prio P] [slot S] [pslot PS]\n"
 		"                      [ceil R2] [cburst B2] [mtu MTU] [quantum Q]\n"
@@ -68,6 +69,7 @@ static int htb_parse_opt(struct qdisc_util *qu, int argc,
 	};
 	struct rtattr *tail;
 	unsigned int i; char *p;
+	bool offload = false;
 
 	while (argc > 0) {
 		if (matches(*argv, "r2q") == 0) {
@@ -91,6 +93,8 @@ static int htb_parse_opt(struct qdisc_util *qu, int argc,
 			if (get_u32(&direct_qlen, *argv, 10)) {
 				explain1("direct_qlen"); return -1;
 			}
+		} else if (matches(*argv, "offload") == 0) {
+			offload = true;
 		} else {
 			fprintf(stderr, "What is \"%s\"?\n", *argv);
 			explain();
@@ -103,6 +107,8 @@ static int htb_parse_opt(struct qdisc_util *qu, int argc,
 	if (direct_qlen != ~0U)
 		addattr_l(n, 2024, TCA_HTB_DIRECT_QLEN,
 			  &direct_qlen, sizeof(direct_qlen));
+	if (offload)
+		addattr(n, 2024, TCA_HTB_OFFLOAD);
 	addattr_nest_end(n, tail);
 	return 0;
 }
@@ -119,6 +125,7 @@ static int htb_parse_class_opt(struct qdisc_util *qu, int argc, char **argv, str
 	unsigned int linklayer  = LINKLAYER_ETHERNET; /* Assume ethernet */
 	struct rtattr *tail;
 	__u64 ceil64 = 0, rate64 = 0;
+	char *param;
 
 	while (argc > 0) {
 		if (matches(*argv, "prio") == 0) {
@@ -154,17 +161,19 @@ static int htb_parse_class_opt(struct qdisc_util *qu, int argc, char **argv, str
 		} else if (matches(*argv, "burst") == 0 ||
 			   strcmp(*argv, "buffer") == 0 ||
 			   strcmp(*argv, "maxburst") == 0) {
+			param = *argv;
 			NEXT_ARG();
 			if (get_size_and_cell(&buffer, &cell_log, *argv) < 0) {
-				explain1("buffer");
+				explain1(param);
 				return -1;
 			}
 		} else if (matches(*argv, "cburst") == 0 ||
 			   strcmp(*argv, "cbuffer") == 0 ||
 			   strcmp(*argv, "cmaxburst") == 0) {
+			param = *argv;
 			NEXT_ARG();
 			if (get_size_and_cell(&cbuffer, &ccell_log, *argv) < 0) {
-				explain1("cbuffer");
+				explain1(param);
 				return -1;
 			}
 		} else if (strcmp(*argv, "ceil") == 0) {
@@ -269,7 +278,6 @@ static int htb_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 	__u64 rate64, ceil64;
 
 	SPRINT_BUF(b1);
-	SPRINT_BUF(b2);
 	SPRINT_BUF(b3);
 
 	if (opt == NULL)
@@ -299,29 +307,27 @@ static int htb_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 		    RTA_PAYLOAD(tb[TCA_HTB_CEIL64]) >= sizeof(ceil64))
 			ceil64 = rta_getattr_u64(tb[TCA_HTB_CEIL64]);
 
-		fprintf(f, "rate %s ", sprint_rate(rate64, b1));
+		tc_print_rate(PRINT_FP, NULL, "rate %s ", rate64);
 		if (hopt->rate.overhead)
 			fprintf(f, "overhead %u ", hopt->rate.overhead);
 		buffer = tc_calc_xmitsize(rate64, hopt->buffer);
 
-		fprintf(f, "ceil %s ", sprint_rate(ceil64, b1));
+		tc_print_rate(PRINT_FP, NULL, "ceil %s ", ceil64);
 		cbuffer = tc_calc_xmitsize(ceil64, hopt->cbuffer);
 		linklayer = (hopt->rate.linklayer & TC_LINKLAYER_MASK);
 		if (linklayer > TC_LINKLAYER_ETHERNET || show_details)
 			fprintf(f, "linklayer %s ", sprint_linklayer(linklayer, b3));
 		if (show_details) {
-			fprintf(f, "burst %s/%u mpu %s ",
-				sprint_size(buffer, b1),
-				1<<hopt->rate.cell_log,
-				sprint_size(hopt->rate.mpu, b2));
-			fprintf(f, "cburst %s/%u mpu %s ",
-				sprint_size(cbuffer, b1),
-				1<<hopt->ceil.cell_log,
-				sprint_size(hopt->ceil.mpu, b2));
+			print_size(PRINT_FP, NULL, "burst %s/", buffer);
+			fprintf(f, "%u ", 1<<hopt->rate.cell_log);
+			print_size(PRINT_FP, NULL, "mpu %s ", hopt->rate.mpu);
+			print_size(PRINT_FP, NULL, "cburst %s/", cbuffer);
+			fprintf(f, "%u ", 1<<hopt->ceil.cell_log);
+			print_size(PRINT_FP, NULL, "mpu %s ", hopt->ceil.mpu);
 			fprintf(f, "level %d ", (int)hopt->level);
 		} else {
-			fprintf(f, "burst %s ", sprint_size(buffer, b1));
-			fprintf(f, "cburst %s ", sprint_size(cbuffer, b1));
+			print_size(PRINT_FP, NULL, "burst %s ", buffer);
+			print_size(PRINT_FP, NULL, "cburst %s ", cbuffer);
 		}
 		if (show_raw)
 			fprintf(f, "buffer [%08x] cbuffer [%08x] ",
@@ -347,6 +353,8 @@ static int htb_print_opt(struct qdisc_util *qu, FILE *f, struct rtattr *opt)
 		print_uint(PRINT_ANY, "direct_qlen", " direct_qlen %u",
 			   direct_qlen);
 	}
+	if (tb[TCA_HTB_OFFLOAD])
+		print_null(PRINT_ANY, "offload", " offload", NULL);
 	return 0;
 }
 

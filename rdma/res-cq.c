@@ -21,13 +21,8 @@ static void print_poll_ctx(struct rd *rd, uint8_t poll_ctx, struct nlattr *attr)
 {
 	if (!attr)
 		return;
-
-	if (rd->json_output) {
-		jsonw_string_field(rd->jw, "poll-ctx",
-				   poll_ctx_to_str(poll_ctx));
-		return;
-	}
-	pr_out("poll-ctx %s ", poll_ctx_to_str(poll_ctx));
+	print_color_string(PRINT_ANY, COLOR_NONE, "poll-ctx", "poll-ctx %s ",
+			   poll_ctx_to_str(poll_ctx));
 }
 
 static void print_cq_dim_setting(struct rd *rd, struct nlattr *attr)
@@ -41,7 +36,21 @@ static void print_cq_dim_setting(struct rd *rd, struct nlattr *attr)
 	if (dim_setting > 1)
 		return;
 
-	print_on_off(rd, "adaptive-moderation", dim_setting);
+	print_on_off(PRINT_ANY, "adaptive-moderation", "adaptive-moderation %s ", dim_setting);
+}
+
+static int res_cq_line_raw(struct rd *rd, const char *name, int idx,
+			   struct nlattr **nla_line)
+{
+	if (!nla_line[RDMA_NLDEV_ATTR_RES_RAW])
+		return MNL_CB_ERROR;
+
+	open_json_object(NULL);
+	print_dev(rd, idx, name);
+	print_raw_data(rd, nla_line);
+	newline(rd);
+
+	return MNL_CB_OK;
 }
 
 static int res_cq_line(struct rd *rd, const char *name, int idx,
@@ -56,11 +65,8 @@ static int res_cq_line(struct rd *rd, const char *name, int idx,
 	uint32_t cqe;
 
 	if (!nla_line[RDMA_NLDEV_ATTR_RES_CQE] ||
-	    !nla_line[RDMA_NLDEV_ATTR_RES_USECNT] ||
-	    (!nla_line[RDMA_NLDEV_ATTR_RES_PID] &&
-	     !nla_line[RDMA_NLDEV_ATTR_RES_KERN_NAME])) {
+	    !nla_line[RDMA_NLDEV_ATTR_RES_USECNT])
 		return MNL_CB_ERROR;
-	}
 
 	cqe = mnl_attr_get_u32(nla_line[RDMA_NLDEV_ATTR_RES_CQE]);
 
@@ -102,9 +108,7 @@ static int res_cq_line(struct rd *rd, const char *name, int idx,
 		comm = (char *)mnl_attr_get_str(
 			nla_line[RDMA_NLDEV_ATTR_RES_KERN_NAME]);
 
-	if (rd->json_output)
-		jsonw_start_array(rd->jw);
-
+	open_json_object(NULL);
 	print_dev(rd, idx, name);
 	res_print_uint(rd, "cqn", cqn, nla_line[RDMA_NLDEV_ATTR_RES_CQN]);
 	res_print_uint(rd, "cqe", cqe, nla_line[RDMA_NLDEV_ATTR_RES_CQE]);
@@ -138,7 +142,8 @@ int res_cq_idx_parse_cb(const struct nlmsghdr *nlh, void *data)
 	name = mnl_attr_get_str(tb[RDMA_NLDEV_ATTR_DEV_NAME]);
 	idx = mnl_attr_get_u32(tb[RDMA_NLDEV_ATTR_DEV_INDEX]);
 
-	return res_cq_line(rd, name, idx, tb);
+	return (rd->show_raw) ? res_cq_line_raw(rd, name, idx, tb) :
+		res_cq_line(rd, name, idx, tb);
 }
 
 int res_cq_parse_cb(const struct nlmsghdr *nlh, void *data)
@@ -166,7 +171,8 @@ int res_cq_parse_cb(const struct nlmsghdr *nlh, void *data)
 		if (ret != MNL_CB_OK)
 			break;
 
-		ret = res_cq_line(rd, name, idx, nla_line);
+		ret = (rd->show_raw) ? res_cq_line_raw(rd, name, idx, nla_line) :
+			res_cq_line(rd, name, idx, nla_line);
 
 		if (ret != MNL_CB_OK)
 			break;

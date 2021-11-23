@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #define _ATFILE_SOURCE
+#include <sys/file.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -75,9 +76,12 @@ static int ipnetns_have_nsid(void)
 	};
 	int fd;
 
-	if (have_rtnl_getnsid < 0) {
+	if (have_rtnl_getnsid >= 0) {
 		fd = open("/proc/self/ns/net", O_RDONLY);
 		if (fd < 0) {
+			fprintf(stderr,
+				"/proc/self/ns/net: %s. Continuing anyway.\n",
+				strerror(errno));
 			have_rtnl_getnsid = 0;
 			return 0;
 		}
@@ -85,8 +89,12 @@ static int ipnetns_have_nsid(void)
 		addattr32(&req.n, 1024, NETNSA_FD, fd);
 
 		if (rtnl_send(&rth, &req.n, req.n.nlmsg_len) < 0) {
-			perror("request send failed");
-			exit(1);
+			fprintf(stderr,
+				"rtnl_send(RTM_GETNSID): %s. Continuing anyway.\n",
+				strerror(errno));
+			have_rtnl_getnsid = 0;
+			close(fd);
+			return 0;
 		}
 		rtnl_listen(&rth, ipnetns_accept_msg, NULL);
 		close(fd);
@@ -137,7 +145,7 @@ int get_netnsid_from_name(const char *name)
 	parse_rtattr(tb, NETNSA_MAX, NETNS_RTA(rthdr), len);
 
 	if (tb[NETNSA_NSID]) {
-		ret = rta_getattr_u32(tb[NETNSA_NSID]);
+		ret = rta_getattr_s32(tb[NETNSA_NSID]);
 	}
 
 out:
@@ -161,9 +169,13 @@ static struct hlist_head	name_head[NSIDMAP_SIZE];
 
 static struct nsid_cache *netns_map_get_by_nsid(int nsid)
 {
-	uint32_t h = NSID_HASH_NSID(nsid);
 	struct hlist_node *n;
+	uint32_t h;
 
+	if (nsid < 0)
+		return NULL;
+
+	h = NSID_HASH_NSID(nsid);
 	hlist_for_each(n, &nsid_head[h]) {
 		struct nsid_cache *c = container_of(n, struct nsid_cache,
 						    nsid_hash);
@@ -177,6 +189,9 @@ static struct nsid_cache *netns_map_get_by_nsid(int nsid)
 char *get_name_from_nsid(int nsid)
 {
 	struct nsid_cache *c;
+
+	if (nsid < 0)
+		return NULL;
 
 	netns_nsid_socket_init();
 	netns_map_init();
@@ -266,6 +281,9 @@ static int netns_get_name(int nsid, char *name)
 	DIR *dir;
 	int id;
 
+	if (nsid < 0)
+		return -EINVAL;
+
 	dir = opendir(NETNS_RUN_DIR);
 	if (!dir)
 		return -ENOENT;
@@ -277,7 +295,7 @@ static int netns_get_name(int nsid, char *name)
 			continue;
 		id = get_netnsid_from_name(entry->d_name);
 
-		if (nsid == id) {
+		if (id >= 0 && nsid == id) {
 			strcpy(name, entry->d_name);
 			closedir(dir);
 			return 0;
@@ -317,20 +335,20 @@ int print_nsid(struct nlmsghdr *n, void *arg)
 	if (n->nlmsg_type == RTM_DELNSID)
 		print_bool(PRINT_ANY, "deleted", "Deleted ", true);
 
-	nsid = rta_getattr_u32(tb[NETNSA_NSID]);
+	nsid = rta_getattr_s32(tb[NETNSA_NSID]);
 	if (nsid < 0)
-		print_string(PRINT_ANY, "nsid", "nsid %s ", "not-assigned");
+		print_string(PRINT_FP, NULL, "nsid unassigned ", NULL);
 	else
-		print_uint(PRINT_ANY, "nsid", "nsid %u ", nsid);
+		print_int(PRINT_ANY, "nsid", "nsid %d ", nsid);
 
 	if (tb[NETNSA_CURRENT_NSID]) {
-		current = rta_getattr_u32(tb[NETNSA_CURRENT_NSID]);
+		current = rta_getattr_s32(tb[NETNSA_CURRENT_NSID]);
 		if (current < 0)
-			print_string(PRINT_ANY, "current-nsid",
-				     "current-nsid %s ", "not-assigned");
+			print_string(PRINT_FP, NULL,
+				     "current-nsid unassigned ", NULL);
 		else
-			print_uint(PRINT_ANY, "current-nsid",
-				   "current-nsid %u ", current);
+			print_int(PRINT_ANY, "current-nsid",
+				  "current-nsid %d ", current);
 	}
 
 	c = netns_map_get_by_nsid(tb[NETNSA_CURRENT_NSID] ? current : nsid);
@@ -340,7 +358,7 @@ int print_nsid(struct nlmsghdr *n, void *arg)
 		netns_map_del(c);
 	}
 
-	/* During 'ip monitor nsid', no chance to have new nsid in cache. */
+	/* nsid might not be in cache */
 	if (c == NULL && n->nlmsg_type == RTM_NEWNSID)
 		if (netns_get_name(nsid, name) == 0) {
 			print_string(PRINT_ANY, "name",
@@ -429,10 +447,10 @@ static int netns_list_id(int argc, char **argv)
 			NEXT_ARG();
 
 			if (get_integer(&filter.target_nsid, *argv, 0))
-				invarg("\"target-nsid\" value is invalid\n",
+				invarg("\"target-nsid\" value is invalid",
 				       *argv);
 			else if (filter.target_nsid < 0)
-				invarg("\"target-nsid\" value should be >= 0\n",
+				invarg("\"target-nsid\" value should be >= 0",
 				       argv[1]);
 		} else if (strcmp(*argv, "nsid") == 0) {
 			if (nsid >= 0)
@@ -440,9 +458,9 @@ static int netns_list_id(int argc, char **argv)
 			NEXT_ARG();
 
 			if (get_integer(&nsid, *argv, 0))
-				invarg("\"nsid\" value is invalid\n", *argv);
+				invarg("\"nsid\" value is invalid", *argv);
 			else if (nsid < 0)
-				invarg("\"nsid\" value should be >= 0\n",
+				invarg("\"nsid\" value should be >= 0",
 				       argv[1]);
 		} else
 			usage();
@@ -491,8 +509,7 @@ static int netns_list(int argc, char **argv)
 		if (ipnetns_have_nsid()) {
 			id = get_netnsid_from_name(entry->d_name);
 			if (id >= 0)
-				print_uint(PRINT_ANY, "id",
-					   " (id: %d)", id);
+				print_int(PRINT_ANY, "id", " (id: %d)", id);
 		}
 		print_string(PRINT_FP, NULL, "\n", NULL);
 		close_json_object();
@@ -562,18 +579,18 @@ static int netns_pids(int argc, char **argv)
 {
 	const char *name;
 	char net_path[PATH_MAX];
-	int netns;
+	int netns = -1, ret = -1;
 	struct stat netst;
 	DIR *dir;
 	struct dirent *entry;
 
 	if (argc < 1) {
 		fprintf(stderr, "No netns name specified\n");
-		return -1;
+		goto out;
 	}
 	if (argc > 1) {
 		fprintf(stderr, "extra arguments specified\n");
-		return -1;
+		goto out;
 	}
 
 	name = argv[0];
@@ -582,18 +599,18 @@ static int netns_pids(int argc, char **argv)
 	if (netns < 0) {
 		fprintf(stderr, "Cannot open network namespace: %s\n",
 			strerror(errno));
-		return -1;
+		goto out;
 	}
 	if (fstat(netns, &netst) < 0) {
 		fprintf(stderr, "Stat of netns failed: %s\n",
 			strerror(errno));
-		return -1;
+		goto out;
 	}
 	dir = opendir("/proc/");
 	if (!dir) {
 		fprintf(stderr, "Open of /proc failed: %s\n",
 			strerror(errno));
-		return -1;
+		goto out;
 	}
 	while ((entry = readdir(dir))) {
 		char pid_net_path[PATH_MAX];
@@ -610,15 +627,19 @@ static int netns_pids(int argc, char **argv)
 			printf("%s\n", entry->d_name);
 		}
 	}
+	ret = 0;
 	closedir(dir);
-	return 0;
+out:
+	if (netns >= 0)
+		close(netns);
+	return ret;
 
 }
 
 int netns_identify_pid(const char *pidstr, char *name, int len)
 {
 	char net_path[PATH_MAX];
-	int netns;
+	int netns = -1, ret = -1;
 	struct stat netst;
 	DIR *dir;
 	struct dirent *entry;
@@ -630,22 +651,24 @@ int netns_identify_pid(const char *pidstr, char *name, int len)
 	if (netns < 0) {
 		fprintf(stderr, "Cannot open network namespace: %s\n",
 			strerror(errno));
-		return -1;
+		goto out;
 	}
 	if (fstat(netns, &netst) < 0) {
 		fprintf(stderr, "Stat of netns failed: %s\n",
 			strerror(errno));
-		return -1;
+		goto out;
 	}
 	dir = opendir(NETNS_RUN_DIR);
 	if (!dir) {
 		/* Succeed treat a missing directory as an empty directory */
-		if (errno == ENOENT)
-			return 0;
+		if (errno == ENOENT) {
+			ret = 0;
+			goto out;
+		}
 
 		fprintf(stderr, "Failed to open directory %s:%s\n",
 			NETNS_RUN_DIR, strerror(errno));
-		return -1;
+		goto out;
 	}
 
 	while ((entry = readdir(dir))) {
@@ -668,8 +691,12 @@ int netns_identify_pid(const char *pidstr, char *name, int len)
 			strlcpy(name, entry->d_name, len);
 		}
 	}
+	ret = 0;
 	closedir(dir);
-	return 0;
+out:
+	if (netns >= 0)
+		close(netns);
+	return ret;
 
 }
 
@@ -785,6 +812,7 @@ static int netns_add(int argc, char **argv, bool create)
 	const char *name;
 	pid_t pid;
 	int fd;
+	int lock;
 	int made_netns_run_dir_mount = 0;
 
 	if (create) {
@@ -815,12 +843,37 @@ static int netns_add(int argc, char **argv, bool create)
 	 * namespace file in one namespace will unmount the network namespace
 	 * file in all namespaces allowing the network namespace to be freed
 	 * sooner.
+	 * These setup steps need to happen only once, as if multiple ip processes
+	 * try to attempt the same operation at the same time, the mountpoints will
+	 * be recursively created multiple times, eventually causing the system
+	 * to lock up. For example, this has been observed when multiple netns
+	 * namespaces are created in parallel at boot. See:
+	 * https://bugs.debian.org/949235
+	 * Try to take an exclusive file lock on the top level directory to ensure
+	 * this cannot happen, but proceed nonetheless if it cannot happen for any
+	 * reason.
 	 */
+	lock = open(NETNS_RUN_DIR, O_RDONLY|O_DIRECTORY, 0);
+	if (lock < 0) {
+		fprintf(stderr, "Cannot open netns runtime directory \"%s\": %s\n",
+			NETNS_RUN_DIR, strerror(errno));
+		return -1;
+	}
+	if (flock(lock, LOCK_EX) < 0) {
+		fprintf(stderr, "Warning: could not flock netns runtime directory \"%s\": %s\n",
+			NETNS_RUN_DIR, strerror(errno));
+		close(lock);
+		lock = -1;
+	}
 	while (mount("", NETNS_RUN_DIR, "none", MS_SHARED | MS_REC, NULL)) {
 		/* Fail unless we need to make the mount point */
 		if (errno != EINVAL || made_netns_run_dir_mount) {
 			fprintf(stderr, "mount --make-shared %s failed: %s\n",
 				NETNS_RUN_DIR, strerror(errno));
+			if (lock != -1) {
+				flock(lock, LOCK_UN);
+				close(lock);
+			}
 			return -1;
 		}
 
@@ -828,9 +881,17 @@ static int netns_add(int argc, char **argv, bool create)
 		if (mount(NETNS_RUN_DIR, NETNS_RUN_DIR, "none", MS_BIND | MS_REC, NULL)) {
 			fprintf(stderr, "mount --bind %s %s failed: %s\n",
 				NETNS_RUN_DIR, NETNS_RUN_DIR, strerror(errno));
+			if (lock != -1) {
+				flock(lock, LOCK_UN);
+				close(lock);
+			}
 			return -1;
 		}
 		made_netns_run_dir_mount = 1;
+	}
+	if (lock != -1) {
+		flock(lock, LOCK_UN);
+		close(lock);
 	}
 
 	/* Create the filesystem state */
@@ -923,9 +984,9 @@ static int netns_set(int argc, char **argv)
 	if (strcmp(argv[1], "auto") == 0)
 		nsid = -1;
 	else if (get_integer(&nsid, argv[1], 0))
-		invarg("Invalid \"netnsid\" value\n", argv[1]);
+		invarg("Invalid \"netnsid\" value", argv[1]);
 	else if (nsid < 0)
-		invarg("\"netnsid\" value should be >= 0\n", argv[1]);
+		invarg("\"netnsid\" value should be >= 0", argv[1]);
 
 	snprintf(netns_path, sizeof(netns_path), "%s/%s", NETNS_RUN_DIR, name);
 	netns = open(netns_path, O_RDONLY | O_CLOEXEC);

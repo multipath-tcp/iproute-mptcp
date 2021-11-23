@@ -20,10 +20,9 @@
 #include <linux/tipc.h>
 #include <linux/genetlink.h>
 #include <linux/if.h>
-
 #include <libmnl/libmnl.h>
-#include <sys/socket.h>
 
+#include "mnl_utils.h"
 #include "utils.h"
 #include "cmdl.h"
 #include "msg.h"
@@ -101,16 +100,28 @@ static int get_netid_cb(const struct nlmsghdr *nlh, void *data)
 
 static int generate_multicast(short af, char *buf, int bufsize)
 {
-	int netid;
-	char mnl_msg[MNL_SOCKET_BUFFER_SIZE];
+	struct mnlu_gen_socket bearer_nlg;
 	struct nlmsghdr *nlh;
+	int netid;
+	int err = 0;
 
-	if (!(nlh = msg_init(mnl_msg, TIPC_NL_NET_GET))) {
+	err = mnlu_gen_socket_open(&bearer_nlg, TIPC_GENL_V2_NAME,
+				   TIPC_GENL_V2_VERSION);
+	if (err)
+		return -1;
+
+	nlh = mnlu_gen_socket_cmd_prepare(&bearer_nlg, TIPC_NL_NET_GET,
+					  NLM_F_REQUEST | NLM_F_DUMP);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialization failed\n");
+		mnlu_gen_socket_close(&bearer_nlg);
 		return -1;
 	}
-	if (msg_dumpit(nlh, get_netid_cb, &netid)) {
+
+	err = mnlu_gen_socket_sndrcv(&bearer_nlg, nlh, get_netid_cb, &netid);
+	if (err) {
 		fprintf(stderr, "error, failed to fetch TIPC network id from kernel\n");
+		mnlu_gen_socket_close(&bearer_nlg);
 		return -EINVAL;
 	}
 	if (af == AF_INET)
@@ -118,6 +129,7 @@ static int generate_multicast(short af, char *buf, int bufsize)
 	else
 		snprintf(buf, bufsize, "ff02::%u", netid);
 
+	mnlu_gen_socket_close(&bearer_nlg);
 	return 0;
 }
 
@@ -399,7 +411,6 @@ static int cmd_bearer_add_media(struct nlmsghdr *nlh, const struct cmd *cmd,
 {
 	int err;
 	char *media;
-	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct opt *opt;
 	struct nlattr *attrs;
 	struct opt opts[] = {
@@ -435,7 +446,8 @@ static int cmd_bearer_add_media(struct nlmsghdr *nlh, const struct cmd *cmd,
 		return -EINVAL;
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_BEARER_ADD))) {
+	nlh = msg_init(TIPC_NL_BEARER_ADD);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
@@ -482,7 +494,6 @@ static int cmd_bearer_enable(struct nlmsghdr *nlh, const struct cmd *cmd,
 	int err;
 	struct opt *opt;
 	struct nlattr *nest;
-	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct opt opts[] = {
 		{ "device",		OPT_KEYVAL,	NULL },
 		{ "domain",		OPT_KEYVAL,	NULL },
@@ -508,7 +519,8 @@ static int cmd_bearer_enable(struct nlmsghdr *nlh, const struct cmd *cmd,
 		return -EINVAL;
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_BEARER_ENABLE))) {
+	nlh = msg_init(TIPC_NL_BEARER_ENABLE);
+	if (!nlh) {
 		fprintf(stderr, "error: message initialisation failed\n");
 		return -1;
 	}
@@ -563,7 +575,6 @@ static int cmd_bearer_disable(struct nlmsghdr *nlh, const struct cmd *cmd,
 			      struct cmdl *cmdl, void *data)
 {
 	int err;
-	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct nlattr *nest;
 	struct opt opts[] = {
 		{ "device",		OPT_KEYVAL,	NULL },
@@ -584,7 +595,8 @@ static int cmd_bearer_disable(struct nlmsghdr *nlh, const struct cmd *cmd,
 		return -EINVAL;
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_BEARER_DISABLE))) {
+	nlh = msg_init(TIPC_NL_BEARER_DISABLE);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
@@ -628,7 +640,6 @@ static int cmd_bearer_set_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 	int err;
 	int val;
 	int prop;
-	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct nlattr *props;
 	struct nlattr *attrs;
 	struct opt opts[] = {
@@ -675,7 +686,8 @@ static int cmd_bearer_set_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 		}
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_BEARER_SET))) {
+	nlh = msg_init(TIPC_NL_BEARER_SET);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
@@ -797,10 +809,35 @@ static int bearer_get_udp_cb(const struct nlmsghdr *nlh, void *data)
 	if ((cb_data->attr == TIPC_NLA_UDP_REMOTE) &&
 	    (cb_data->prop == UDP_PROP_IP) &&
 	    opts[TIPC_NLA_UDP_MULTI_REMOTEIP]) {
-		struct genlmsghdr *genl = mnl_nlmsg_get_payload(cb_data->nlh);
+		struct mnlu_gen_socket bearer_nlg;
+		struct nlattr *attr;
+		struct nlmsghdr *h;
+		const char *bname;
+		int err = 0;
 
-		genl->cmd = TIPC_NL_UDP_GET_REMOTEIP;
-		return msg_dumpit(cb_data->nlh, bearer_dump_udp_cb, NULL);
+		err = mnlu_gen_socket_open(&bearer_nlg, TIPC_GENL_V2_NAME,
+					   TIPC_GENL_V2_VERSION);
+		if (err)
+			return -1;
+
+		h = mnlu_gen_socket_cmd_prepare(&bearer_nlg,
+						TIPC_NL_UDP_GET_REMOTEIP,
+						NLM_F_REQUEST | NLM_F_DUMP);
+		if (!h) {
+			fprintf(stderr, "error, message initialization failed\n");
+			mnlu_gen_socket_close(&bearer_nlg);
+			return -1;
+		}
+
+		attr = mnl_attr_nest_start(h, TIPC_NLA_BEARER);
+		bname = mnl_attr_get_str(attrs[TIPC_NLA_BEARER_NAME]);
+		mnl_attr_put_strz(h, TIPC_NLA_BEARER_NAME, bname);
+		mnl_attr_nest_end(h, attr);
+
+		err = mnlu_gen_socket_sndrcv(&bearer_nlg, h,
+					     bearer_dump_udp_cb, NULL);
+		mnlu_gen_socket_close(&bearer_nlg);
+		return err;
 	}
 
 	addr = mnl_attr_get_payload(opts[cb_data->attr]);
@@ -876,7 +913,6 @@ static int cmd_bearer_get_media(struct nlmsghdr *nlh, const struct cmd *cmd,
 {
 	int err;
 	char *media;
-	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct opt *opt;
 	struct cb_data cb_data = {0};
 	struct nlattr *attrs;
@@ -918,7 +954,8 @@ static int cmd_bearer_get_media(struct nlmsghdr *nlh, const struct cmd *cmd,
 		return -EINVAL;
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_BEARER_GET))) {
+	nlh = msg_init(TIPC_NL_BEARER_GET);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
@@ -956,7 +993,6 @@ static int cmd_bearer_get_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 {
 	int err;
 	int prop;
-	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct nlattr *attrs;
 	struct opt opts[] = {
 		{ "device",		OPT_KEYVAL,	NULL },
@@ -1001,7 +1037,8 @@ static int cmd_bearer_get_prop(struct nlmsghdr *nlh, const struct cmd *cmd,
 		}
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_BEARER_GET))) {
+	nlh = msg_init(TIPC_NL_BEARER_GET);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
@@ -1056,14 +1093,13 @@ static int bearer_list_cb(const struct nlmsghdr *nlh, void *data)
 static int cmd_bearer_list(struct nlmsghdr *nlh, const struct cmd *cmd,
 			   struct cmdl *cmdl, void *data)
 {
-	char buf[MNL_SOCKET_BUFFER_SIZE];
-
 	if (help_flag) {
 		fprintf(stderr, "Usage: %s bearer list\n", cmdl->argv[0]);
 		return -EINVAL;
 	}
 
-	if (!(nlh = msg_init(buf, TIPC_NL_BEARER_GET))) {
+	nlh = msg_init(TIPC_NL_BEARER_GET);
+	if (!nlh) {
 		fprintf(stderr, "error, message initialisation failed\n");
 		return -1;
 	}
